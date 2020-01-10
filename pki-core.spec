@@ -6,7 +6,7 @@ distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
 
 Name:             pki-core
 Version:          9.0.3
-Release:          49%{?dist}
+Release:          50%{?dist}
 Summary:          Certificate System - PKI Core Components
 URL:              http://pki.fedoraproject.org/
 License:          GPLv2
@@ -729,7 +729,7 @@ fi
 %{_datadir}/pki/scripts/restore-subsystem-user.*
 %{_datadir}/pki/setup/
 %{python_sitelib}/pki/
-%{_sbindir}/
+%{_sbindir}/pki-server
 
 %files -n pki-common-javadoc
 %defattr(-,root,root,-)
@@ -777,6 +777,9 @@ fi
 
 
 %changelog
+* Wed Jul 13 2016 Matthew Harmsen <mharmsen@redhat.com> 9.0.3-50
+- Resolves #1355963 - installing pki-common causes mode 0755 on /usr/sbin
+
 * Mon Mar 14 2016 Ade Lee <alee@redhat.com> 9.0.3-49
 - Resolves #1290535 - Check for incompatible Java at startup (pkisilent)
 
