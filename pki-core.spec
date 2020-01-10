@@ -6,7 +6,7 @@ distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
 
 Name:             pki-core
 Version:          9.0.3
-Release:          50%{?dist}
+Release:          53%{?dist}
 Summary:          Certificate System - PKI Core Components
 URL:              http://pki.fedoraproject.org/
 License:          GPLv2
@@ -103,6 +103,9 @@ Patch53:          %{name}-%{version}-bz1282977-2.patch
 Patch54:          %{name}-%{version}-bz1256039.patch
 Patch55:          %{name}-%{version}-bz1290535-2.patch
 Patch56:          %{name}-%{version}-bz1290535-3.patch
+Patch57:          %{name}-%{version}-bz1400421.patch
+Patch58:          %{name}-%{version}-bz1403943.patch
+Patch59:          %{name}-%{version}-bz1403943-2.patch
 
 
 %if 0%{?rhel}
@@ -520,6 +523,9 @@ This package is a part of the PKI Core used by the Certificate System.
 %patch54 -p1
 %patch55 -p1
 %patch56 -p1
+%patch57 -p1
+%patch58 -p1
+%patch59 -p1
 
 %clean
 %{__rm} -rf %{buildroot}
@@ -777,8 +783,21 @@ fi
 
 
 %changelog
-* Wed Jul 13 2016 Matthew Harmsen <mharmsen@redhat.com> 9.0.3-50
-- Resolves #1355963 - installing pki-common causes mode 0755 on /usr/sbin
+* Wed Feb  8 2017 Endi S. Dewata <edewata@redhat.com> 9.0.3-53
+- Resolves #1403943 - Replica install fails with failed to configure ca on
+  "White spaces are required between publicId and systemId"
+  (contains the additional changes required to work with the latest HTTPD)
+
+* Fri Dec 16 2016 Endi S. Dewata <edewata@redhat.com> 9.0.3-52
+- Resolves #1403943 - Replica install fails with failed to configure ca on
+  "White spaces are required between publicId and systemId"
+
+* Mon Dec  5 2016 Endi S. Dewata <edewata@redhat.com> 9.0.3-51
+- Resolves #1400421 - Replica install fails with old IPA master during pki
+  instance creation
+
+* Mon Jul 11 2016 Matthew Harmsen <mharmsen@redhat.com> 9.0.3-50
+- Resolves #1326921 - installing pki-common causes mode 0755 on /usr/sbin
 
 * Mon Mar 14 2016 Ade Lee <alee@redhat.com> 9.0.3-49
 - Resolves #1290535 - Check for incompatible Java at startup (pkisilent)

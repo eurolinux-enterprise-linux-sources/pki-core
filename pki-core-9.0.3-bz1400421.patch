@@ -1,0 +1,78 @@
+From 4d3b458314a023783f079d03ba938d095c81f240 Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Tue, 29 Nov 2016 23:50:09 +0100
+Subject: [PATCH] Added server hostname into token authentication request.
+
+The TokenAuthentication.authenticate() has been modified to
+include the server hostname in the HTTP request header for token
+authentication. In case the result cannot be parsed, the method
+has also has been modified to show the HTTP response.
+
+The EBaseException has been modified to provide a constructor
+to chain the original cause of the exception.
+
+Resolves: rhbz #1322059
+---
+ .../src/com/netscape/certsrv/base/EBaseException.java     |  4 ++++
+ .../netscape/cms/authentication/TokenAuthentication.java  | 15 ++++++++++++---
+ 2 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/base/common/src/com/netscape/certsrv/base/EBaseException.java b/base/common/src/com/netscape/certsrv/base/EBaseException.java
+index ea7271165832e5839b8d8360144ab32396fb06af..24cb5a9ab97138bdd158a153bdfecc6759dd9c46 100644
+--- a/base/common/src/com/netscape/certsrv/base/EBaseException.java
++++ b/base/common/src/com/netscape/certsrv/base/EBaseException.java
+@@ -61,6 +61,10 @@ public class EBaseException extends Exception {
+         mParams = null;
+     }
+ 
++    public EBaseException(Exception cause) {
++        this(cause.toString(), cause);
++    }
++
+     /**
+      * Constructs an instance of this exception with the given resource key
+      * and a parameter as a string. 
+diff --git a/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java b/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java
+index 937531933aaa382f60c732ee04a03e3d6da0281e..578a0677e6d36c4b24a2aed6768b177dbbbf8811 100644
+--- a/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java
++++ b/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java
+@@ -41,6 +41,7 @@ import com.netscape.certsrv.kra.*;
+ import javax.servlet.http.HttpServletRequest;
+ import com.netscape.cmsutil.xml.*;
+ import org.w3c.dom.*;
++import org.xml.sax.SAXParseException;
+ 
+ /**
+  * Token authentication.  
+@@ -154,6 +155,7 @@ public class TokenAuthentication implements IAuthManager,
+             HttpRequest httprequest = new HttpRequest();
+             httprequest.setMethod(HttpRequest.POST);
+             httprequest.setURI("/ca/ee/ca/tokenAuthenticate");
++            httprequest.setHeader("host", auth_host);
+             httprequest.setHeader("user-agent", "HTTPTool/1.0");
+             httprequest.setHeader("content-length", "" + content.length());
+             httprequest.setHeader("content-type",
+@@ -173,10 +175,17 @@ public class TokenAuthentication implements IAuthManager,
+ 
+                 try {
+                     parser = new XMLObject(bis);
++
++                } catch (SAXParseException e) {
++                    CMS.debug("TokenAuthentication: Unable to parse authentication response: " + e);
++                    CMS.debug(c);
++                    throw new EBaseException(e);
++
+                 } catch (Exception e) {
+-                    CMS.debug( "TokenAuthentication::authenticate() - "
+-                             + "Exception="+e.toString() );
+-                    throw new EBaseException( e.toString() );
++                    CMS.debug("TokenAuthentication: " + e);
++                    CMS.debug(e);
++                    throw new EBaseException(e);
++
+                 }
+                 String status = parser.getValue("Status");
+ 
+-- 
+2.5.5
+

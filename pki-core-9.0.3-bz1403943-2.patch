@@ -1,0 +1,999 @@
+From 4dd8d33b1e1eb9b8586eb559749005b6dea4f10c Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Fri, 3 Feb 2017 17:24:30 +0100
+Subject: [PATCH] Additional fix for bug #1403943.
+
+The HTTPClient class used by pkisilent has been modified to
+generate HTTP requests with the proper CRLF characters as required
+by the latest HTTPD.
+
+To help troubleshooting the methods in pkisilent have been changed
+to generate exceptions instead of returning boolean values.
+
+Resolves: rhbz #1403943
+---
+ .classpath                                         |  11 +-
+ base/common/src/CMakeLists.txt                     |   2 +-
+ .../netscape/cms/servlet/csadmin/GetCookie.java    |  13 +-
+ .../csadmin/LDAPSecurityDomainSessionTable.java    |   4 +
+ .../cms/servlet/csadmin/SecurityDomainLogin.java   |   3 +-
+ .../cms/servlet/csadmin/TokenAuthenticate.java     |   2 +
+ base/silent/src/ca/ConfigureCA.java                | 112 +++++-------
+ base/silent/src/http/HTTPClient.java               | 197 ++++++++-------------
+ 8 files changed, 142 insertions(+), 202 deletions(-)
+
+diff --git a/.classpath b/.classpath
+index 9907370..d5bcdc4 100644
+--- a/.classpath
++++ b/.classpath
+@@ -5,7 +5,16 @@
+ 	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/common/src"/>
+ 	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/java-tools/src"/>
+ 	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/ca/src"/>
+-	<classpathentry kind="src" path="base/silent/src"/>
++	<classpathentry kind="src" path="base/silent/src/ca"/>
++	<classpathentry kind="src" path="base/silent/src/http"/>
++	<classpathentry kind="src" path="base/silent/src/drm"/>
++	<classpathentry kind="src" path="base/silent/src/ocsp"/>
++	<classpathentry kind="src" path="base/silent/src/common"/>
++	<classpathentry kind="src" path="base/silent/src/subca"/>
++	<classpathentry kind="src" path="base/silent/src/argparser"/>
++	<classpathentry kind="src" path="base/silent/src/ra"/>
++	<classpathentry kind="src" path="base/silent/src/tks"/>
++	<classpathentry kind="src" path="base/silent/src/tps"/>
+ 	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
+ 	<classpathentry kind="lib" path="/usr/share/java/apache-commons-cli.jar"/>
+ 	<classpathentry kind="lib" path="/usr/share/java/apache-commons-logging.jar"/>
+diff --git a/base/common/src/CMakeLists.txt b/base/common/src/CMakeLists.txt
+index 5ccf6a3..a21b03e 100644
+--- a/base/common/src/CMakeLists.txt
++++ b/base/common/src/CMakeLists.txt
+@@ -146,7 +146,7 @@ javadoc(pki-common
+         -use
+         -version
+     DEPENDS
+-        pki-cms-jar pki-certsrv-jar
++        pki-cms-jar pki-certsrv-jar pki-silent-jar
+ )
+ 
+ install(
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/GetCookie.java b/base/common/src/com/netscape/cms/servlet/csadmin/GetCookie.java
+index b78b98b..410c26c 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/GetCookie.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/GetCookie.java
+@@ -82,6 +82,7 @@ public class GetCookie extends CMSServlet {
+         try {
+             sessionMaxAge = cs.getInteger("sessionMaxAge", SESSION_MAX_AGE);
+         } catch (Exception e) {
++            throw new EBaseException(e);
+         }
+ 
+         IArgBlock header = CMS.createArgBlock();
+@@ -100,7 +101,7 @@ public class GetCookie extends CMSServlet {
+             u = new URL(url_e);
+         } catch (Exception eee) {
+             throw new ECMSGWException(
+-                  "GetCookie missing parameter: url");
++                  "GetCookie missing parameter: url", eee);
+         }
+ 
+         int index2 = url_e.indexOf("subsystem=");
+@@ -116,6 +117,7 @@ public class GetCookie extends CMSServlet {
+             authToken = authenticate(cmsReq);
+         } catch (Exception e) {
+             CMS.debug("GetCookie authentication failed");
++            CMS.debug(e);
+             log(ILogger.LL_FAILURE, 
+                     CMS.getLogMessage("CMSGW_ERR_BAD_SERV_OUT_STREAM", "",
+                     e.toString()));
+@@ -134,6 +136,7 @@ public class GetCookie extends CMSServlet {
+                 form = getTemplate(mErrorFormPath, httpReq, locale);
+             } catch (IOException eee) {
+                 CMS.debug("GetCookie process: cant locate the form");
++                CMS.debug(e);
+ /*
+                 log(ILogger.LL_FAILURE,
+                     CMS.getLogMessage("CMSGW_ERR_GET_TEMPLATE", e.toString()));
+@@ -157,7 +160,7 @@ public class GetCookie extends CMSServlet {
+                 log(ILogger.LL_FAILURE,
+                     CMS.getLogMessage("CMSGW_ERR_OUT_STREAM_TEMPLATE", ee.toString()));
+                     throw new ECMSGWException(
+-                      CMS.getUserMessage("CMS_GW_DISPLAY_TEMPLATE_ERROR"));
++                      CMS.getUserMessage("CMS_GW_DISPLAY_TEMPLATE_ERROR"), e);
+             }
+             return;
+         } 
+@@ -176,6 +179,7 @@ public class GetCookie extends CMSServlet {
+                 try {
+                     addr = u.getHost();
+                 } catch (Exception e) {
++                    throw new EBaseException(e);
+                 }
+                 String ip = "";
+                 try {
+@@ -184,6 +188,7 @@ public class GetCookie extends CMSServlet {
+                     if (index > 0)
+                         ip = ip.substring(index+1);
+                 } catch (Exception e) {
++                    throw new EBaseException(e);
+                 }
+ 
+                 ctable.addEntry(cookie, ip, uid, groupname);
+@@ -194,6 +199,7 @@ public class GetCookie extends CMSServlet {
+                             form = getTemplate(mFormPath, httpReq, locale);
+                         } catch (IOException e) {
+                             CMS.debug("GetCookie process: cant locate the form");
++                            CMS.debug(e);
+ /*
+                             log(ILogger.LL_FAILURE,
+                               CMS.getLogMessage("CMSGW_ERR_GET_TEMPLATE", e.toString()));
+@@ -221,10 +227,11 @@ public class GetCookie extends CMSServlet {
+                             log(ILogger.LL_FAILURE,
+                                 CMS.getLogMessage("CMSGW_ERR_OUT_STREAM_TEMPLATE", e.toString()));
+                             throw new ECMSGWException(
+-                              CMS.getUserMessage("CMS_GW_DISPLAY_TEMPLATE_ERROR"));
++                              CMS.getUserMessage("CMS_GW_DISPLAY_TEMPLATE_ERROR"), e);
+                         }
+                     }
+                 } catch (Exception e) {
++                    throw new EBaseException(e);
+                 }
+             }
+         }
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/LDAPSecurityDomainSessionTable.java b/base/common/src/com/netscape/cms/servlet/csadmin/LDAPSecurityDomainSessionTable.java
+index 65b98a4..f5bbd7e 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/LDAPSecurityDomainSessionTable.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/LDAPSecurityDomainSessionTable.java
+@@ -141,12 +141,16 @@ public class LDAPSecurityDomainSessionTable
+             if (res.getCount() > 0) ret = true;
+         } catch(Exception e) {
+             CMS.debug("SecurityDomainSessionTable: unable to query session " + sessionId + ": " + e);
++            CMS.debug(e);
++            throw new RuntimeException(e);
+         }
+ 
+         try {
+             conn.disconnect();
+         } catch (Exception e) {
+             CMS.debug("SecurityDomainSessionTable: isSessionIdExist: Error in disconnecting from database: " + e);
++            CMS.debug(e);
++            throw new RuntimeException(e);
+         }
+         return ret;
+     }
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/SecurityDomainLogin.java b/base/common/src/com/netscape/cms/servlet/csadmin/SecurityDomainLogin.java
+index 4f0a19d..50edd0a 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/SecurityDomainLogin.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/SecurityDomainLogin.java
+@@ -73,7 +73,8 @@ public class SecurityDomainLogin extends BaseServlet {
+             context.put("name", sdname); 
+             template = Velocity.getTemplate("admin/console/config/securitydomainloginpanel.vm");
+         } catch (Exception e) {
+-            System.err.println("Exception caught: " + e.getMessage());
++            CMS.debug(e);
++            throw new RuntimeException(e);
+         }
+ 
+         return template;
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/TokenAuthenticate.java b/base/common/src/com/netscape/cms/servlet/csadmin/TokenAuthenticate.java
+index f7482d0..ee6bde9 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/TokenAuthenticate.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/TokenAuthenticate.java
+@@ -112,6 +112,8 @@ public class TokenAuthenticate extends CMSServlet {
+             outputResult(httpResp, "application/xml", cb);
+         } catch (Exception e) {
+             CMS.debug("Failed to send the XML output");
++            CMS.debug(e);
++            throw new EBaseException(e);
+         }
+     }
+ 
+diff --git a/base/silent/src/ca/ConfigureCA.java b/base/silent/src/ca/ConfigureCA.java
+index 188dc1b..fb85426 100644
+--- a/base/silent/src/ca/ConfigureCA.java
++++ b/base/silent/src/ca/ConfigureCA.java
+@@ -196,7 +196,7 @@ public class ConfigureCA {
+     public ConfigureCA() {// do nothing :)
+     }
+ 
+-    public String getStatus(HTTPResponse hr, String name) {
++    public String getStatus(HTTPResponse hr, String name) throws Exception {
+         ByteArrayInputStream bais = null;
+         String status = null;
+         try {
+@@ -206,18 +206,18 @@ public class ConfigureCA {
+             px.prettyprintxml();
+             status = px.getvalue(name);
+         } catch (Exception e) {
+-            System.out.println("Exception in getStatus(): " + e.toString());
++            throw e;
+         }
+         return status;
+         }
+ 
+     public boolean checkStatus(HTTPResponse hr, String name,
+-                               String expected, String location) {
++                               String expected, String location) throws Exception {
+         return checkStatus(hr,name, new String[] {expected}, location);
+     }
+ 
+     public boolean checkStatus(HTTPResponse hr, String name, 
+-                               String[] expected, String location) {
++                               String[] expected, String location) throws Exception {
+         String status = getStatus(hr, name);
+         if (status == null) {
+             System.out.println("Error in " + location + ": " + name + 
+@@ -235,7 +235,7 @@ public class ConfigureCA {
+      } 
+ 
+ 
+-    public boolean LoginPanel() {
++    public boolean LoginPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -264,13 +264,11 @@ public class ConfigureCA {
+ 
+             return st;
+         } catch (Exception e) {
+-            System.out.println("Exception in LoginPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean TokenChoicePanel() {
++    public boolean TokenChoicePanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -305,13 +303,11 @@ public class ConfigureCA {
+             }
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in TokenChoicePanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean DomainPanel() {
++    public boolean DomainPanel() throws Exception {
+         try {
+             HTTPResponse hr = null;
+             String domain_url = "https://" + cs_hostname + ":" + cs_port;
+@@ -335,26 +331,22 @@ public class ConfigureCA {
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in DomainPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean DisplayCertChainPanel() {
++    public boolean DisplayCertChainPanel() throws Exception {
+         try {
+             HTTPResponse hr = null;
+             String query_string = "p=4" + "&op=next" + "&xml=true";
+             hr = hc.sslConnect(cs_hostname,cs_port,wizard_uri,query_string);
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in DisplayCertChainPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean SecurityDomainLoginPanel() {
++    public boolean SecurityDomainLoginPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -366,12 +358,20 @@ public class ConfigureCA {
+ 
+             hr = hc.sslConnect(sd_hostname,sd_admin_port,sd_login_uri,query_string);
+ 
++            if (hr.getStatusCode() != 200) {
++                throw new Exception("Unable to login to security domain. HTTP error " + hr.getStatusCode());
++            }
++
+             String query_string_1 = "uid=" + sd_admin_name + "&pwd=" + URLEncoder.encode(sd_admin_password) +
+                                     "&url=" + URLEncoder.encode(subca_url) ;
+ 
+             hr = hc.sslConnect(sd_hostname,sd_admin_port,sd_get_cookie_uri,
+                                                 query_string_1);
+ 
++            if (hr.getStatusCode() != 200) {
++                throw new Exception("Unable to get a cookie. HTTP error " + hr.getStatusCode());
++            }
++
+             // get session id from security domain
+                 
+             String subca_session_id = hr.getContentValue("header.session_id");
+@@ -397,13 +397,11 @@ public class ConfigureCA {
+             System.out.println("urls =" + urls);
+                                                                                                                                                                                                                  return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in SecurityDomainLoginPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean CreateCAPanel() {
++    public boolean CreateCAPanel() throws Exception {
+         try { 
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -437,13 +435,11 @@ public class ConfigureCA {
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in CreateCAPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean RestoreKeyCertPanel() {
++    public boolean RestoreKeyCertPanel() throws Exception {
+         try {
+             HTTPResponse hr = null;
+ 
+@@ -457,14 +453,12 @@ public class ConfigureCA {
+             }
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in RestoreKeyCertPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+             
+ 
+-    public boolean HierarchyPanel() {
++    public boolean HierarchyPanel() throws Exception {
+         try { 
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -482,14 +476,12 @@ public class ConfigureCA {
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in HierarchyPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+ 
+     }
+ 
+-    public boolean LdapConnectionPanel() {
++    public boolean LdapConnectionPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -513,13 +505,11 @@ public class ConfigureCA {
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in LdapConnectionPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean KeyPanel() {
++    public boolean KeyPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -606,9 +596,7 @@ public class ConfigureCA {
+             System.out.println("default: server_cert_name=" + server_cert_name);
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in KeyPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+@@ -699,9 +687,7 @@ public class ConfigureCA {
+                         return true;
+                     }
+                     catch (Exception e) {
+-                        System.out.println("CertSubjectPanel: Unable to read in external approved CA cert or certificate chain.");
+-                        System.out.println(e.toString());
+-                        return false;
++                        throw e;
+                     }
+                 }
+             }
+@@ -943,7 +929,7 @@ public class ConfigureCA {
+         }
+     }
+ 
+-    public boolean BackupContinuePanel() {
++    public boolean BackupContinuePanel() throws Exception {
+         try {
+             HTTPResponse hr = null;
+ 
+@@ -955,13 +941,11 @@ public class ConfigureCA {
+ 
+ 	    return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in BackupContinuePanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean ImportCACertPanel() {
++    public boolean ImportCACertPanel() throws Exception {
+         try {
+             HTTPResponse hr = null;
+ 
+@@ -973,13 +957,11 @@ public class ConfigureCA {
+ 
+ 	    return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in ImportCACertPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean AdminCertReqPanel() {
++    public boolean AdminCertReqPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -1029,14 +1011,12 @@ public class ConfigureCA {
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in AdminCertReqPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+ 
+     }
+ 
+-    public boolean AdminCertImportPanel() {
++    public boolean AdminCertImportPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -1059,7 +1039,7 @@ public class ConfigureCA {
+ 
+                 System.out.println("Cert to Import =" + cert_to_import);
+             } catch (Exception e) {
+-                System.out.println("ERROR: failed to retrieve cert");
++                throw e;
+             }
+ 
+             System.out.println("Cert to Import =" + cert_to_import);
+@@ -1083,13 +1063,11 @@ public class ConfigureCA {
+             System.out.println("SUCCESS: imported admin user cert");
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in AdminCertImportPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+-    public boolean UpdateDomainPanel() {
++    public boolean UpdateDomainPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -1119,9 +1097,7 @@ public class ConfigureCA {
+ 		
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in UpdateDomainPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+ 
+     }
+diff --git a/base/silent/src/http/HTTPClient.java b/base/silent/src/http/HTTPClient.java
+index 2eeeaee..e19c9c2 100644
+--- a/base/silent/src/http/HTTPClient.java
++++ b/base/silent/src/http/HTTPClient.java
+@@ -104,7 +104,8 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 					org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.DATA_GRAM,
+ 					datagram_range);
+ 		} catch (Exception e) {
+-			System.out.println("exception " + e.toString());
++			e.printStackTrace();
++			throw e;
+ 		}
+ 	}
+ 
+@@ -136,7 +137,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 		{
+ 
+ 			System.out.println("#############################################");
+-			System.out.println("Attempting to connect to: " + hostname + ":" +
++			System.out.println("testsslConnect: Attempting to connect to: " + hostname + ":" +
+ 							portnumber);
+ 
+ 			Integer x = new Integer(portnumber);
+@@ -164,9 +165,8 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 
+ 		catch(Exception e)
+ 		{
+-			System.err.println("Exception: Unable to Send Request:" +e);
+ 			e.printStackTrace();
+-			st = false;
++			throw new RuntimeException(e);
+ 		}
+ 
+ 		if(!st)
+@@ -189,7 +189,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 		{
+ 
+ 			System.out.println("#############################################");
+-			System.out.println("Attempting to connect to: " + hostname + ":" +
++			System.out.println("sslConnectClientAuth: Attempting to connect to: " + hostname + ":" +
+ 							portnumber);
+ 
+ 			Integer x = new Integer(portnumber);
+@@ -220,19 +220,15 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 								"/" + url +
+ 								"?" + query);
+ 
+-			OutputStream rawos = socket.getOutputStream();
+-			BufferedOutputStream os = new BufferedOutputStream(rawos);
+-			PrintStream ps = new PrintStream(os);
+-
+-			ps.println("POST " + url + " HTTP/1.0");
+-			ps.println("Host: " + hostname);
+-			ps.println("Connection: Keep-Alive");
+-			ps.println("Content-type: application/x-www-form-urlencoded");
+-			ps.println("Content-length: " +query.length());
+-			ps.println("");
+-			ps.print(query);
+-			ps.flush();
+-			os.flush();
++			DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
++			dos.writeBytes("POST " + url + " HTTP/1.0\r\n");
++			dos.writeBytes("Host: " + hostname + "\r\n");
++			dos.writeBytes("Connection: Keep-Alive\r\n");
++			dos.writeBytes("Content-type: application/x-www-form-urlencoded\r\n");
++			dos.writeBytes("Content-length: " +query.length() + "\r\n");
++			dos.writeBytes("\r\n");
++			dos.writeBytes(query + "\r\n");
++			dos.flush();
+ 
+ 			try
+ 			{
+@@ -242,27 +238,17 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			}
+ 			catch (Exception e)
+ 			{
+-				System.out.println("Exception");
+ 				e.printStackTrace();
+-				st = false;
++				throw e;
+ 			}
+ 
+ 			socket.close();
+-			os.close();
+-			rawos.close();
+-			ps.close();
+-
+-			os=null;
+-			rawos=null;
+-			ps=null;
+-	
+ 		}
+ 
+ 		catch(Exception e)
+ 		{
+-			System.err.println("Exception: Unable to Send Request:" +e);
+ 			e.printStackTrace();
+-			st = false;
++			throw new RuntimeException(e);
+ 		}
+ 
+ 		if(!st)
+@@ -285,7 +271,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 		{
+ 
+ 			System.out.println("#############################################");
+-			System.out.println("Attempting to connect to: " + hostname + ":" +
++			System.out.println("sslConnect: Attempting to connect to: " + hostname + ":" +
+ 							portnumber);
+ 
+ 			Integer x = new Integer(portnumber);
+@@ -313,34 +299,28 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 								"/" + url +
+ 								"?" + query);
+ 
+-			OutputStream rawos = socket.getOutputStream();
+-			BufferedOutputStream os = new BufferedOutputStream(rawos);
+-			PrintStream ps = new PrintStream(os);
+-
+-
+-			ps.println("POST " + url + " HTTP/1.0");
++			DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
++			dos.writeBytes("POST " + url + " HTTP/1.0\r\n");
++			dos.writeBytes("Host: " + hostname + "\r\n");
+ 
+ 			// check to see if we have a cookie to send
+ 			if(j_session_id != null )
+-				ps.println("Cookie: " + j_session_id);
++				dos.writeBytes("Cookie: " + j_session_id + "\r\n");
+ 
+-			ps.println("Host: " + hostname);
+-			ps.println("Content-type: application/x-www-form-urlencoded");
+-			ps.println("Content-length: " +query.length());
+-			ps.println("Connection: Keep-Alive");
++			dos.writeBytes("Content-type: application/x-www-form-urlencoded\r\n");
++			dos.writeBytes("Content-length: " +query.length() + "\r\n");
++			dos.writeBytes("Connection: Keep-Alive\r\n");
+ 
+ 			// special header posting if available
+ 			if(basic_auth_header_value != null)
+ 			{
+ 				System.out.println("basic_auth = " + basic_auth_header_value );
+-				ps.println("Authorization: Basic " + basic_auth_header_value );
++				dos.writeBytes("Authorization: Basic " + basic_auth_header_value + "\r\n");
+ 			}
+ 
+-			ps.println("");
+-			ps.println(query);
+-			ps.println("\r");
+-			ps.flush();
+-			os.flush();
++			dos.writeBytes("\r\n");
++			dos.writeBytes(query + "\r\n");
++			dos.flush();
+ 
+ 			try
+ 			{
+@@ -350,27 +330,17 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			}
+ 			catch (Exception e)
+ 			{
+-				System.out.println("Exception");
+ 				e.printStackTrace();
+-				st = false;
++				throw e;
+ 			}
+ 
+ 			socket.close();
+-			os.close();
+-			rawos.close();
+-			ps.close();
+-
+-			os=null;
+-			rawos=null;
+-			ps=null;
+-	
+ 		}
+ 
+ 		catch(Exception e)
+ 		{
+-			System.err.println("Exception: Unable to Send Request:" +e);
+ 			e.printStackTrace();
+-			st = false;
++			throw new RuntimeException(e);
+ 		}
+ 
+ 		if(!st)
+@@ -393,7 +363,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 		{
+ 
+ 			System.out.println("#############################################");
+-			System.out.println("Attempting to connect to: " + hostname + ":" +
++			System.out.println("nonsslConnect: Attempting to connect to: " + hostname + ":" +
+ 							portnumber);
+ 
+ 			Integer x = new Integer(portnumber);
+@@ -407,35 +377,30 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 								"/" + url +
+ 								"?" + query);
+ 
+-			OutputStream rawos = socket.getOutputStream();
+-			BufferedOutputStream os = new BufferedOutputStream(rawos);
+-			PrintStream ps = new PrintStream(os);
+-
+ 			System.out.println("Connected.");
+ 
+-			ps.println("POST " + url + " HTTP/1.0");
++			DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
++			dos.writeBytes("POST " + url + " HTTP/1.0\r\n");
++			dos.writeBytes("Host: " + hostname + "\r\n");
+ 
+ 			// check to see if we have a cookie to send
+ 			if(j_session_id != null )
+-				ps.println("Cookie: " + j_session_id);
++				dos.writeBytes("Cookie: " + j_session_id + "\r\n");
+ 
+-			ps.println("Host: " + hostname);
+-			ps.println("Content-type: application/x-www-form-urlencoded");
+-			ps.println("Content-length: " +query.length());
+-			ps.println("Connection: Keep-Alive");
++			dos.writeBytes("Content-type: application/x-www-form-urlencoded\r\n");
++			dos.writeBytes("Content-length: " +query.length() + "\r\n");
++			dos.writeBytes("Connection: Keep-Alive\r\n");
+ 
+ 			// special header posting if available
+ 			if(basic_auth_header_value != null)
+ 			{
+ 				System.out.println("basic_auth = " + basic_auth_header_value );
+-				ps.println("Authorization: Basic " + basic_auth_header_value );
++				dos.writeBytes("Authorization: Basic " + basic_auth_header_value + "\r\n");
+ 			}
+ 
+-			ps.println("");
+-			ps.println(query);
+-			ps.println("\r");
+-			ps.flush();
+-			os.flush();
++			dos.writeBytes("\r\n");
++			dos.writeBytes(query + "\r\n");
++			dos.flush();
+ 
+ 			try
+ 			{
+@@ -445,27 +410,17 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			}
+ 			catch (Exception e)
+ 			{
+-				System.out.println("Exception");
+ 				e.printStackTrace();
+-				st = false;
++				throw e;
+ 			}
+ 
+ 			socket.close();
+-			os.close();
+-			rawos.close();
+-			ps.close();
+-
+-			os=null;
+-			rawos=null;
+-			ps=null;
+-	
+ 		}
+ 
+ 		catch(Exception e)
+ 		{
+-			System.err.println("Exception: Unable to Send Request:" +e);
+ 			e.printStackTrace();
+-			st = false;
++			throw new RuntimeException(e);
+ 		}
+ 
+ 		if(!st)
+@@ -582,19 +537,16 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+       int spacePos   = statusLine.indexOf(' ');
+       if (spacePos < 0)
+       {
+-        System.out.println("ERROR: Unable to parse response header -- could " +
++          throw new Exception("Unable to parse response header -- could " +
+                                 "not find protocol/version delimiter");
+-		return null;
+-		
+       }
+ 
+       String protocolVersion = statusLine.substring(0, spacePos);
+       int    spacePos2       = statusLine.indexOf(' ', spacePos+1);
+       if (spacePos2 < 0)
+       {
+-        System.out.println("ERROR: Unable to parse response header -- could " +
++          throw new Exception("Unable to parse response header -- could " +
+                                 "not find response code delimiter");
+-		return null;
+       }
+ 
+       try
+@@ -604,9 +556,8 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+       }
+       catch (NumberFormatException nfe)
+       {
+-        System.out.println("Unable to parse response header -- could " +
+-                                "not interpret status code as an integer");
+-		return null;
++          throw new Exception("Unable to parse response header -- could " +
++                                "not interpret status code as an integer", nfe);
+       }
+ 
+       String responseMessage = statusLine.substring(spacePos2+1);
+@@ -637,19 +588,17 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+             spacePos   = statusLine.indexOf(' ');
+             if (spacePos < 0)
+             {
+-              System.out.println("ERROR: Unable to parse response header -- " +
++                throw new Exception("Unable to parse response header -- " +
+                                       "could not find protocol/version " +
+                                       "delimiter");
+-				return null;
+             }
+ 
+             protocolVersion = statusLine.substring(0, spacePos);
+             spacePos2       = statusLine.indexOf(' ', spacePos+1);
+             if (spacePos2 < 0)
+             {
+-              System.out.println("ERROR: Unable to parse response header -- " +
++                throw new Exception("Unable to parse response header -- " +
+                                       "could not find response code delimiter");
+-				return null;
+             }
+ 
+             try
+@@ -659,10 +608,9 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+             }
+             catch (NumberFormatException nfe)
+             {
+-              System.out.println("ERROR: Unable to parse response header -- " +
++                throw new Exception("Unable to parse response header -- " +
+                                       "could not interpret status code as an " +
+-                                      "integer");
+-				return null;
++                                      "integer", nfe);
+             }
+ 
+             responseMessage = statusLine.substring(spacePos2+1);
+@@ -793,7 +741,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+         int spacePos   = statusLine.indexOf(' ');
+         if (spacePos < 0)
+         {
+-          System.out.println("Unable to parse response header -- could " +
++            throw new Exception("Unable to parse response header -- could " +
+                                   "not find protocol/version delimiter");
+         }
+ 
+@@ -801,7 +749,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+         int    spacePos2       = statusLine.indexOf(' ', spacePos+1);
+         if (spacePos2 < 0)
+         {
+-          System.out.println("Unable to parse response header -- could " +
++            throw new Exception("Unable to parse response header -- could " +
+                                   "not find response code delimiter");
+         }
+ 
+@@ -812,8 +760,8 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+         }
+         catch (NumberFormatException nfe)
+         {
+-          System.out.println("Unable to parse response header -- could " +
+-                                  "not interpret status code as an integer");
++            throw new Exception("Unable to parse response header -- could " +
++                                  "not interpret status code as an integer", nfe);
+         }
+ 
+         String responseMessage = statusLine.substring(spacePos2+1);
+@@ -831,7 +779,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+           int colonPos = headerLine.indexOf(':');
+           if (colonPos < 0)
+           {
+-            System.out.println("Unable to parse response header -- no " +
++              throw new Exception("Unable to parse response header -- no " +
+                                     "colon found on header line \"" +
+                                     headerLine + "\"");
+           }
+@@ -1059,7 +1007,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 		{
+ 
+ 			System.out.println("#############################################");
+-			System.out.println("Attempting to connect to: " + hostname + ":" +
++			System.out.println("sslConnect2: Attempting to connect to: " + hostname + ":" +
+ 							portnumber);
+ 
+ 			Integer x = new Integer(portnumber);
+@@ -1081,9 +1029,9 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			System.out.println("Connected.");
+ 			socket.setUseClientMode(true);
+ 
+-			DataOutputStream dos = 
+-					new DataOutputStream(socket.getOutputStream()); 
++			DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+ 			dos.writeBytes("POST /ocsp HTTP/1.0\r\n");
++			dos.writeBytes("Host: " + hostname + "\r\n");
+ 			dos.writeBytes("Content-length: " + data.length + "\r\n");
+ 			dos.writeBytes("\r\n");
+ 			dos.write(data);
+@@ -1097,21 +1045,17 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			}
+ 			catch (Exception e)
+ 			{
+-				System.out.println("Exception");
+ 				e.printStackTrace();
+-				st = false;
++				throw e;
+ 			}
+ 
+ 			socket.close();
+-			dos.close();
+-
+ 		}
+ 
+ 		catch(Exception e)
+ 		{
+-			System.err.println("Exception: Unable to Send Request:" +e);
+ 			e.printStackTrace();
+-			st = false;
++			throw new RuntimeException(e);
+ 		}
+ 
+ 		if(!st)
+@@ -1134,7 +1078,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 		{
+ 
+ 			System.out.println("#############################################");
+-			System.out.println("Attempting to connect to: " + hostname + ":" +
++			System.out.println("nonsslConnect2: Attempting to connect to: " + hostname + ":" +
+ 							portnumber);
+ 
+ 			Integer x = new Integer(portnumber);
+@@ -1149,9 +1093,9 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 
+ 			System.out.println("Connected.");
+ 
+-			DataOutputStream dos = 
+-					new DataOutputStream(socket.getOutputStream()); 
++			DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+ 			dos.writeBytes("POST " + url +  " HTTP/1.0\r\n");
++			dos.writeBytes("Host: " + hostname + "\r\n");
+ 			dos.writeBytes("Content-length: " + data.length + "\r\n");
+ 			dos.writeBytes("\r\n");
+ 			dos.write(data);
+@@ -1165,21 +1109,17 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			}
+ 			catch (Exception e)
+ 			{
+-				System.out.println("Exception");
+ 				e.printStackTrace();
+-				st = false;
++				throw e;
+ 			}
+ 
+ 			socket.close();
+-			dos.close();
+-
+ 		}
+ 
+ 		catch(Exception e)
+ 		{
+-			System.err.println("Exception: Unable to Send Request:" +e);
+ 			e.printStackTrace();
+-			st = false;
++			throw new RuntimeException(e);
+ 		}
+ 
+ 		if(!st)
+@@ -1206,7 +1146,8 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 		{
+ 			System.out.println("ERROR: unable to login to : " +
+ 							client_certdb_dir );
+-			return false;
++			e.printStackTrace();
++			throw new RuntimeException(e);
+ 		}
+ 
+ 		return true;
+-- 
+2.5.5
+

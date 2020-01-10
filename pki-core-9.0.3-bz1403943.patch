@@ -1,0 +1,778 @@
+From 6fc23b4055aa28a7d413f3d1ab70a70d336389bd Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Wed, 14 Dec 2016 10:41:27 +0100
+Subject: [PATCH] Added server hostname in HTTP requests.
+
+The WizardPanelBase, AdminPanel, CertUtil, and HTTPClient have
+been modified to include the server hostname in the HTTP request
+headers. In case the response cannot be parsed the code will log
+the content of the response. The code will also chain the original
+exception to help troubleshooting.
+
+Resolves: rhbz #1403943
+---
+ .../cms/authentication/TokenAuthentication.java    |  34 +--
+ .../netscape/cms/servlet/csadmin/AdminPanel.java   |  27 +-
+ .../com/netscape/cms/servlet/csadmin/CertUtil.java |  31 +-
+ .../cms/servlet/csadmin/WizardPanelBase.java       | 319 +++++++++++----------
+ base/silent/src/http/HTTPClient.java               |   3 +
+ 5 files changed, 219 insertions(+), 195 deletions(-)
+
+diff --git a/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java b/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java
+index add736e1f119e2d8123d88a4ec1f4bcca0a1ea85..a7700a0457c9a75966fa7e78dfe6c28b5e961753 100644
+--- a/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java
++++ b/base/common/src/com/netscape/cms/authentication/TokenAuthentication.java
+@@ -164,29 +164,17 @@ public class TokenAuthentication implements IAuthManager,
+             HttpResponse httpresponse = httpclient.send(httprequest);
+ 
+             c = httpresponse.getContent();
++
+         } catch (Exception e) { 
+-            CMS.debug("TokenAuthentication authenticate Exception="+e.toString());
++            CMS.debug("TokenAuthentication: authenticate: " + e);
++            CMS.debug(e);
++            throw new EBaseException(e);
+         }
+ 
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-
+-                } catch (SAXParseException e) {
+-                    CMS.debug("TokenAuthentication: Unable to parse authentication response: " + e);
+-                    CMS.debug(c);
+-                    throw new EBaseException(e);
+-
+-                } catch (Exception e) {
+-                    CMS.debug("TokenAuthentication: " + e);
+-                    CMS.debug(e);
+-                    throw new EBaseException(e);
+-
+-                }
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("TokenAuthentication: status=" + status);
+@@ -208,9 +196,21 @@ public class TokenAuthentication implements IAuthManager,
+                 }
+ 
+                 CMS.debug("TokenAuthentication: authenticated uid="+uid+", gid="+gid);
++
+             } catch (EBaseException e) {
++                CMS.debug("TokenAuthentication: authenticate: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("TokenAuthentication: authenticate: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new EBaseException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
++                CMS.debug("TokenAuthentication: authenticate: " + e);
++                CMS.debug(e);
++                throw new EBaseException(e);
+             }
+         }
+ 
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/AdminPanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/AdminPanel.java
+index c205dad95dd4c7fcbe400b7c9a2442036da02cb5..52f5ab8349cb2aa1976a6f66575b316672015ffe 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/AdminPanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/AdminPanel.java
+@@ -479,6 +479,7 @@ public class AdminPanel extends WizardPanelBase {
+             HttpRequest httprequest = new HttpRequest();
+             httprequest.setMethod(HttpRequest.POST);
+             httprequest.setURI("/ca/ee/ca/profileSubmit");
++            httprequest.setHeader("host", ca_hostname);
+             httprequest.setHeader("user-agent", "HTTPTool/1.0");
+ 
+             httprequest.setHeader("content-length", "" + content.length());
+@@ -495,15 +496,7 @@ public class AdminPanel extends WizardPanelBase {
+                 try {
+                     ByteArrayInputStream bis = new ByteArrayInputStream(
+                             c.getBytes());
+-                    XMLObject parser = null;
+-
+-                    try {
+-                        parser = new XMLObject(bis);
+-                    } catch (Exception e) {
+-                        CMS.debug( "AdminPanel::submitRequest() - "
+-                                 + "Exception="+e.toString() );
+-                        throw new IOException( e.toString() );
+-                    }
++                    XMLObject parser = new XMLObject(bis);
+                     String status = parser.getValue("Status");
+ 
+                     CMS.debug("AdminPanel update: status=" + status);
+@@ -536,16 +529,28 @@ public class AdminPanel extends WizardPanelBase {
+                     ps.println(b64);
+                     ps.flush();
+                     ps.close();
++
+                 } catch (IOException ee) {
++                    CMS.debug("AdminPanel: submitRequest: " + ee);
++                    CMS.debug(ee);
+                     context.put("errorString", ee.toString());
+                     throw ee;
++
++                } catch (SAXParseException e) {
++                    CMS.debug("AdminPanel: submitRequest: Unable to parse HTTP response: " + e);
++                    CMS.debug(c);
++                    throw new IOException("Unable to parse HTTP response: " + e, e);
++
+                 } catch (Exception ee) {
++                    CMS.debug("AdminPanel: submitRequest: " + ee);
++                    CMS.debug(ee);
+                     context.put("errorString", ee.toString());
+-                    throw new IOException(ee.toString());
++                    throw new IOException(ee);
+                 }
+             }
++
+         } catch (Exception e) {
+-            CMS.debug("AdminPanel submitRequest: " + e.toString());
++            CMS.debug("AdminPanel: submitRequest: " + e);
+         }
+     }
+ 
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
+index 396231764c5213a09712c448e6e2766b7ec870bc..ae32a6986d293ecec3153376574e51cb8b238568 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
+@@ -68,6 +68,7 @@ public class CertUtil {
+ 
+             httprequest.setMethod(HttpRequest.POST);
+             httprequest.setURI("/ca/ee/ca/profileSubmit");
++            httprequest.setHeader("host", hostname);
+             httprequest.setHeader("user-agent", "HTTPTool/1.0");
+             httprequest.setHeader("content-length", "" + content.length());
+             httprequest.setHeader("content-type",
+@@ -76,23 +77,16 @@ public class CertUtil {
+             HttpResponse httpresponse = httpclient.send(httprequest);
+ 
+             c = httpresponse.getContent();
++
+         } catch (Exception e) {
+-            CMS.debug("CertUtil createRemoteCert: " + e.toString());
+-            throw new IOException(e.toString());
++            CMS.debug("CertUtil createRemoteCert: " + e);
++            throw new IOException(e);
+         }
+ 
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "CertUtil::createRemoteCert() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("CertUtil createRemoteCert: status=" + status);
+@@ -112,9 +106,20 @@ public class CertUtil {
+                 byte[] b = CryptoUtil.base64Decode(b64);
+ 
+                 return new X509CertImpl(b);
++
++            } catch (IOException e) {
++                CMS.debug("CertUtil: createRemoteCert: " + e);
++                CMS.debug(e);
++                throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("CertUtil: createRemoteCert: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("CertUtil createRemoteCert: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("CertUtil: createRemoteCert: " + e);
++                throw new IOException(e);
+             }
+         }
+ 
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/WizardPanelBase.java b/base/common/src/com/netscape/cms/servlet/csadmin/WizardPanelBase.java
+index c34adc40872fe007775257e12165d2b73fb8d845..f4387dc0c3c09a8ac51e88f15250e6a4ee6296e6 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/WizardPanelBase.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/WizardPanelBase.java
+@@ -258,16 +258,9 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject obj = null;
+-                try {
+-                    obj = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::updateDomainXML() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject obj = new XMLObject(bis);
+                 String status = obj.getValue("Status");
++
+                 CMS.debug("WizardPanelBase updateDomainXML: status=" + status);
+ 
+                 if (status.equals(SUCCESS)) {
+@@ -276,12 +269,21 @@ public class WizardPanelBase implements IWizardPanel {
+                     String error = obj.getValue("Error");
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: updateDomainXML: " + e.toString());
++                CMS.debug("WizardPanelBase: updateDomainXML: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: updateDomainXML: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: updateDomainXML: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: updateDomainXML: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+     }
+@@ -338,16 +340,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::getDomainXML() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase getDomainXML: status=" + status);
+@@ -364,12 +357,21 @@ public class WizardPanelBase implements IWizardPanel {
+ 
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: getDomainXML: " + e.toString());
++                CMS.debug("WizardPanelBase: getDomainXML: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: getDomainXML: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: getDomainXML: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: getDomainXML: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+ 
+@@ -385,21 +387,22 @@ public class WizardPanelBase implements IWizardPanel {
+             try {
+                 ByteArrayInputStream bis = 
+                   new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::getSubsystemCert() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
++
+                 if (status.equals(SUCCESS)) {
+                     String s = parser.getValue("Cert");
+                     return s;
+                 } else
+                     return null; 
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: getSubsystemCert: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++
+             } catch (Exception e) {
++                CMS.debug("WizardPanelBase: getSubsystemCert: " + e);
++                CMS.debug(e);
+             }
+         }
+ 
+@@ -414,16 +417,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::updateConnectorInfo() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase updateConnectorInfo: status=" + status);
+@@ -432,12 +426,21 @@ public class WizardPanelBase implements IWizardPanel {
+                     String error = parser.getValue("Error");
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: updateConnectorInfo: " + e.toString());
++                CMS.debug("WizardPanelBase: updateConnectorInfo: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: updateConnectorInfo: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: updateConnectorInfo: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: updateConnectorInfo: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+     }
+@@ -456,16 +459,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::getCertChainUsingSecureAdminPort() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase getCertChainUsingSecureAdminPort: status=" + status);
+@@ -483,12 +477,21 @@ public class WizardPanelBase implements IWizardPanel {
+ 
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: getCertChainUsingSecureAdminPort: " + e.toString());
++                CMS.debug("WizardPanelBase: getCertChainUsingSecureAdminPort: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: getCertChainUsingSecureAdminPort: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: getCertChainUsingSecureAdminPort: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: getCertChainUsingSecureAdminPort: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+ 
+@@ -509,16 +512,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::getCertChainUsingSecureEEPort() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase getCertChainUsingSecureEEPort: status=" + status);
+@@ -536,12 +530,21 @@ public class WizardPanelBase implements IWizardPanel {
+ 
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: getCertChainUsingSecureEEPort: " + e.toString());
++                CMS.debug("WizardPanelBase: getCertChainUsingSecureEEPort: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: getCertChainUsingSecureEEPort: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: getCertChainUsingSecureEEPort: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: getCertChainUsingSecureEEPort: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+ 
+@@ -557,16 +560,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::updateConfigEntries() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase updateConfigEntries: status=" + status);
+@@ -671,12 +665,21 @@ public class WizardPanelBase implements IWizardPanel {
+ 
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: updateConfigEntries: " + e.toString());
++                CMS.debug("WizardPanelBase: updateConfigEntries: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: updateConfigEntries: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: updateConfigEntries: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: updateConfigEntries: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+ 
+@@ -692,16 +695,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::authenticate() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase authenticate: status=" + status);
+@@ -714,9 +708,21 @@ public class WizardPanelBase implements IWizardPanel {
+                     String error = parser.getValue("Error");
+                     return false;
+                 } 
++
++            } catch (IOException e) {
++                CMS.debug("WizardPanelBase: authenticate: " + e);
++                CMS.debug(e);
++                throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: authenticate: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: authenticate: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: authenticate: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+ 
+@@ -735,16 +741,7 @@ public class WizardPanelBase implements IWizardPanel {
+         } else {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::updateOCSPConfig() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase updateOCSPConfig: status=" + status);
+@@ -759,12 +756,21 @@ public class WizardPanelBase implements IWizardPanel {
+ 
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase updateOCSPConfig: " + e.toString());
++                CMS.debug("WizardPanelBase: updateOCSPConfig: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: updateOCSPConfig: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase updateOCSPConfig: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: updateOCSPConfig: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+     }
+@@ -791,16 +797,7 @@ public class WizardPanelBase implements IWizardPanel {
+             CMS.debug("content="+c);
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::updateNumberRange() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase updateNumberRange: status=" + status);
+@@ -828,14 +825,21 @@ public class WizardPanelBase implements IWizardPanel {
+ 
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: updateNumberRange: " + e.toString());
++                CMS.debug("WizardPanelBase: updateNumberRange: " + e);
+                 CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: updateNumberRange: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: updateNumberRange: " + e.toString());
++                CMS.debug("WizardPanelBase: updateNumberRange: " + e);
+                 CMS.debug(e);
+-                throw new IOException(e.toString());
++                throw new IOException(e);
+             }
+         }
+     }
+@@ -850,16 +854,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::getPort() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase getPort: status=" + status);
+@@ -874,12 +869,21 @@ public class WizardPanelBase implements IWizardPanel {
+ 
+                     throw new IOException(error);
+                 } 
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: getPort: " + e.toString());
++                CMS.debug("WizardPanelBase: getPort: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: getPort: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: getPort: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: getPort: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }
+ 
+@@ -916,6 +920,7 @@ public class WizardPanelBase implements IWizardPanel {
+             httprequest.setMethod(HttpRequest.POST);
+             httprequest.setURI(uri);
+             // httprequest.setURI("/ca/ee/ca/ports");
++            httprequest.setHeader("host", hostname);
+             httprequest.setHeader("user-agent", "HTTPTool/1.0");
+             // String content_c = "secure="+secure;
+             httprequest.setHeader("content-type",
+@@ -1274,15 +1279,21 @@ public class WizardPanelBase implements IWizardPanel {
+                     if( state != null ) {
+                         CMS.debug( "WizardPanelBase pingCS: state=" + state );
+                     }
++
++                } catch (SAXParseException e) {
++                    CMS.debug("WizardPanelBase: pingCS: Unable to parse HTTP response: " + e);
++                    CMS.debug(c);
++
+                 } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase: pingCS: parser failed"
+-                             + e.toString() );
++                    CMS.debug("WizardPanelBase: pingCS: " + e);
++                    CMS.debug(e);
+                 }
+ 
+                 return state;
+-            } catch( Exception e ) {
+-                CMS.debug( "WizardPanelBase: pingCS: " + e.toString() );
+-                throw new IOException( e.toString() );
++
++            } catch (Exception e) {
++                CMS.debug("WizardPanelBase: pingCS: " + e);
++                throw new IOException(e);
+             }
+         }
+ 
+@@ -1316,16 +1327,7 @@ public class WizardPanelBase implements IWizardPanel {
+         if (c != null) {
+             try {
+                 ByteArrayInputStream bis = new ByteArrayInputStream(c.getBytes());
+-                XMLObject parser = null;
+-
+-                try {
+-                    parser = new XMLObject(bis);
+-                } catch (Exception e) {
+-                    CMS.debug( "WizardPanelBase::getTokenInfo() - "
+-                             + "Exception="+e.toString() );
+-                    throw new IOException( e.toString() );
+-                }
+-
++                XMLObject parser = new XMLObject(bis);
+                 String status = parser.getValue("Status");
+ 
+                 CMS.debug("WizardPanelBase getTokenInfo: status=" + status);
+@@ -1392,12 +1394,21 @@ public class WizardPanelBase implements IWizardPanel {
+                     String error = parser.getValue("Error");
+                     throw new IOException(error);
+                 }
++
+             } catch (IOException e) {
+-                CMS.debug("WizardPanelBase: getTokenInfo: " + e.toString());
++                CMS.debug("WizardPanelBase: getTokenInfo: " + e);
++                CMS.debug(e);
+                 throw e;
++
++            } catch (SAXParseException e) {
++                CMS.debug("WizardPanelBase: getTokenInfo: Unable to parse HTTP response: " + e);
++                CMS.debug(c);
++                throw new IOException("Unable to parse HTTP response: " + e, e);
++
+             } catch (Exception e) {
+-                CMS.debug("WizardPanelBase: getTokenInfo: " + e.toString());
+-                throw new IOException(e.toString());
++                CMS.debug("WizardPanelBase: getTokenInfo: " + e);
++                CMS.debug(e);
++                throw new IOException(e);
+             }
+         }           
+     }
+diff --git a/base/silent/src/http/HTTPClient.java b/base/silent/src/http/HTTPClient.java
+index 75d77c5aaed8a5061e17fa408bfab9642e54a6f5..2eeeaee16ea8620783478fb1a9dbe17b6ce55a09 100644
+--- a/base/silent/src/http/HTTPClient.java
++++ b/base/silent/src/http/HTTPClient.java
+@@ -225,6 +225,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			PrintStream ps = new PrintStream(os);
+ 
+ 			ps.println("POST " + url + " HTTP/1.0");
++			ps.println("Host: " + hostname);
+ 			ps.println("Connection: Keep-Alive");
+ 			ps.println("Content-type: application/x-www-form-urlencoded");
+ 			ps.println("Content-length: " +query.length());
+@@ -323,6 +324,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			if(j_session_id != null )
+ 				ps.println("Cookie: " + j_session_id);
+ 
++			ps.println("Host: " + hostname);
+ 			ps.println("Content-type: application/x-www-form-urlencoded");
+ 			ps.println("Content-length: " +query.length());
+ 			ps.println("Connection: Keep-Alive");
+@@ -417,6 +419,7 @@ public class HTTPClient implements SSLCertificateApprovalCallback
+ 			if(j_session_id != null )
+ 				ps.println("Cookie: " + j_session_id);
+ 
++			ps.println("Host: " + hostname);
+ 			ps.println("Content-type: application/x-www-form-urlencoded");
+ 			ps.println("Content-length: " +query.length());
+ 			ps.println("Connection: Keep-Alive");
+-- 
+2.5.5
+
