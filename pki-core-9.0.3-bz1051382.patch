@@ -1,0 +1,175 @@
+diff -rupN pki-core-9.0.3.patched/base/silent/src/common/ParseXML.java pki-core-9.0.3/base/silent/src/common/ParseXML.java
+--- pki-core-9.0.3.patched/base/silent/src/common/ParseXML.java	2011-02-04 08:57:25.000000000 -0800
++++ pki-core-9.0.3/base/silent/src/common/ParseXML.java	2014-01-21 14:59:28.000000000 -0800
+@@ -23,14 +23,100 @@ import javax.xml.parsers.*;
+ import java.util.*;
+ import java.io.*;
+ import java.net.*;
++import java.text.*;
+ 
+ 
+ public class ParseXML {
++    // set true to allow all XML content to be filtered prior to being parsed:
++    private static boolean filterXML = true;
++
++    // set true to provide files containing original and filtered XML content:
++    // (NOTE:  only relevant when 'filterXML=true')
++    private static boolean debugOriginalAndFilteredXML = true;
++
+     Document dom = null;
+ 
+     public ParseXML() {// nothing
+     }
+ 
++    // The following routine takes an InputStream as its input, filters out
++    // all invalid XML 1.0 characters, and returns the filtered content in
++    // a new ByteArrayInputStream.
++    //
++    //     IMPORTANT:  This routine must NOT be used on binary data,
++    //                 as it would merely corrupt the data!
++    //
++    public static ByteArrayInputStream filterXMLData(java.io.InputStream is,
++                                                     String original_data,
++                                                     String filtered_data)
++                                       throws FileNotFoundException,
++                                              IOException {
++        FilterInputStream fis = null;
++        ByteArrayInputStream bais = null;
++        ByteArrayOutputStream baos = null;
++        FileOutputStream original = null;
++        FileOutputStream filtered = null;
++
++        try {
++            int count = 0;
++            int i;
++
++            fis = new BufferedInputStream(is);
++            baos = new ByteArrayOutputStream();
++            original = new FileOutputStream(original_data);
++            filtered = new FileOutputStream(filtered_data);
++
++            while ((i = fis.read()) != -1) {
++                count++;
++                // Thanks to Mark McLaren (see http://blog.mark-mclaren.info/
++                // 2007/02/invalid-xml-characters-when-valid-utf8_5873.html)
++                // for the following test for valid XML 1.0 characters.
++                if ((i == 0x9) ||
++                    (i == 0xA) ||
++                    (i == 0xD) ||
++                    ((i >= 0x20)    && (i <= 0xD7FF)) ||
++                    ((i >= 0xE000)  && (i <= 0xFFFD)) ||
++                    ((i >= 0x10000) && (i <= 0x10FFFF))) {
++                    // only store valid XML 1.0 data
++                    baos.write(i);
++                    if (debugOriginalAndFilteredXML) {
++                        // save this data to both the original_data file
++                        // as well as to the filtered_data file
++                        original.write(i);
++                        filtered.write(i);
++                    }
++                } else {
++                    System.out.println( "Disposing of invalid XML data:  0x" +
++                                        Integer.toHexString( i ) +
++                                        "  (XML byte:  " + count + " )");
++                    if (debugOriginalAndFilteredXML) {
++                        // save this data only to the original_data file
++                        original.write(i);
++                    }
++                }
++            }
++
++            // place the filtered XML into a new ByteArrayInputStream
++            bais = new ByteArrayInputStream(baos.toByteArray());
++        } catch(FileNotFoundException ex) {
++            System.out.println("FileNotFoundException: " + ex);
++        } catch(IOException e) {
++            System.out.println("IOException: " + e);
++        } finally {
++            if (fis!=null) {
++                fis.close();
++            }
++            if (original!=null) {
++                original.close();
++            }
++            if (filtered!=null) {
++                filtered.close();
++            }
++        }
++
++        return bais;
++    }
++
+     public void parse(java.io.InputStream is) {
+         try {
+             // get the factory
+@@ -39,13 +125,59 @@ public class ParseXML {
+             // Using factory get an instance of document builder
+             DocumentBuilder db = dbf.newDocumentBuilder();
+ 
+-            // parse using builder to get DOM representation of the XML file
+-            dom = db.parse(is);
++            if (filterXML) {
++                // establish a timestamp
++                Date now = new Date();
++                SimpleDateFormat df = new SimpleDateFormat("yyyyMMddHHmmssSSS");
++                String dateString = df.format(now);
++
++                // create two XML data file names (original and filtered)
++                String original_data = "/tmp/original_XML_data" + "." +
++                                       dateString;
++                String filtered_data = "/tmp/filtered_XML_data" + "." +
++                                       dateString;
++
++                int size = 0;
++                // filter XML from original InputStream
++                if (is != null) {
++                    if (debugOriginalAndFilteredXML) {
++                        // advertise name of original data file
++                        System.out.println("ORIGINAL XML data:  " +
++                                           original_data);
++                    }
++                    size = is.available();
++                    System.out.println("ORIGINAL size of XML data:  " + size);
++                } else {
++                    System.out.println("ORIGINAL size of XML data is NULL!");
++                }
++                ByteArrayInputStream bais = filterXMLData(is, original_data,
++                                                          filtered_data);
++                if (bais != null) {
++                    size = bais.available();
++                    System.out.println("FILTERED size of XML data:  " + size);
++                    if (debugOriginalAndFilteredXML) {
++                        // advertise name of filtered data file
++                        System.out.println("FILTERED XML data:  " +
++                                           filtered_data);
++                    }
++                } else {
++                    System.out.println("FILTERED size of XML data is NULL!");
++                }
++
++                // parse using builder to get DOM representation
++                // of the filtered XML file
++                dom = db.parse(bais);
++            } else {
++                // parse using builder to get DOM representation
++                // of the original XML file
++                dom = db.parse(is);
++            }
+         } catch (Exception se) {
+             System.out.println("ERROR: unable to parse xml");
+             se.printStackTrace();
+ 
+             try {
++                // provide the contents of the original non-filtered InputStream
+                 BufferedReader br = new BufferedReader(new InputStreamReader(is));
+                 StringBuilder sb = new StringBuilder();
+                 String line = null;
+@@ -82,7 +214,7 @@ public class ParseXML {
+                 }
+             }
+         } catch (Exception e) {
+-            System.out.println("ERROR: Tag=" + tag + "has no values");
++            System.out.println("ERROR: Tag='" + tag + "' has no values");
+             return null;
+         }
+ 

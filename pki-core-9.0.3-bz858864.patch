@@ -1,0 +1,59 @@
+From f29ffc6392c758954fa53a0b4e645c0c72a636f4 Mon Sep 17 00:00:00 2001
+From: Ade Lee <alee@redhat.com>
+Date: Fri, 28 Sep 2012 15:39:31 -0400
+Subject: [PATCH] Resolves #858864 - create/ identify a mechanism for clients
+ to determine that the pki subsystem is up
+
+---
+ base/common/src/com/netscape/cms/servlet/csadmin/GetStatus.java | 2 ++
+ base/common/src/com/netscape/cmscore/apps/CMSEngine.java        | 7 +++++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/GetStatus.java b/base/common/src/com/netscape/cms/servlet/csadmin/GetStatus.java
+index 5f533fbe46424d1813f883b16c63f95b62349083..f037859071023ee4fe50c34cc1710c36f4b0a191 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/GetStatus.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/GetStatus.java
+@@ -74,6 +74,7 @@ public class GetStatus extends CMSServlet {
+ 
+ 	String state = config.getString("cs.state", "");
+ 	String type = config.getString("cs.type", "");
++	String status = config.getString("cs.status", "unknown");
+ 
+         try {
+             XMLObject xmlObj = null;
+@@ -84,6 +85,7 @@ public class GetStatus extends CMSServlet {
+ 
+             xmlObj.addItemToContainer(root, "State", state);
+             xmlObj.addItemToContainer(root, "Type", type);
++            xmlObj.addItemToContainer(root, "Status", status);
+             byte[] cb = xmlObj.toByteArray();
+ 
+             outputResult(httpResp, "application/xml", cb);
+diff --git a/base/common/src/com/netscape/cmscore/apps/CMSEngine.java b/base/common/src/com/netscape/cmscore/apps/CMSEngine.java
+index afaa5c9fc3de44eab494cd647b2c17fc1b4ee77b..cea3354380533da84aa36d98e84087b3bcd27fc5 100644
+--- a/base/common/src/com/netscape/cmscore/apps/CMSEngine.java
++++ b/base/common/src/com/netscape/cmscore/apps/CMSEngine.java
+@@ -255,6 +255,10 @@ public class CMSEngine implements ICMSEngine {
+         mOwner = owner;
+         mConfig = config;
+         int state = mConfig.getInteger("cs.state");
++
++        mConfig.putString("cs.status", "starting");
++        mConfig.commit(false);
++
+         String sd = mConfig.getString("securitydomain.select", "");
+         // my default is 1 day
+         String flush_timeout = config.getString("securitydomain.flushinterval", "86400000");
+@@ -324,6 +328,9 @@ public class CMSEngine implements ICMSEngine {
+         }
+         parseServerXML();
+         fixProxyPorts();
++
++        mConfig.putString("cs.status", "running");
++        mConfig.commit(false);
+     }
+ 
+     /**
+-- 
+1.7.11.4
+

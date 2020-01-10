@@ -1,0 +1,2335 @@
+From fb9765ac497355fc77af71df1d7951aca6b79f37 Mon Sep 17 00:00:00 2001
+From: Endi S. Dewata <edewata@redhat.com>
+Date: Wed, 27 May 2015 15:47:19 -0400
+Subject: [PATCH] Added script to restore subsystem user.
+
+A new script has been added to restore a missing or corrupted
+subsystem user such that it has the correct certificate, the
+correct certificate mapping, and the correct membership to the
+Subsystem Group.
+
+A new Python library have been added to provide the script with
+the functionality to access the PKI configuration and database.
+A new CLI has also been added for troubleshooting.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1225589
+---
+ CMakeLists.txt                                |   10 +
+ base/common/CMakeLists.txt                    |   13 +
+ base/common/python/CMakeLists.txt             |    6 +
+ base/common/python/pki/__init__.py            |   20 +
+ base/common/python/pki/cli.py                 |  195 ++++++++++
+ base/common/python/pki/server/__init__.py     |  447 ++++++++++++++++++++++
+ base/common/python/pki/server/cli/__init__.py |   20 +
+ base/common/python/pki/server/cli/ca.py       |   37 ++
+ base/common/python/pki/server/cli/cert.py     |  171 +++++++++
+ base/common/python/pki/server/cli/config.py   |   98 +++++
+ base/common/python/pki/server/cli/group.py    |  491 +++++++++++++++++++++++++
+ base/common/python/pki/server/cli/user.py     |  442 ++++++++++++++++++++++
+ base/common/sbin/pki-server                   |   87 +++++
+ base/common/scripts/restore-subsystem-user.py |  152 ++++++++
+ 14 files changed, 2189 insertions(+), 0 deletions(-)
+ create mode 100644 base/common/python/CMakeLists.txt
+ create mode 100644 base/common/python/pki/__init__.py
+ create mode 100644 base/common/python/pki/cli.py
+ create mode 100644 base/common/python/pki/server/__init__.py
+ create mode 100644 base/common/python/pki/server/cli/__init__.py
+ create mode 100644 base/common/python/pki/server/cli/ca.py
+ create mode 100644 base/common/python/pki/server/cli/cert.py
+ create mode 100644 base/common/python/pki/server/cli/config.py
+ create mode 100644 base/common/python/pki/server/cli/group.py
+ create mode 100644 base/common/python/pki/server/cli/user.py
+ create mode 100644 base/common/sbin/pki-server
+ create mode 100755 base/common/scripts/restore-subsystem-user.py
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index dd2a028abccd40ce8bccf9ef649e1a57c52774c3..ac077e999ee173af2011e2fe09c87d9c7208566f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -105,6 +105,16 @@ endif ()
+ set(CMAKE_THREAD_PREFER_PTHREADS ON)
+ find_package(Threads)
+ 
++find_package(PythonInterp REQUIRED)
++execute_process(
++    COMMAND
++        ${PYTHON_EXECUTABLE} -c
++        "from distutils.sysconfig import get_python_lib; print get_python_lib()"
++    OUTPUT_VARIABLE
++        PYTHON_SITE_PACKAGES
++    OUTPUT_STRIP_TRAILING_WHITESPACE
++)
++
+ # config.h checks
+ include(ConfigureChecks.cmake)
+ configure_file(config.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config.h)
+diff --git a/base/common/CMakeLists.txt b/base/common/CMakeLists.txt
+index 861269d75efea3181c50dae454c12463016ed9c6..969bac7c77e91bfd8d8024ecbbc5caae84288046 100644
+--- a/base/common/CMakeLists.txt
++++ b/base/common/CMakeLists.txt
+@@ -4,6 +4,7 @@ install(
+     FILES
+         scripts/functions
+         scripts/pki_apache_initscript
++        scripts/restore-subsystem-user.py
+     DESTINATION
+         ${DATA_INSTALL_DIR}/scripts/
+     PERMISSIONS
+@@ -24,4 +25,16 @@ install(
+         WORLD_READ
+ )
+ 
++install(
++    DIRECTORY
++        sbin/
++    DESTINATION
++        ${SBIN_INSTALL_DIR}
++    FILE_PERMISSIONS
++        OWNER_EXECUTE OWNER_WRITE OWNER_READ
++        GROUP_EXECUTE GROUP_READ
++        WORLD_EXECUTE WORLD_READ
++)
++
+ add_subdirectory(src)
++add_subdirectory(python)
+diff --git a/base/common/python/CMakeLists.txt b/base/common/python/CMakeLists.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..145d8c84be19a30695631f535623f2ab2504489a
+--- /dev/null
++++ b/base/common/python/CMakeLists.txt
+@@ -0,0 +1,6 @@
++install(
++    DIRECTORY
++        pki
++    DESTINATION
++        ${PYTHON_SITE_PACKAGES}
++)
+diff --git a/base/common/python/pki/__init__.py b/base/common/python/pki/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd878d6dfb6877567d383926e22944a35bfeafe6
+--- /dev/null
++++ b/base/common/python/pki/__init__.py
+@@ -0,0 +1,20 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
+diff --git a/base/common/python/pki/cli.py b/base/common/python/pki/cli.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e3a44f56f3dbbfc61dc177ea83e13373eab11aac
+--- /dev/null
++++ b/base/common/python/pki/cli.py
+@@ -0,0 +1,195 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import collections
++import getopt
++import sys
++
++
++class CLI(object):
++
++    def __init__(self, name, description):
++
++        self.name = name
++        self.description = description
++        self.parent = None
++        self.top = self
++
++        self.verbose = False
++        self.debug = False
++
++        self.modules = collections.OrderedDict()
++
++    def set_verbose(self, verbose):
++        self.verbose = verbose
++        if self.parent:
++            self.parent.set_verbose(verbose)
++
++    def set_debug(self, debug):
++        self.debug = debug
++        if self.parent:
++            self.parent.set_debug(debug)
++
++    def get_full_name(self):
++        if self.parent:
++            return self.parent.get_full_module_name(self.name)
++        return self.name
++
++    def get_full_module_name(self, module_name):
++        return self.get_full_name() + '-' + module_name
++
++    def add_module(self, module):
++        self.modules[module.name] = module
++        module.parent = self
++        module.top = self.top
++
++    def get_module(self, name):
++        return self.modules.get(name)
++
++    def print_message(self, message):
++        print '-' * len(message)
++        print message
++        print '-' * len(message)
++
++    def print_help(self):
++
++        print 'Commands:'
++
++        for module in self.modules.itervalues():
++            full_name = module.get_full_name()
++            print ' {0:30}{1:30}'.format(full_name, module.description)
++
++    def find_module(self, command):
++
++        module = self
++
++        while True:
++            (module, command) = module.parse_command(command)
++
++            if not module or not command:
++                return module
++
++    def parse_command(self, command):
++
++        # A command consists of parts joined by dashes: <part 1>-<part 2>-...-<part N>.
++        # For example: cert-request-find
++
++        # The command will be split into module name and sub command, for example:
++        #  - module name: cert
++        #  - sub command: request-find
++        module_name = None
++        sub_command = None
++
++        # Search the module by incrementally adding parts into module name.
++        # Repeat until it finds the module or until there is no more parts to add.
++        module = None
++        position = 0
++
++        while True:
++
++            # Find the next dash.
++            i = command.find('-', position)
++            if i >= 0:
++                # Dash found. Split command into module name and sub command.
++                module_name = command[0:i]
++                sub_command = command[i+1:]
++            else:
++                # Dash not found. Use the whole command.
++                module_name = command
++                sub_command = None
++
++            if self.debug:
++                print 'Module: %s' % module_name
++
++            m = self.get_module(module_name)
++            if m:
++                # Module found. Check sub command.
++                if not sub_command:
++                    # No sub command. Use this module.
++                    module = m
++                    break
++
++                # There is a sub command. It must be processed by module's children.
++                if len(m.modules) > 0:
++                    # Module has children. Use this module.
++                    module = m
++                    break
++
++                # Module doesn't have children. Keep looking.
++
++            # If there's no more dashes, stop.
++            if i < 0:
++                break
++
++            position = i + 1
++
++        return (module, sub_command)
++
++    def parse_args(self, args):
++
++        command = args[0]
++        (module, sub_command) = self.parse_command(command)
++
++        if not module:
++            raise Exception('Invalid module "%s".' % command)
++
++        # Prepare module arguments.
++        if sub_command:
++            # If module command exists, include it as arguments: <module command> <args>...
++            module_args = [sub_command] + args[1:]
++
++        else:
++            # Otherwise, pass the original arguments: <args>...
++            module_args = args[1:]
++
++        return (module, module_args)
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.getopt(argv, 'v', [
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) == 0:
++            self.print_help()
++            sys.exit()
++
++        for o, _ in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            else:
++                print 'ERROR: unknown option %s' % o
++                self.print_help()
++                sys.exit(1)
++
++        (module, module_args) = self.parse_args(argv)
++
++        module.execute(module_args)
+diff --git a/base/common/python/pki/server/__init__.py b/base/common/python/pki/server/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d6bae442db9cd73d015a71c95fee617b656ff8d
+--- /dev/null
++++ b/base/common/python/pki/server/__init__.py
+@@ -0,0 +1,447 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import base64
++import ldap
++import ldap.filter
++import nss.nss as nss
++import os
++
++
++class PKISubsystem(object):
++
++    def __init__(self, dir):
++
++        self.dir = dir
++        self.cs_conf = os.path.join(self.dir, 'conf', 'CS.cfg')
++        self.password_conf = os.path.join(self.dir, 'conf', 'password.conf')
++
++        self.config = {}
++        self.passwords = {}
++
++        self.type = None
++        self.prefix = None
++
++        self.load()
++
++    def load(self):
++
++        self.config = {}
++
++        lines =  open(self.cs_conf).read().splitlines()
++
++        for line in lines:
++            parts = line.split('=', 1)
++            name = parts[0]
++            value = parts[1]
++            self.config[name] = value
++
++        self.type = self.config['cs.type']
++        self.prefix = self.type.lower()
++
++        self.passwords = {}
++
++        lines =  open(self.password_conf).read().splitlines()
++
++        for line in lines:
++            parts = line.split('=', 1)
++            name = parts[0]
++            value = parts[1]
++            self.passwords[name] = value
++
++    def get_system_certs(self):
++
++        tags = self.config['%s.cert.list' % self.prefix].split(',')
++
++        certs = []
++
++        for tag in tags:
++
++            cert = self.get_system_cert(tag)
++
++            certs.append(cert)
++
++        return certs
++
++    def get_system_cert(self, tag):
++
++        cert = {}
++        cert['tag'] = tag
++        cert['nickname'] = self.config['%s.cert.%s.nickname' % (self.prefix, tag)]
++        cert['usage'] = self.config['%s.cert.%s.certusage' % (self.prefix, tag)]
++        cert['token'] = self.config['%s.%s.tokenname' % (self.prefix, tag)]
++        cert['certificate'] = base64.b64decode(self.config['%s.%s.cert' % (self.prefix, tag)])
++        cert['request'] = base64.b64decode(self.config['%s.%s.certreq' % (self.prefix, tag)])
++
++        if not nss.nss_is_initialized():
++            nss.nss_init_nodb()
++
++        nss_cert = nss.Certificate(buffer(cert['certificate']))
++        cert['version'] = nss_cert.version
++        cert['serial_number'] = nss_cert.serial_number
++        cert['issuer'] = nss_cert.issuer
++        cert['subject'] = nss_cert.subject
++
++        return cert
++
++    def open_database(self):
++
++        hostname = self.config['internaldb.ldapconn.host']
++        port = self.config['internaldb.ldapconn.port']
++        base_dn = self.config['internaldb.basedn']
++        bind_dn = self.config['internaldb.ldapauth.bindDN']
++
++        bind_password = self.passwords['internaldb']
++
++        con = ldap.initialize('ldap://%s:%s' % (hostname, port))
++        con.simple_bind_s(bind_dn, bind_password)
++
++        return con
++
++    def create_user_object(self, entry):
++
++        user = {}
++        attrs = entry[1]
++
++        user['uid'] = attrs['uid'][0]
++        user['cn'] = attrs['cn'][0]
++        user['sn'] = attrs['sn'][0]
++        user['type'] = attrs['usertype'][0]
++
++        if 'description' in attrs:
++            user['description'] = attrs['description'][0]
++
++        if 'mail' in attrs:
++            user['mail'] = attrs['mail'][0]
++
++        if 'userCertificate' in attrs:
++             user['certificate'] = attrs['userCertificate'][0]
++
++        if 'userPassword' in attrs:
++            user['password'] = attrs['userPassword'][0]
++
++        if 'userstate' in attrs:
++            user['state'] = attrs['userstate'][0]
++
++        return user
++
++    def create_user_attrs(self, user):
++
++        attrs = [
++            ('objectclass', [
++                'top',
++                'person',
++                'organizationalPerson',
++                'inetOrgPerson',
++                'cmsUser'
++            ]),
++            ('uid', [user['uid']]),
++            ('cn', [user['cn']]),
++            ('sn', [user['sn']]),
++            ('usertype', [user['type']]),
++        ]
++
++        if 'description' in user:
++            attrs.append(('description', [user['description']]))
++
++        if 'mail' in user:
++            attrs.append(('mail', [user['mail']]))
++
++        if 'certificate' in user:
++            attrs.append(('userCertificate', [user['certificate']]))
++
++        if 'password' in user:
++            attrs.append(('userPassword', [user['password']]))
++
++        if 'state' in user:
++            attrs.append(('userstate', [user['state']]))
++
++        return attrs
++
++    def add_mod_tuple(self, modlist, name, attr, changes):
++        if name in changes:
++            if changes[name]:
++                modlist.append((ldap.MOD_REPLACE, attr, [changes[name]]))
++            else:
++                modlist.append((ldap.MOD_DELETE, attr, None))
++
++    def create_user_modlist(self, changes):
++
++        modlist = []
++
++        self.add_mod_tuple(modlist, 'cn', 'cn', changes)
++        self.add_mod_tuple(modlist, 'sn', 'sn', changes)
++        self.add_mod_tuple(modlist, 'type', 'usertype', changes)
++        self.add_mod_tuple(modlist, 'description', 'description', changes)
++        self.add_mod_tuple(modlist, 'mail', 'mail', changes)
++        self.add_mod_tuple(modlist, 'certificate', 'userCertificate', changes)
++        self.add_mod_tuple(modlist, 'password', 'userPassword', changes)
++        self.add_mod_tuple(modlist, 'state', 'userstate', changes)
++
++        return modlist
++
++    def find_system_users(self, description=None, certificate=None):
++
++        base_dn = self.config['internaldb.basedn']
++
++        filter = ''
++        counter = 0
++
++        if description:
++            escaped_value = ldap.filter.escape_filter_chars(description)
++            filter = filter + '(description=%s)' % escaped_value
++            counter = counter + 1
++
++        if certificate:
++            escaped_value = ldap.filter.escape_filter_chars(certificate)
++            filter = filter + '(userCertificate=%s)' % escaped_value
++            counter = counter + 1
++
++        if counter == 0:
++            filter = 'objectClass=*'
++
++        elif counter == 1:
++            pass
++
++        else:
++            filter = '(&' + filter + ')'
++
++        con = self.open_database()
++
++        entries = con.search_s(
++            'ou=people,%s' % base_dn,
++            ldap.SCOPE_ONELEVEL,
++            filter,
++            None)
++
++        con.unbind_s()
++
++        users = []
++        for entry in entries:
++            users.append(self.create_user_object(entry))
++
++        return users
++
++    def get_system_user(self, user_id):
++
++        base_dn = self.config['internaldb.basedn']
++
++        con = self.open_database()
++
++        entries = con.search_s(
++            'uid=%s,ou=people,%s' % (user_id, base_dn),
++            ldap.SCOPE_BASE,
++            '(objectclass=*)',
++            None)
++
++        con.unbind_s()
++
++        entry = entries[0]
++
++        return self.create_user_object(entry)
++
++    def add_system_user(self, user):
++
++        base_dn = self.config['internaldb.basedn']
++        dn = 'uid=%s,ou=people,%s' % (user['uid'], base_dn)
++
++        attrs = self.create_user_attrs(user)
++
++        con = self.open_database()
++
++        con.add_s(dn, attrs)
++
++        con.unbind_s()
++
++    def modify_system_user(self, user_id, changes):
++
++        base_dn = self.config['internaldb.basedn']
++        dn = 'uid=%s,ou=people,%s' % (user_id, base_dn)
++
++        modlist = self.create_user_modlist(changes)
++
++        con = self.open_database()
++
++        con.modify_s(dn, modlist)
++
++        con.unbind_s()
++
++    def remove_system_user(self, user_id):
++
++        base_dn = self.config['internaldb.basedn']
++
++        con = self.open_database()
++
++        con.delete_s(
++            'uid=%s,ou=people,%s' % (user_id, base_dn))
++
++        con.unbind_s()
++
++    def create_group_from_ldap_entry(self, entry):
++
++        group = {}
++        attrs = entry[1]
++
++        group['cn'] = attrs['cn'][0]
++
++        if 'description' in attrs:
++            group['description'] = attrs['description'][0]
++
++
++        return group
++
++    def create_ldap_attrs_from_group(self, user):
++
++        attrs = [
++            ('objectclass', [
++                'top',
++                'groupOfUniqueNames'
++            ]),
++            ('cn', [group['cn']]),
++        ]
++
++        if 'description' in user:
++            attrs.append(('description', [group['description']]))
++
++        return attrs
++
++    def get_system_groups(self):
++
++        base_dn = self.config['internaldb.basedn']
++
++        con = self.open_database()
++
++        entries = con.search_s(
++            'ou=groups,%s' % base_dn,
++            ldap.SCOPE_ONELEVEL,
++            '(objectClass=*)',
++            None)
++
++        con.unbind_s()
++
++        groups = []
++        for entry in entries:
++            groups.append(self.create_group_from_ldap_entry(entry))
++
++        return groups
++
++    def get_system_group(self, group_id):
++
++        base_dn = self.config['internaldb.basedn']
++
++        con = self.open_database()
++
++        entries = con.search_s(
++            'cn=%s,ou=groups,%s' % (group_id, base_dn),
++            ldap.SCOPE_BASE,
++            '(objectclass=*)',
++            None)
++
++        con.unbind_s()
++
++        entry = entries[0]
++
++        return self.create_group_from_ldap_entry(entry)
++
++    def add_system_group(self, group):
++
++        base_dn = self.config['internaldb.basedn']
++        dn = 'cn=%s,ou=groups,%s' % (group['cn'], base_dn)
++
++        attrs = self.create_ldap_attrs_from_group(group)
++
++        con = self.open_database()
++
++        con.add_s(dn, attrs)
++
++        con.unbind_s()
++
++    def remove_system_group(self, group_id):
++
++        base_dn = self.config['internaldb.basedn']
++
++        con = self.open_database()
++
++        con.delete_s(
++            'cn=%s,ou=groups,%s' % (group_id, base_dn))
++
++        con.unbind_s()
++
++    def get_system_group_members(self, group_id):
++
++        base_dn = self.config['internaldb.basedn']
++
++        con = self.open_database()
++
++        entries = con.search_s(
++            'cn=%s,ou=groups,%s' % (group_id, base_dn),
++            ldap.SCOPE_BASE,
++            '(objectclass=*)',
++            None)
++
++        con.unbind_s()
++
++        entry = entries[0]
++        attrs = entry[1]
++
++        if 'uniqueMember' in attrs:
++            members = attrs['uniqueMember']
++        else:
++            members = []
++
++        user_ids = []
++        for member_dn in members:
++            user_id = ldap.dn.explode_dn(member_dn, notypes=True)[0]
++            user_ids.append(user_id)
++
++        return user_ids
++
++    def add_system_group_member(self, group_id, member_id):
++
++        base_dn = self.config['internaldb.basedn']
++        group_dn = 'cn=%s,ou=groups,%s' % (group_id, base_dn)
++        member_dn = 'uid=%s,ou=people,%s' % (member_id, base_dn)
++
++        modlist = [
++            (ldap.MOD_ADD, 'uniqueMember', [member_dn]) 
++        ]
++
++        con = self.open_database()
++
++        con.modify_s(group_dn, modlist)
++
++        con.unbind_s()
++
++    def remove_system_group_member(self, group_id, member_id):
++
++        base_dn = self.config['internaldb.basedn']
++        group_dn = 'cn=%s,ou=groups,%s' % (group_id, base_dn)
++        member_dn = 'uid=%s,ou=people,%s' % (member_id, base_dn)
++
++        modlist = [
++            (ldap.MOD_DELETE, 'uniqueMember', [member_dn]) 
++        ]
++
++        con = self.open_database()
++
++        con.modify_s(group_dn, modlist)
++
++        con.unbind_s()
+diff --git a/base/common/python/pki/server/cli/__init__.py b/base/common/python/pki/server/cli/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd878d6dfb6877567d383926e22944a35bfeafe6
+--- /dev/null
++++ b/base/common/python/pki/server/cli/__init__.py
+@@ -0,0 +1,20 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
+diff --git a/base/common/python/pki/server/cli/ca.py b/base/common/python/pki/server/cli/ca.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0914d0e1c0b3103f729327195437afc3604fc096
+--- /dev/null
++++ b/base/common/python/pki/server/cli/ca.py
+@@ -0,0 +1,37 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import pki.cli
++import pki.server.cli.cert
++import pki.server.cli.config
++import pki.server.cli.group
++import pki.server.cli.user
++
++
++class CACLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(CACLI, self).__init__('ca', 'CA management commands')
++
++        self.add_module(pki.server.cli.cert.CertCLI())
++        self.add_module(pki.server.cli.config.ConfigCLI())
++        self.add_module(pki.server.cli.group.GroupCLI())
++        self.add_module(pki.server.cli.user.UserCLI())
+diff --git a/base/common/python/pki/server/cli/cert.py b/base/common/python/pki/server/cli/cert.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad7897efe007ed0b66baf27adb1c221c18d2bb80
+--- /dev/null
++++ b/base/common/python/pki/server/cli/cert.py
+@@ -0,0 +1,171 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import base64
++import getopt
++import ldap
++import os
++import sys
++
++import pki.cli
++from pki.server import PKISubsystem
++
++
++class CertCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(CertCLI, self).__init__('cert',
++                                      'Certificate management commands')
++
++        self.add_module(CertFindCLI())
++        self.add_module(CertShowCLI())
++
++    @staticmethod
++    def print_cert(cert, all=False):
++
++        print '  Tag: %s' % cert['tag']
++        print '  Nickname: %s' % cert['nickname']
++        print '  Version: %s' % cert['version']
++        print '  Serial Number: %s' % cert['serial_number']
++        print '  Issuer: %s' % cert['issuer']
++        print '  Subject: %s' % cert['subject']
++
++        if not all:
++            return
++
++        print '  Usage: %s' % cert['usage']
++        print '  Token: %s' % cert['token']
++
++        if 'certificate' in cert:
++            print '  Certificate: %s' % base64.b64encode(cert['certificate'])
++
++        if 'request' in cert:
++            print '  Request: %s' % base64.b64encode(cert['request'])
++
++
++class CertFindCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(CertFindCLI, self).__init__('find', 'Find certificates')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS]' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, _ = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        certs = subsystem.get_system_certs()
++
++        for cert in certs:
++            CertCLI.print_cert(cert)
++            print
++
++
++class CertShowCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(CertShowCLI, self).__init__('show', 'Show certificate')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <certificate tag>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing certificate tag'
++            self.print_help()
++            sys.exit(1)
++
++        tag = args[0]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        cert = subsystem.get_system_cert(tag)
++
++        CertCLI.print_cert(cert, True)
+diff --git a/base/common/python/pki/server/cli/config.py b/base/common/python/pki/server/cli/config.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6c398e7a58e297026109b2a85bd9bf66dbd599d3
+--- /dev/null
++++ b/base/common/python/pki/server/cli/config.py
+@@ -0,0 +1,98 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import base64
++import getopt
++import ldap
++import os
++import sys
++
++import pki.cli
++from pki.server import PKISubsystem
++
++
++class ConfigCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(ConfigCLI, self).__init__('config',
++                                        'Configuration management commands')
++
++        self.add_module(ConfigShowCLI())
++
++    @staticmethod
++    def print_config(config, all=False):
++
++        print '  Instance ID: %s' % config['service.instanceID']
++        print '  Instance Directory: %s' % config['service.instanceDir']
++        print '  Port: %s' % config['service.unsecurePort']
++        print '  Secure Port: %s' % config['service.securePort']
++        print '  Client Auth Secure Port: %s' % config['service.clientauth_securePort']
++        print '  Non-Client Auth Secure Port: %s' % config['service.non_clientauth_securePort']
++        print '  Security Domain Port: %s' % config['service.securityDomainPort']
++
++
++class ConfigShowCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(ConfigShowCLI, self).__init__('show', 'Show configuration')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS]' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        ConfigCLI.print_config(subsystem.config)
+diff --git a/base/common/python/pki/server/cli/group.py b/base/common/python/pki/server/cli/group.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a81f36df1cfe6609aaff879d676324b17454fb1d
+--- /dev/null
++++ b/base/common/python/pki/server/cli/group.py
+@@ -0,0 +1,491 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import base64
++import getopt
++import os
++import sys
++
++import pki.cli
++from pki.server import PKISubsystem
++from pki.server.cli.user import UserCLI
++
++
++class GroupCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupCLI, self).__init__('group',
++                                      'Group management commands')
++
++        self.add_module(GroupFindCLI())
++        self.add_module(GroupShowCLI())
++        self.add_module(GroupAddCLI())
++        self.add_module(GroupRemoveCLI())
++        self.add_module(GroupMemberCLI())
++
++    @staticmethod
++    def print_group(group, all=False):
++
++        print '  Group ID: %s' % group['cn']
++
++        if 'description' in group:
++            print '  Description: %s' % group['description']
++
++        if not all:
++            return
++
++
++class GroupFindCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupFindCLI, self).__init__('find', 'Find groups')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS]' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, _ = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        groups = subsystem.get_system_groups()
++
++        for group in groups:
++            GroupCLI.print_group(group)
++            print
++
++
++class GroupShowCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupShowCLI, self).__init__('show', 'Show group')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <group ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing group ID'
++            self.print_help()
++            sys.exit(1)
++
++        group_id = args[0]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        group = subsystem.get_system_group(group_id)
++
++        GroupCLI.print_group(group, True)
++
++
++class GroupAddCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupAddCLI, self).__init__('add', 'Add group')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <group ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'desc=', 'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing group ID'
++            self.print_help()
++            sys.exit(1)
++
++        group_id = args[0]
++        description = None
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o == '--desc':
++                description = a
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        group = {}
++        group['cn'] = group_id
++
++        if description:
++            group['description'] = description
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        subsystem.add_system_group(group)
++
++
++class GroupRemoveCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupRemoveCLI, self).__init__('del', 'Remove group')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <group ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing group ID'
++            self.print_help()
++            sys.exit(1)
++
++        group_id = args[0]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        subsystem.remove_system_group(group_id)
++
++
++class GroupMemberCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupMemberCLI, self).__init__('member',
++                                      'Group member management commands')
++
++        self.add_module(GroupMemberFindCLI())
++        self.add_module(GroupMemberAddCLI())
++        self.add_module(GroupMemberRemoveCLI())
++
++
++class GroupMemberFindCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupMemberFindCLI, self).__init__('find', 'Find group members')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <group ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) < 1:
++            print 'ERROR: missing group ID'
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) > 1:
++            print 'ERROR: too many arguments'
++            self.print_help()
++            sys.exit(1)
++
++        group_id = args[0]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        user_ids = subsystem.get_system_group_members(group_id)
++
++        for user_id in user_ids:
++            user = subsystem.get_system_user(user_id)
++            UserCLI.print_user(user)
++            print
++
++
++class GroupMemberAddCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupMemberAddCLI, self).__init__('add', 'Add group member')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <group ID> <user ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) < 1:
++            print 'ERROR: missing group ID'
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) < 2:
++            print 'ERROR: missing user ID'
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) > 2:
++            print 'ERROR: too many arguments'
++            self.print_help()
++            sys.exit(1)
++
++        group_id = args[0]
++        user_id = args[1]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        subsystem.add_system_group_member(group_id, user_id)
++
++
++class GroupMemberRemoveCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(GroupMemberRemoveCLI, self).__init__('del', 'Remove group member')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <group ID> <user ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) < 1:
++            print 'ERROR: missing group ID'
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) < 2:
++            print 'ERROR: missing user ID'
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) > 2:
++            print 'ERROR: too many arguments'
++            self.print_help()
++            sys.exit(1)
++
++        group_id = args[0]
++        user_id = args[1]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        subsystem.remove_system_group_member(group_id, user_id)
+diff --git a/base/common/python/pki/server/cli/user.py b/base/common/python/pki/server/cli/user.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f6707def5d37be08215c262c4d91604f92d63fb8
+--- /dev/null
++++ b/base/common/python/pki/server/cli/user.py
+@@ -0,0 +1,442 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import base64
++import getopt
++import os
++import sys
++
++import pki.cli
++from pki.server import PKISubsystem
++
++
++class UserCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(UserCLI, self).__init__('user',
++                                      'User management commands')
++
++        self.add_module(UserFindCLI())
++        self.add_module(UserShowCLI())
++        self.add_module(UserAddCLI())
++        self.add_module(UserModifyCLI())
++        self.add_module(UserDelCLI())
++
++    @staticmethod
++    def print_user(user, all=False):
++
++        print '  User ID: %s' % user['uid']
++        print '  Common Name: %s' % user['cn']
++        print '  Surname: %s' % user['sn']
++        print '  Type: %s' % user['type']
++
++        if 'description' in user:
++            print '  Description: %s' % user['description']
++
++        if 'mail' in user:
++            print '  E-mail: %s' % user['mail']
++
++        if not all:
++            return
++
++        if 'certificate' in user:
++             print '  Certificate: %s' % base64.b64encode(user['certificate'])
++
++        if 'password' in user:
++            print '  Password: %s' % user['password']
++
++        if 'state' in user:
++            print '  State: %s' % user['state']
++
++
++class UserFindCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(UserFindCLI, self).__init__('find', 'Find users')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS]' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '      --desc <description>     Description.'
++        print '      --cert <certificate>     Base-64 encoded certificate.'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, _ = getopt.gnu_getopt(argv, 's:v', [
++                'desc=', 'cert=',
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        description = None
++        certificate = None
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o == '--desc':
++                description = a
++
++            elif o == '--cert':
++                certificate = base64.b64decode(a)
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        users = subsystem.find_system_users(
++            description=description,
++            certificate=certificate)
++
++        for user in users:
++            UserCLI.print_user(user)
++            print
++
++
++class UserShowCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(UserShowCLI, self).__init__('show', 'Show user')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <user ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing user ID'
++            self.print_help()
++            sys.exit(1)
++
++        user_id = args[0]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        user = subsystem.get_system_user(user_id)
++
++        UserCLI.print_user(user, True)
++
++
++class UserAddCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(UserAddCLI, self).__init__('add', 'Add user')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <user ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'cn=', 'sn=', 'type=',
++                'desc=', 'mail=', 'cert=',
++                'password=', 'state=',
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing user ID'
++            self.print_help()
++            sys.exit(1)
++
++        user_id = args[0]
++        cn = user_id
++        sn = user_id
++        type = 'adminType'
++        description = None
++        mail = None
++        certificate = None
++        password = None
++        state = None
++
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o == '--cn':
++                cn = a
++
++            elif o == '--sn':
++                sn = a
++
++            elif o == '--type':
++                type = a
++
++            elif o == '--desc':
++                description = a
++
++            elif o == '--mail':
++                mail = a
++
++            elif o == '--cert':
++                certificate = a
++
++            elif o == '--password':
++                password = a
++
++            elif o == '--state':
++                state = a
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        user = {}
++        user['uid'] = user_id
++        user['cn'] = cn
++        user['sn'] = sn
++        user['type'] = type
++
++        if description:
++            user['description'] = description
++
++        if mail:
++            user['mail'] = mail
++
++        if certificate:
++            user['certificate'] = base64.b64decode(certificate)
++
++        if password:
++            user['password'] = password
++
++        if state:
++            user['state'] = state
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        subsystem.add_system_user(user)
++
++
++class UserModifyCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(UserModifyCLI, self).__init__('mod', 'Modify user')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <user ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'cn=', 'sn=', 'type=',
++                'desc=', 'mail=', 'cert=',
++                'password=', 'state=',
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing user ID'
++            self.print_help()
++            sys.exit(1)
++
++        user_id = args[0]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        changes = {}
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o == '--cn':
++                changes['cn'] = a
++
++            elif o == '--sn':
++                changes['sn'] = a
++
++            elif o == '--type':
++                changes['type'] = a
++
++            elif o == '--desc':
++                changes['description'] = a
++
++            elif o == '--mail':
++                changes['mail'] = a
++
++            elif o == '--cert':
++                changes['certificate'] = a
++
++            elif o == '--password':
++                changes['password'] = a
++
++            elif o == '--state':
++                changes['state'] = a
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        subsystem.modify_system_user(user_id, changes)
++
++
++class UserDelCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(UserDelCLI, self).__init__('del', 'Delete user')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS] <user ID>' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        if len(args) != 1:
++            print 'ERROR: missing user ID'
++            self.print_help()
++            sys.exit(1)
++
++        user_id = args[0]
++        subsystem_dir = '/var/lib/pki-ca'
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = PKISubsystem(subsystem_dir)
++
++        subsystem.remove_system_user(user_id)
+diff --git a/base/common/sbin/pki-server b/base/common/sbin/pki-server
+new file mode 100644
+index 0000000000000000000000000000000000000000..4749a8e5ad0b7b160b27f626326a70c1fccc50c4
+--- /dev/null
++++ b/base/common/sbin/pki-server
+@@ -0,0 +1,87 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import getopt
++import sys
++
++import pki.cli
++import pki.server.cli.ca
++
++
++class PKIServerCLI(pki.cli.CLI):
++
++    def __init__(self):
++
++        super(PKIServerCLI, self).__init__('pki-server', 'PKI server command-line interface')
++
++        self.add_module(pki.server.cli.ca.CACLI())
++
++    def get_full_module_name(self, module_name):
++        return module_name
++
++    def print_help(self):
++
++        print 'Usage: pki-server [OPTIONS]'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --debug                  Show debug messages.'
++        print '      --help                   Show help message.'
++        print
++
++        super(PKIServerCLI, self).print_help()
++
++    def execute(self, argv):
++
++        try:
++            opts, args = getopt.getopt(argv[1:], 'v', [
++                'verbose', 'debug', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        for o, _ in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--debug':
++                self.set_verbose(True)
++                self.set_debug(True)
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        if self.verbose:
++            print 'Command: %s' % ' '.join(args)
++
++        super(PKIServerCLI, self).execute(args)
++
++
++if __name__ == '__main__':
++    cli = PKIServerCLI()
++    cli.execute(sys.argv)
+diff --git a/base/common/scripts/restore-subsystem-user.py b/base/common/scripts/restore-subsystem-user.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..40ff3cea80145ce2be7ba0744db90041d9f28c32
+--- /dev/null
++++ b/base/common/scripts/restore-subsystem-user.py
+@@ -0,0 +1,152 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import base64
++import getopt
++import ldap
++import sys
++
++from pki.server import PKISubsystem
++
++def print_help():
++    print 'Usage: restore-subsystem-user.py [OPTIONS]'
++    print
++    print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++    print
++    print '  -v, --verbose                Run in verbose mode.'
++    print '      --help                   Show help message.'
++    print
++
++try:
++    opts, _ = getopt.gnu_getopt(sys.argv, 's:v', [
++        'subsystem=',
++        'verbose', 'help'])
++
++except getopt.GetoptError as e:
++    print 'ERROR: ' + str(e)
++    print_help()
++    sys.exit(1)
++
++verbose = False
++subsystem_dir = '/var/lib/pki-ca'
++
++for o, a in opts:
++    if o in ('-v', '--verbose'):
++        verbose = True
++
++    elif o == '--help':
++        print_help()
++        sys.exit()
++
++    elif o in ('-s', '--subsystem'):
++        subsystem_dir = a
++
++    else:
++        print 'ERROR: unknown option ' + o
++        self.print_help()
++        sys.exit(1)
++
++print 'Restoring subsystem user'
++
++subsystem = PKISubsystem(subsystem_dir)
++
++type = subsystem.config['cs.type']
++hostname = subsystem.config['machineName']
++port = subsystem.config['service.securePort']
++
++user_id = '%s-%s-%s' % (type, hostname, port)
++
++cert = subsystem.get_system_cert('subsystem')
++version = cert['version']
++serial_number = cert['serial_number']
++issuer = cert['issuer']
++subject = cert['subject']
++
++description = '%s;%s;%s;%s' % (version, serial_number, issuer, subject)
++print 'Subsystem certificate: %s' % description
++
++certificate = cert['certificate']
++print '-----BEGIN CERTIFICATE-----'
++print base64.b64encode(certificate)
++print '-----END CERTIFICATE-----'
++
++users = subsystem.find_system_users(certificate=certificate)
++members = subsystem.get_system_group_members('Subsystem Group')
++
++for user in users:
++    print 'User %s has subsystem certificate' % user['uid']
++
++    if user['uid'] in members:
++        print 'User already in Subsystem Group'
++
++        if 'description' in user:
++            desc = user['description']
++        else:
++            desc = None
++
++        if desc == description:
++            print 'User has the correct certificate mapping'
++            print 'User %s is the subsystem user' % user['uid']
++
++        else:
++            changes = {}
++            changes['description'] = description
++            subsystem.modify_system_user(user_id, changes)
++            print 'Certificate mapping fixed'
++            print 'Subsystem user %s restored' % user['uid']
++
++        sys.exit()
++
++# If the user with the subsystem certificate doesn't exist,
++# or if the user exists but not in the Subsystem Group,
++# create a new subsystem user
++
++try:
++    user = {}
++    user['uid'] = user_id
++    user['cn'] = user_id
++    user['sn'] = user_id
++    user['type'] = 'agentType'
++    user['description'] = description
++    user['certificate'] = certificate
++    user['state'] = '1'
++
++    subsystem.add_system_user(user)
++    print 'New subsystem user %s added' % user_id
++
++except ldap.ALREADY_EXISTS:
++    print 'Subsystem user %s already exists' % user_id
++    user = subsystem.get_system_user(user_id)
++
++    changes = {}
++    changes['description'] = description
++    changes['certificate'] = certificate
++    subsystem.modify_system_user(user_id, changes)
++    print 'User certificate updated'
++
++try:
++    subsystem.add_system_group_member('Subsystem Group', user_id)
++    print 'User added to Subsystem Group'
++
++except ldap.TYPE_OR_VALUE_EXISTS:
++    print 'User already in Subsystem Group'
++
++print 'Subsystem user %s restored' % user_id
+-- 
+1.7.1
+

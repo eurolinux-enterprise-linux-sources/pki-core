@@ -1,0 +1,193 @@
+diff -rupN pki-core-9.0.3.orig/base/ca/shared/conf/CS.cfg.in pki-core-9.0.3/base/ca/shared/conf/CS.cfg.in
+--- pki-core-9.0.3.orig/base/ca/shared/conf/CS.cfg.in	2014-06-13 15:47:31.000000000 -0700
++++ pki-core-9.0.3/base/ca/shared/conf/CS.cfg.in	2014-06-19 17:39:55.000000000 -0700
+@@ -151,6 +151,7 @@ accessEvaluator.impl.group.class=com.net
+ accessEvaluator.impl.ipaddress.class=com.netscape.cms.evaluators.IPAddressAccessEvaluator
+ accessEvaluator.impl.user.class=com.netscape.cms.evaluators.UserAccessEvaluator
+ accessEvaluator.impl.user_origreq.class=com.netscape.cms.evaluators.UserOrigReqAccessEvaluator
++archive.configuration_file=true
+ auths._000=##
+ auths._001=## new authentication
+ auths._002=##
+diff -rupN pki-core-9.0.3.orig/base/common/scripts/functions pki-core-9.0.3/base/common/scripts/functions
+--- pki-core-9.0.3.orig/base/common/scripts/functions	2014-06-13 15:47:29.000000000 -0700
++++ pki-core-9.0.3/base/common/scripts/functions	2014-06-20 14:43:01.000000000 -0700
+@@ -682,6 +682,151 @@ display_instance_status()
+     return $rv
+ }
+ 
++backup_instance_configuration_file()
++{
++    # Automatically enable timestamped archives
++    #
++    #     NOTE:  To disable this feature for a particular instance,
++    #            edit the instance's 'CS.cfg' file:
++    #
++    #            If the 'archive.configuration_file' parameter exists,
++    #            change it to 'archive.configuration_file=false'.
++    #
++    #            However, if the 'archive.configuration_file' parameter does
++    #            not exist, simply add 'archive.configuration_file=false'
++    #            to the 'CS.cfg'.
++    #
++    #            In either case, it is unnecessary to restart the instance,
++    #            as each instance's 'CS.cfg' file is always processed every
++    #            time an instance is restarted.
++    #
++    archive_configuration_file="true"
++
++    # Backup parameters
++    config_dir=${PKI_INSTANCE_PATH}/conf
++    backup_file=${config_dir}/CS.cfg.bak
++    saved_backup_file=${config_dir}/CS.cfg.bak.saved
++
++    # Check for an empty 'CS.cfg'
++    #
++    #     NOTE:  'CS.cfg' is always a regular file
++    #
++    if [ ! -s ${pki_instance_configuration_file} ] ; then
++        # Issue a warning that the 'CS.cfg' is empty
++        echo "WARNING:  The '${pki_instance_configuration_file}' is empty!"
++        echo "          Backups will be discontinued until this issue has"
++        echo "          been resolved!"
++        return 1
++    fi
++
++    # Make certain that a previous attempt to backup 'CS.cfg' has not failed
++    # (i. e. - 'CS.cfg.bak.saved' exists)
++    #
++    #     NOTE:  'CS.cfg.bak.saved' is always a regular file
++    #
++    if [ -f ${saved_backup_file} ] ; then
++        # 'CS.cfg.bak.saved' is a regular file or a symlink
++        echo "WARNING:  Since the file '${saved_backup_file}' exists, a"
++        echo "          previous backup attempt has failed!  Backups will"
++        echo "          be discontinued until this issue has been resolved!"
++        return 1
++    fi
++
++    # If present, compare 'CS.cfg' to 'CS.cfg.bak' to see if it is necessary
++    # to backup 'CS.cfg'.  'CS.cfg.bak' may be a regular file, a
++    # symlink, or a dangling symlink
++    #
++    #     NOTE:  'CS.cfg.bak' may be a regular file, a symlink, or a
++    #            dangling symlink
++    #
++    if [ -f ${backup_file} ] ; then
++        # 'CS.cfg.bak' is a regular file or a symlink
++        cmp --silent ${pki_instance_configuration_file} ${backup_file}
++        rv=$?
++        if [ $rv -eq 0 ] ; then
++            # 'CS.cfg' is identical to 'CS.cfg.bak';
++            # no need to archive or backup 'CS.cfg'
++            return 0
++        fi
++
++        # Since it is known that the previous 'CS.cfg.bak' file exists, and it
++        # is either a symlink or a regular file, save the previous 'CS.cfg.bak'
++        # to 'CS.cfg.bak.saved'
++        #
++        # NOTE:  If switching between simply creating backups to generating
++        #        timestamped archives, the previous 'CS.cfg.bak' that 
++        #        existed as a regular file will NOT be archived!
++        #
++        if [ -h ${backup_file} ] ; then
++            # 'CS.cfg.bak' is a symlink
++            # (i. e. - copy the timestamped archive to a regular file)
++            cp ${backup_file} ${saved_backup_file}
++
++            # remove the 'CS.cfg.bak' symlink
++            rm ${backup_file}
++        else
++            # 'CS.cfg.bak' is a regular file
++            # (i. e. - simply rename the regular file)
++            mv ${backup_file} ${saved_backup_file}
++        fi
++    elif [ -h ${backup_file} ] ; then
++        # 'CS.cfg.bak' is a dangling symlink
++        echo "WARNING:  The file '${backup_file}' is a dangling symlink"
++        echo "          which suggests that the previous backup file has"
++        echo "          been removed!  Backups will be discontinued until"
++        echo "          this issue has been resolved!"
++        return 1
++    fi
++
++    # Check 'CS.cfg' for 'archive.configuration_file' parameter
++    # to see if timestamped archives should be disabled
++    line=`grep -e '^[ \t]*archive.configuration_file[ \t]*=' ${pki_instance_configuration_file}`
++    if [ "${line}" != "" ] ; then
++        archive_configuration_file=`echo "${line}" | sed -e 's/^[^=]*[ \t]*=[ \t]*\(.*\)/\1/' -e 's/[ \t]*$//'`
++    fi
++
++    # Backup 'CS.cfg'
++    if [ "${archive_configuration_file}" != "true" ] ; then
++        # Always backup 'CS.cfg' to 'CS.cfg.bak'
++        cp -b ${pki_instance_configuration_file} ${backup_file}
++    else
++        # Archive parameters
++        timestamp=`date +%Y%m%d%H%M%S`
++        archive_dir=${config_dir}/archives
++        archived_file=${archive_dir}/CS.cfg.bak.${timestamp}
++
++        # If not present, create an archives directory for this 'CS.cfg'
++        if [ ! -d ${archive_dir} ] ; then
++            mkdir -p ${archive_dir}
++        fi
++
++        # Archive 'CS.cfg' to 'CS.cfg.bak.${timestamp}'
++        cp -a ${pki_instance_configuration_file} ${archived_file}
++        if [ ! -s ${archived_file} ] ; then
++            # Issue a warning that the archived backup failed
++            echo "WARNING:  Failed to archive '${pki_instance_configuration_file}' to '${archived_file}'!"
++            return 1
++        fi
++
++        # Always create 'CS.cfg.bak' by linking to this archived file
++        ln -s ${archived_file} ${backup_file}
++    fi
++
++    # Check that a non-empty 'CS.cfg.bak' symlink or regular file exists
++    if [ ! -s ${backup_file} ] ; then
++        # Issue a warning that the backup failed
++        echo "WARNING:  Failed to backup '${pki_instance_configuration_file}' to '${backup_file}'!"
++        return 1
++    fi
++
++    # Since 'CS.cfg' was backed up successfully, remove 'CS.cfg.bak.saved'
++    if [ -f ${saved_backup_file} ] ; then
++        rm ${saved_backup_file}
++    fi
++
++    return 0
++}
++
+ start_instance()
+ {
+     rv=0
+@@ -780,7 +925,25 @@ start_instance()
+                     ;;
+             esac
+ 
+-            return 0
++            # Always create a backup of this instance's 'CS.cfg' file.
++            #
++            # Backup failures issue a warning message and return an error
++            # code of 1.
++            #
++            # Note that until they have been resolved, previous backup
++            # failures will also issue a warning message and return an
++            # error code of 1.  Backups will be suspended until this
++            # error has been addressed.
++            #
++            # By default, unless they have been explicitly disabled,
++            # a timestamped archive of each instance's 'CS.cfg' file
++            # is also created.
++            #
++            # When enabled, timestamped archive failures also issue a
++            # warning message and return an error code of 1.
++            #
++            backup_instance_configuration_file
++            rv=$?
+         fi
+     fi
+     return $rv

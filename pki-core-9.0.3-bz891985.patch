@@ -1,0 +1,73 @@
+From 0c789a5d5c13bc49b95591b793dacb9bfa3eaab5 Mon Sep 17 00:00:00 2001
+From: Ade Lee <alee@redhat.com>
+Date: Mon, 7 Jan 2013 16:55:42 -0500
+Subject: [PATCH] Resolves #891985 - Increase FreeIPA root CA validity.
+
+---
+ base/ca/shared/conf/caCert.profile                                  | 2 +-
+ base/ca/shared/profiles/ca/caCACert.cfg                             | 4 ++--
+ base/common/src/com/netscape/cms/profile/def/CAValidityDefault.java | 2 +-
+ base/common/src/com/netscape/cms/profile/def/ValidityDefault.java   | 2 +-
+ 4 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/base/ca/shared/conf/caCert.profile b/base/ca/shared/conf/caCert.profile
+index 3e9c83613f401c8cafb7851cbd0ea2c5bf1e6fcb..4cd22bafba6f75b0e493b3d6f3e3b82f5222351a 100644
+--- a/base/ca/shared/conf/caCert.profile
++++ b/base/ca/shared/conf/caCert.profile
+@@ -9,7 +9,7 @@ profileSetIDMapping=caCertSet
+ list=2,4,5,6,7,8
+ 2.default.class=com.netscape.cms.profile.def.CAValidityDefault
+ 2.default.name=CA Certificate Validity Default
+-2.default.params.range=2922
++2.default.params.range=7305
+ 2.default.params.startTime=0
+ 4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
+ 4.default.name=Authority Key Identifier Default
+diff --git a/base/ca/shared/profiles/ca/caCACert.cfg b/base/ca/shared/profiles/ca/caCACert.cfg
+index a88abdf1f1b9b817b4511ffabd1e49b1f56c6900..36f81b53b133e8a148b6e1198e24691b910d7bd5 100644
+--- a/base/ca/shared/profiles/ca/caCACert.cfg
++++ b/base/ca/shared/profiles/ca/caCACert.cfg
+@@ -20,12 +20,12 @@ policyset.caCertSet.1.default.name=Subject Name Default
+ policyset.caCertSet.1.default.params.name=
+ policyset.caCertSet.2.constraint.class_id=validityConstraintImpl
+ policyset.caCertSet.2.constraint.name=Validity Constraint
+-policyset.caCertSet.2.constraint.params.range=2922
++policyset.caCertSet.2.constraint.params.range=7305
+ policyset.caCertSet.2.constraint.params.notBeforeCheck=false
+ policyset.caCertSet.2.constraint.params.notAfterCheck=false
+ policyset.caCertSet.2.default.class_id=caValidityDefaultImpl
+ policyset.caCertSet.2.default.name=CA Certificate Validity Default
+-policyset.caCertSet.2.default.params.range=2922
++policyset.caCertSet.2.default.params.range=7305
+ policyset.caCertSet.2.default.params.startTime=0
+ policyset.caCertSet.3.constraint.class_id=keyConstraintImpl
+ policyset.caCertSet.3.constraint.name=Key Constraint
+diff --git a/base/common/src/com/netscape/cms/profile/def/CAValidityDefault.java b/base/common/src/com/netscape/cms/profile/def/CAValidityDefault.java
+index f298238b08ffe86d88904d861a804802dd1b0d9f..f2f582e54b39807b68dfa49a5a34f2b7f81991a3 100644
+--- a/base/common/src/com/netscape/cms/profile/def/CAValidityDefault.java
++++ b/base/common/src/com/netscape/cms/profile/def/CAValidityDefault.java
+@@ -94,7 +94,7 @@ public class CAValidityDefault extends EnrollDefault {
+         if (name.equals(CONFIG_RANGE)) {
+             return new Descriptor(IDescriptor.STRING,
+                     null, 
+-                    "2922", /* 8 years */
++                    "7305", /* 20 years */
+                     CMS.getUserMessage(locale,
+                         "CMS_PROFILE_VALIDITY_RANGE"));
+         } else if (name.equals(CONFIG_START_TIME)) {
+diff --git a/base/common/src/com/netscape/cms/profile/def/ValidityDefault.java b/base/common/src/com/netscape/cms/profile/def/ValidityDefault.java
+index f0af47f7047c459f9dbfc938ab37b9fc8386cd1a..7fb144ce6402018e1f8668347e323d8a3ee821d1 100644
+--- a/base/common/src/com/netscape/cms/profile/def/ValidityDefault.java
++++ b/base/common/src/com/netscape/cms/profile/def/ValidityDefault.java
+@@ -86,7 +86,7 @@ public class ValidityDefault extends EnrollDefault {
+         if (name.equals(CONFIG_RANGE)) {
+             return new Descriptor(IDescriptor.STRING,
+                     null, 
+-                    "2922",
++                    "7305",
+                     CMS.getUserMessage(locale,
+                         "CMS_PROFILE_VALIDITY_RANGE"));
+         } else if (name.equals(CONFIG_START_TIME)) {
+-- 
+1.7.11.7
+

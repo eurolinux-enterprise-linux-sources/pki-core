@@ -1,0 +1,122 @@
+From d9624b8a4f428706dff9c78fd1c7d2e6b89b2933 Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Mon, 5 Mar 2012 17:16:28 -0800
+Subject: [PATCH] Remove CA desktop icon
+
+Bugzilla Bug #745677 - Firefox Launcher on Panel being modified for all users.
+---
+ pki/base/ca/setup/CMakeLists.txt    |    3 ---
+ pki/base/ca/setup/config.desktop.in |   31 -------------------------------
+ pki/base/setup/pkicreate            |   22 ----------------------
+ 3 files changed, 0 insertions(+), 56 deletions(-)
+ delete mode 100644 pki/base/ca/setup/config.desktop.in
+
+diff --git a/pki/base/ca/setup/CMakeLists.txt b/pki/base/ca/setup/CMakeLists.txt
+index 25ea20f..f5f069c 100644
+--- a/pki/base/ca/setup/CMakeLists.txt
++++ b/pki/base/ca/setup/CMakeLists.txt
+@@ -1,10 +1,7 @@
+ set(VERSION ${APPLICATION_VERSION})
+ 
+-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.desktop.in ${CMAKE_CURRENT_BINARY_DIR}/config.desktop @ONLY)
+-
+ install(
+     FILES
+-        ${CMAKE_CURRENT_BINARY_DIR}/config.desktop
+         registry_instance
+     DESTINATION
+         ${SHARE_INSTALL_PREFIX}/${APPLICATION_NAME}/${PROJECT_NAME}/setup
+diff --git a/pki/base/ca/setup/config.desktop.in b/pki/base/ca/setup/config.desktop.in
+deleted file mode 100644
+index 646c2e9..0000000
+--- a/pki/base/ca/setup/config.desktop.in
++++ /dev/null
+@@ -1,31 +0,0 @@
+-# --- BEGIN COPYRIGHT BLOCK ---
+-# This program is free software; you can redistribute it and/or modify
+-# it under the terms of the GNU General Public License as published by
+-# the Free Software Foundation; version 2 of the License.
+-#
+-# This program is distributed in the hope that it will be useful,
+-# but WITHOUT ANY WARRANTY; without even the implied warranty of
+-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-# GNU General Public License for more details.
+-#
+-# You should have received a copy of the GNU General Public License along
+-# with this program; if not, write to the Free Software Foundation, Inc.,
+-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-#
+-# Copyright (C) 2007 Red Hat, Inc.
+-# All rights reserved.
+-# --- END COPYRIGHT BLOCK ---
+-#
+-[Desktop Entry]
+-Version=@VERSION@
+-Encoding=UTF-8
+-Name=Certificate Authority Configuration - [PKI_INSTANCE_ID]
+-GenericName=Certificate Authority Configuration
+-Comment=Configure Certificate Authority
+-Exec=firefox https://[PKI_MACHINE_NAME]:[PKI_SECURE_PORT]/ca/admin/console/config/login?pin=[PKI_RANDOM_NUMBER]
+-Icon=firefox.png
+-Terminal=false
+-Type=Application
+-MimeType=text/html;text/xml;application/xhtml+xml;application/vnd.mozilla.xul+xml;text/mml;
+-X-Desktop-File-Install-Version=0.9
+-Categories=Application;CertServer;
+diff --git a/pki/base/setup/pkicreate b/pki/base/setup/pkicreate
+index a907094..b7dbca8 100755
+--- a/pki/base/setup/pkicreate
++++ b/pki/base/setup/pkicreate
+@@ -557,10 +557,6 @@ my $random      = undef;
+ # Linux specific variables
+ my $setup_base_subsystem_dir         = "setup";
+ my $setup_subsystem_path             = undef;
+-my $setup_config_instance_file_path  = undef;
+-my $setup_config_subsystem_file_path = undef;
+-my $setup_config_area                = undef;
+-my $setup_config_name                = undef;
+ my $tomcat6_initscript_path          = undef;
+ my $tomcat6_instance_config_path     = undef;
+ my $root_user                        = undef;
+@@ -573,10 +569,6 @@ my $pki_instance_initscript_path     = undef;
+ ##############################################################
+ 
+ if ($^O eq "linux") {
+-    # Linux required desktop files
+-    $setup_config_area = "/usr/share/applications";
+-    $setup_config_name = "config.desktop";
+-
+     # Linux init scripts
+     $tomcat6_initscript_path = "${default_initscripts_path}/tomcat6";
+ 
+@@ -1577,11 +1569,6 @@ sub initialize_subdirectory_paths
+     ## Initialize subdirectory paths (subsystem independent)
+     $pki_cfg_subsystem_file_path      = $conf_subsystem_path
+                                       . "/" . $pki_cfg_base_name;
+-    $setup_config_instance_file_path  = $setup_config_area
+-                                      . "/" . $pki_instance_name
+-                                      . "-" . $setup_config_name;
+-    $setup_config_subsystem_file_path = $setup_subsystem_path
+-                                      . "/" . $setup_config_name;
+ 
+     $pki_registry_initscript = get_registry_initscript_name($subsystem_type);
+ 
+@@ -2527,15 +2514,6 @@ LoadModule nss_module  /opt/fortitude/modules.local/libmodnss.so
+     return 0 if !set_file_props($pki_cfg_instance_file_path,
+                                 $default_file_permissions, $pki_user, $pki_group);
+ 
+-    if ($^O eq "linux") {
+-        # process "config.desktop" template
+-        return 0 if !process_file_template("setup_config",
+-                                           $setup_config_subsystem_file_path,
+-                                           $setup_config_instance_file_path,
+-                                           \%slot_hash);
+-        }
+-
+-
+     ## Process registry instance template
+     return 0 if !process_file_template("pki_registry_template",
+                                        $pki_registry_subsystem_file_path,
+-- 
+1.7.7.6
+

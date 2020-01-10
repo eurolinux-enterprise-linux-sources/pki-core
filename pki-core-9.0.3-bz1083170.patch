@@ -1,0 +1,375 @@
+From 5ffa36ab18a88f38d6c2a62506a69fb7a4f6a5cc Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Tue, 20 May 2014 18:14:24 -0700
+Subject: [PATCH] Prevent LDAP Attributes from being affected by Locale
+
+* Bugzilla Bug #1083170 - Installation of IPA hangs up when LANG is
+  set to tr_TR.UTF8
+---
+ base/ca/shared/conf/index.ldif                     |  136 ++++++++++----------
+ base/ca/shared/conf/vlvtasks.ldif                  |   70 +++++-----
+ .../cms/servlet/csadmin/DatabasePanel.java         |   10 +-
+ 3 files changed, 109 insertions(+), 107 deletions(-)
+
+diff --git a/base/ca/shared/conf/index.ldif b/base/ca/shared/conf/index.ldif
+index c1eecc1..c168bfa 100644
+--- a/base/ca/shared/conf/index.ldif
++++ b/base/ca/shared/conf/index.ldif
+@@ -1,177 +1,177 @@
+ dn: cn=revokedby,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq 
+-nsSystemIndex: false
++nsindexType: eq
++nsSystemindex: false
+ cn: revokedby
+ 
+ dn: cn=issuedby,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsSystemIndex: false
++nsindexType: eq
++nsSystemindex: false
+ cn: issuedby
+ 
+ dn: cn=publicKeyData,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsSystemIndex: false
++nsindexType: eq
++nsSystemindex: false
+ cn: publicKeyData
+ 
+ dn: cn=description,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: description
+ 
+ dn: cn=serialno,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: serialno
+ 
+ dn: cn=metaInfo,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: metaInfo
+ 
+ dn: cn=certstatus,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: certstatus
+ 
+ dn: cn=requestid,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: requestid
+ 
+ dn: cn=requesttype,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: requesttype
+ 
+ dn: cn=requeststate,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: requeststate
+ 
+ dn: cn=requestowner,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: requestowner
+ 
+ dn: cn=notbefore,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: notbefore
+ 
+ dn: cn=notafter,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: notafter
+ 
+ dn: cn=duration,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: duration
+ 
+ dn: cn=dateOfCreate,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: dateOfCreate
+ 
+ dn: cn=revokedOn,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: revokedOn
+ 
+ dn: cn=archivedBy,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsSystemindex: false
+ cn: archivedBy
+ 
+ dn: cn=ownername,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsIndexType: sub
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsindexType: sub
++nsSystemindex: false
+ cn: ownername
+ 
+ dn: cn=subjectname,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsIndexType: sub
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsindexType: sub
++nsSystemindex: false
+ cn: subjectname
+ 
+ dn: cn=requestsourceid,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsIndexType: sub
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsindexType: sub
++nsSystemindex: false
+ cn: requestsourceid
+ 
+ dn: cn=revInfo,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsIndexType: sub
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsindexType: sub
++nsSystemindex: false
+ cn: revInfo
+ 
+ dn: cn=extension,cn=index,cn={database},cn=ldbm database, cn=plugins, cn=config
+ objectClass: top
+ objectClass: nsIndex
+-nsIndexType: eq
+-nsIndexType: pres
+-nsIndexType: sub
+-nsSystemIndex: false
++nsindexType: eq
++nsindexType: pres
++nsindexType: sub
++nsSystemindex: false
+ cn: extension
+diff --git a/base/ca/shared/conf/vlvtasks.ldif b/base/ca/shared/conf/vlvtasks.ldif
+index 5458e8a..1c74436 100644
+--- a/base/ca/shared/conf/vlvtasks.ldif
++++ b/base/ca/shared/conf/vlvtasks.ldif
+@@ -3,38 +3,38 @@ objectclass: top
+ objectclass: extensibleObject
+ cn: index1160589769
+ ttl: 10
+-nsInstance: {database}
+-nsIndexVLVAttribute: allCerts-{instanceId}Index
+-nsIndexVLVAttribute: allExpiredCerts-{instanceId}Index
+-nsIndexVLVAttribute: allInvalidCerts-{instanceId}Index
+-nsIndexVLVAttribute: allInValidCertsNotBefore-{instanceId}Index
+-nsIndexVLVAttribute: allNonRevokedCerts-{instanceId}Index
+-nsIndexVLVAttribute: allRevokedCaCerts-{instanceId}Index
+-nsIndexVLVAttribute: allRevokedCerts-{instanceId}Index
+-nsIndexVLVAttribute: allRevokedCertsNotAfter-{instanceId}Index
+-nsIndexVLVAttribute: allRevokedExpiredCerts-{instanceId}Index
+-nsIndexVLVAttribute: allRevokedOrRevokedExpiredCaCerts-{instanceId}Index
+-nsIndexVLVAttribute: allRevokedOrRevokedExpiredCerts-{instanceId}Index
+-nsIndexVLVAttribute: allValidCerts-{instanceId}Index
+-nsIndexVLVAttribute: allValidCertsNotAfter-{instanceId}Index
+-nsIndexVLVAttribute: allValidOrRevokedCerts-{instanceId}Index
+-nsIndexVLVAttribute: caAll-{instanceId}Index
+-nsIndexVLVAttribute: caCanceled-{instanceId}Index
+-nsIndexVLVAttribute: caCanceledEnrollment-{instanceId}Index
+-nsIndexVLVAttribute: caCanceledRenewal-{instanceId}Index
+-nsIndexVLVAttribute: caCanceledRevocation-{instanceId}Index
+-nsIndexVLVAttribute: caComplete-{instanceId}Index
+-nsIndexVLVAttribute: caCompleteEnrollment-{instanceId}Index
+-nsIndexVLVAttribute: caCompleteRenewal-{instanceId}Index
+-nsIndexVLVAttribute: caCompleteRevocation-{instanceId}Index
+-nsIndexVLVAttribute: caEnrollment-{instanceId}Index
+-nsIndexVLVAttribute: caPending-{instanceId}Index
+-nsIndexVLVAttribute: caPendingEnrollment-{instanceId}Index
+-nsIndexVLVAttribute: caPendingRenewal-{instanceId}Index
+-nsIndexVLVAttribute: caPendingRevocation-{instanceId}Index
+-nsIndexVLVAttribute: caRejected-{instanceId}Index
+-nsIndexVLVAttribute: caRejectedEnrollment-{instanceId}Index
+-nsIndexVLVAttribute: caRejectedRenewal-{instanceId}Index
+-nsIndexVLVAttribute: caRejectedRevocation-{instanceId}Index
+-nsIndexVLVAttribute: caRenewal-{instanceId}Index
+-nsIndexVLVAttribute: caRevocation-{instanceId}Index
++nsinstance: {database}
++nsindexVLVAttribute: allCerts-{instanceId}Index
++nsindexVLVAttribute: allExpiredCerts-{instanceId}Index
++nsindexVLVAttribute: allInvalidCerts-{instanceId}Index
++nsindexVLVAttribute: allInValidCertsNotBefore-{instanceId}Index
++nsindexVLVAttribute: allNonRevokedCerts-{instanceId}Index
++nsindexVLVAttribute: allRevokedCaCerts-{instanceId}Index
++nsindexVLVAttribute: allRevokedCerts-{instanceId}Index
++nsindexVLVAttribute: allRevokedCertsNotAfter-{instanceId}Index
++nsindexVLVAttribute: allRevokedExpiredCerts-{instanceId}Index
++nsindexVLVAttribute: allRevokedOrRevokedExpiredCaCerts-{instanceId}Index
++nsindexVLVAttribute: allRevokedOrRevokedExpiredCerts-{instanceId}Index
++nsindexVLVAttribute: allValidCerts-{instanceId}Index
++nsindexVLVAttribute: allValidCertsNotAfter-{instanceId}Index
++nsindexVLVAttribute: allValidOrRevokedCerts-{instanceId}Index
++nsindexVLVAttribute: caAll-{instanceId}Index
++nsindexVLVAttribute: caCanceled-{instanceId}Index
++nsindexVLVAttribute: caCanceledEnrollment-{instanceId}Index
++nsindexVLVAttribute: caCanceledRenewal-{instanceId}Index
++nsindexVLVAttribute: caCanceledRevocation-{instanceId}Index
++nsindexVLVAttribute: caComplete-{instanceId}Index
++nsindexVLVAttribute: caCompleteEnrollment-{instanceId}Index
++nsindexVLVAttribute: caCompleteRenewal-{instanceId}Index
++nsindexVLVAttribute: caCompleteRevocation-{instanceId}Index
++nsindexVLVAttribute: caEnrollment-{instanceId}Index
++nsindexVLVAttribute: caPending-{instanceId}Index
++nsindexVLVAttribute: caPendingEnrollment-{instanceId}Index
++nsindexVLVAttribute: caPendingRenewal-{instanceId}Index
++nsindexVLVAttribute: caPendingRevocation-{instanceId}Index
++nsindexVLVAttribute: caRejected-{instanceId}Index
++nsindexVLVAttribute: caRejectedEnrollment-{instanceId}Index
++nsindexVLVAttribute: caRejectedRenewal-{instanceId}Index
++nsindexVLVAttribute: caRejectedRevocation-{instanceId}Index
++nsindexVLVAttribute: caRenewal-{instanceId}Index
++nsindexVLVAttribute: caRevocation-{instanceId}Index
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/DatabasePanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/DatabasePanel.java
+index bdd0b0d..2985fa0 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/DatabasePanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/DatabasePanel.java
+@@ -791,8 +791,9 @@ public class DatabasePanel extends WizardPanelBase {
+             BufferedReader in = null;
+ 
+             try {
+-                in = new BufferedReader(new FileReader(token));
+-                ps = new PrintStream(new FileOutputStream(filename, false));
++                in = new BufferedReader(new InputStreamReader(
++                                        new FileInputStream(token), "UTF-8"));
++                ps = new PrintStream(filename, "UTF-8");
+                 while (in.ready()) {
+                     String s = in.readLine();
+                     int n = s.indexOf("{");
+@@ -995,11 +996,12 @@ public class DatabasePanel extends WizardPanelBase {
+               } catch (Exception e) {
+                 CMS.debug("Still checking wait_dn '" + wait_dn + "' (" + e.toString() + ").");
+               }
++              i++;
+             } while ((!taskComplete) && (i < 20));
+             if (i < 20) {
+-            CMS.debug("Done checking wait_dn " + wait_dn);
++              CMS.debug("Done checking wait_dn '" + wait_dn + "'");
+             } else {
+-              CMS.debug("Done checking wait_dn " + wait_dn + " due to timeout.");
++              CMS.debug("Done checking wait_dn '" + wait_dn + "' due to timeout.");
+             }
+           }
+ 
+-- 
+1.7.1
+

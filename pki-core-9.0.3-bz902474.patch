@@ -1,0 +1,159 @@
+From 2964c51481a06100d4c2599f189a00fdd8064b1f Mon Sep 17 00:00:00 2001
+From: Ade Lee <alee@redhat.com>
+Date: Tue, 22 Jan 2013 11:15:16 -0800
+Subject: [PATCH] Resolves #902474 - upgrading IPA from 2.2 to 3.0 sees certmonger errors
+
+---
+ base/selinux/src/pki.fc |   33 ++++++++++-----------------------
+ base/selinux/src/pki.if |   28 ++++++++++++++++++++++++++++
+ base/selinux/src/pki.te |    2 +-
+ 3 files changed, 39 insertions(+), 24 deletions(-)
+
+diff --git a/base/selinux/src/pki.fc b/base/selinux/src/pki.fc
+index 3a22d86a40372d1e7767e8e1109c2bfa3487b8d0..720784569be0483a7ef596083a089337cc4288c3 100644
+--- a/base/selinux/src/pki.fc
++++ b/base/selinux/src/pki.fc
+@@ -1,54 +1,41 @@
+ 
+ /usr/bin/dtomcat5-pki-ca	--	gen_context(system_u:object_r:pki_ca_exec_t,s0)
+-
+ /etc/pki-ca(/.*)?			gen_context(system_u:object_r:pki_ca_etc_rw_t,s0)
+ /etc/pki-ca/tomcat5.conf  	--      gen_context(system_u:object_r:pki_ca_tomcat_exec_t,s0)
+-
+ /var/lib/pki-ca(/.*)?		        gen_context(system_u:object_r:pki_ca_var_lib_t,s0)
+-
++/var/lib/pki-ca/alias(/.*)?             gen_context(system_u:object_r:pki_ca_cert_t,s0)
+ /var/run/pki-ca.pid			gen_context(system_u:object_r:pki_ca_var_run_t,s0)
+-
+ /var/log/pki-ca(/.*)?			gen_context(system_u:object_r:pki_ca_log_t,s0)
+ 
+ /usr/bin/dtomcat5-pki-kra	--	gen_context(system_u:object_r:pki_kra_exec_t,s0)
+-
+ /etc/pki-kra(/.*)?			gen_context(system_u:object_r:pki_kra_etc_rw_t,s0)
+ /etc/pki-kra/tomcat5.conf  	--      gen_context(system_u:object_r:pki_kra_tomcat_exec_t,s0)
+-
+ /var/lib/pki-kra(/.*)?		        gen_context(system_u:object_r:pki_kra_var_lib_t,s0)
+-
++/var/lib/pki-kra/alias(/.*)?            gen_context(system_u:object_r:pki_kra_cert_t,s0)
+ /var/run/pki-kra.pid			gen_context(system_u:object_r:pki_kra_var_run_t,s0)
+-
+ /var/log/pki-kra(/.*)?			gen_context(system_u:object_r:pki_kra_log_t,s0)
+ 
+ /usr/bin/dtomcat5-pki-ocsp	--	gen_context(system_u:object_r:pki_ocsp_exec_t,s0)
+-
+ /etc/pki-ocsp(/.*)?			gen_context(system_u:object_r:pki_ocsp_etc_rw_t,s0)
+ /etc/pki-ocsp/tomcat5.conf  	--      gen_context(system_u:object_r:pki_ocsp_tomcat_exec_t,s0)
+-
+ /var/lib/pki-ocsp(/.*)?		        gen_context(system_u:object_r:pki_ocsp_var_lib_t,s0)
+-
++/var/lib/pki-ocsp/alias(/.*)?           gen_context(system_u:object_r:pki_ocsp_cert_t,s0)
+ /var/run/pki-ocsp.pid			gen_context(system_u:object_r:pki_ocsp_var_run_t,s0)
+-
+ /var/log/pki-ocsp(/.*)?			gen_context(system_u:object_r:pki_ocsp_log_t,s0)
+ 
+-/usr/sbin/httpd.worker  --      gen_context(system_u:object_r:pki_ra_exec_t,s0)
+-/etc/pki-ra(/.*)?               gen_context(system_u:object_r:pki_ra_etc_rw_t,s0)
+-/var/lib/pki-ra(/.*)?           gen_context(system_u:object_r:pki_ra_var_lib_t,s0)
+-/var/log/pki-ra(/.*)?           gen_context(system_u:object_r:pki_ra_log_t,s0)
+-
+-
+ /usr/bin/dtomcat5-pki-tks	--	gen_context(system_u:object_r:pki_tks_exec_t,s0)
+-
+ /etc/pki-tks(/.*)?			gen_context(system_u:object_r:pki_tks_etc_rw_t,s0)
+ /etc/pki-tks/tomcat5.conf  	--      gen_context(system_u:object_r:pki_tks_tomcat_exec_t,s0)
+-
+-/var/lib/pki-tks(/.*)?		gen_context(system_u:object_r:pki_tks_var_lib_t,s0)
+-
++/var/lib/pki-tks(/.*)?		        gen_context(system_u:object_r:pki_tks_var_lib_t,s0)
++/var/lib/pki-tks/alias(/.*)?            gen_context(system_u:object_r:pki_tks_cert_t,s0)
+ /var/run/pki-tks.pid			gen_context(system_u:object_r:pki_tks_var_run_t,s0)
+-
+ /var/log/pki-tks(/.*)?			gen_context(system_u:object_r:pki_tks_log_t,s0)
+ 
++/usr/sbin/httpd.worker  --      gen_context(system_u:object_r:pki_ra_exec_t,s0)
++/etc/pki-ra(/.*)?               gen_context(system_u:object_r:pki_ra_etc_rw_t,s0)
++/var/lib/pki-ra(/.*)?           gen_context(system_u:object_r:pki_ra_var_lib_t,s0)
++/var/log/pki-ra(/.*)?           gen_context(system_u:object_r:pki_ra_log_t,s0)
++
+ /etc/pki-tps(/.*)?              gen_context(system_u:object_r:pki_tps_etc_rw_t,s0)
+ /var/lib/pki-tps(/.*)?          gen_context(system_u:object_r:pki_tps_var_lib_t,s0)
+ /var/log/pki-tps(/.*)?          gen_context(system_u:object_r:pki_tps_log_t,s0)
+diff --git a/base/selinux/src/pki.if b/base/selinux/src/pki.if
+index 2206e74575eb68a759087e59a9d7c65600b9948e..737eb220a324219c24c2a1439ae2d6e4185d0c0f 100644
+--- a/base/selinux/src/pki.if
++++ b/base/selinux/src/pki.if
+@@ -1,5 +1,22 @@
+ 
+ ## <summary>policy for pki</summary>
++########################################
++## <summary>
++##      Allow read and write pki cert files.
++## </summary>
++## <param name="domain">
++##      <summary>
++##      Domain allowed access.
++##      </summary>
++## </param>
++#
++interface(`pki_rw_tomcat_cert',`
++        gen_require(`
++                type $1_cert_t;
++        ')
++
++        rw_files_pattern($2, $1_cert_t, $1_cert_t)
++')
+ 
+ ########################################
+ ## <summary>
+@@ -23,6 +40,7 @@ template(`pki_ca_template',`
+                 type rpm_exec_t;
+ 		type setfiles_t;
+                 type httpd_t;
++                type certmonger_t;
+ 	')
+ 	########################################
+ 	#
+@@ -58,6 +76,9 @@ template(`pki_ca_template',`
+ 	type $1_log_t, pki_ca_var_log;
+ 	logging_log_file($1_log_t)
+ 
++        type $1_cert_t;
++        files_type($1_cert_t)
++
+ 	########################################
+ 	#
+ 	# $1 local policy
+@@ -67,6 +88,10 @@ template(`pki_ca_template',`
+ 	allow $1_t self:process { execstack execmem getsched setsched signal};
+ 	allow initrc_t self:process execstack;
+ 
++        # allow certmonger to read certdb files
++        pki_rw_tomcat_cert($1, certmonger_t)
++        allow certmonger_t $1_var_lib_t:dir search;
++
+ 	## internal communication is often done using fifo and unix sockets.
+ 	allow $1_t self:fifo_file rw_file_perms;
+ 	allow $1_t self:unix_stream_socket create_stream_socket_perms;
+@@ -124,6 +149,9 @@ template(`pki_ca_template',`
+ 	manage_files_pattern($1_t, $1_log_t,  $1_log_t)
+ 	logging_log_filetrans($1_t, $1_log_t, { file dir } )
+ 
++        manage_dirs_pattern($1_t, $1_cert_t, $1_cert_t)
++        manage_files_pattern($1_t, $1_cert_t, $1_cert_t)
++
+ 	corecmd_exec_bin($1_t)
+ 	corecmd_read_bin_symlinks($1_t)
+ 	corecmd_exec_shell($1_t)
+diff --git a/base/selinux/src/pki.te b/base/selinux/src/pki.te
+index 4f35944db4cb2b3f5f2799fea149ebcecc3c8278..846057b3aa93f0c20344f26c4baf9bb8b1919775 100644
+--- a/base/selinux/src/pki.te
++++ b/base/selinux/src/pki.te
+@@ -1,4 +1,4 @@
+-policy_module(pki,6.2.2)
++policy_module(pki,6.4.1)
+ 
+ attribute pki_ca_config;
+ attribute pki_ca_executable;
+-- 
+1.7.1
+

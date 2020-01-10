@@ -1,0 +1,82 @@
+From d4c95679b7dbde32c0af414d791301deb008fbf1 Mon Sep 17 00:00:00 2001
+From: Ade Lee <alee@redhat.com>
+Date: Fri, 9 Aug 2013 13:26:07 -0700
+Subject: [PATCH] Bugzilla BZ#895702 - pki-cad restart avc denial
+ Bugzilla BZ#887305 - /var/run/pki/ca has wrong SElinux context after the installation
+
+---
+ base/selinux/src/pki.if               |    3 ++
+ base/selinux/src/pki.te               |    2 +-
+ patches/pki-core-9.0.3-bz895702.patch |   38 +++++++++++++++++++++++++++++++++
+ specs/pki-core.spec                   |   12 +++++++++-
+ 4 files changed, 53 insertions(+), 2 deletions(-)
+ create mode 100644 patches/pki-core-9.0.3-bz895702.patch
+
+diff --git a/base/selinux/src/pki.if b/base/selinux/src/pki.if
+index 737eb220a324219c24c2a1439ae2d6e4185d0c0f..2c45a6de8df1f6b6d0926f7a16a75d8e3523b3cb 100644
+--- a/base/selinux/src/pki.if
++++ b/base/selinux/src/pki.if
+@@ -221,6 +221,9 @@ template(`pki_ca_template',`
+        #reverse proxy
+        corenet_tcp_connect_dogtag_port($1_t)
+ 
++       fs_getattr_xattr_fs($1_t)
++       fs_rw_hugetlbfs_files($1_t)
++
+ ')
+ 
+ ########################################
+diff --git a/base/selinux/src/pki.te b/base/selinux/src/pki.te
+index 846057b3aa93f0c20344f26c4baf9bb8b1919775..0dd0bba0c5213dda55fe157983d8e091f717db13 100644
+--- a/base/selinux/src/pki.te
++++ b/base/selinux/src/pki.te
+@@ -1,4 +1,4 @@
+-policy_module(pki,6.4.1)
++policy_module(pki,6.4.2)
+ 
+ attribute pki_ca_config;
+ attribute pki_ca_executable;
+diff --git a/patches/pki-core-9.0.3-bz895702.patch b/patches/pki-core-9.0.3-bz895702.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..37649acb9d7a8dc239c32224fd9411533c78f167
+--- /dev/null
++++ b/patches/pki-core-9.0.3-bz895702.patch
+@@ -0,0 +1,38 @@
++From 1f737c3e0e174bd6fe11767e9ce6bbb9ec9e4f7d Mon Sep 17 00:00:00 2001
++From: Ade Lee <alee@redhat.com>
++Date: Fri, 9 Aug 2013 13:26:07 -0700
++Subject: [PATCH] Bugzilla BZ#895702 - pki-cad restart avc denial
++ Bugzilla BZ#887305 - /var/run/pki/ca has wrong SElinux context after the installation
++
++---
++ base/selinux/src/pki.if |    3 +++
++ base/selinux/src/pki.te |    2 +-
++ 2 files changed, 4 insertions(+), 1 deletions(-)
++
++diff --git a/base/selinux/src/pki.if b/base/selinux/src/pki.if
++index 737eb220a324219c24c2a1439ae2d6e4185d0c0f..2c45a6de8df1f6b6d0926f7a16a75d8e3523b3cb 100644
++--- a/base/selinux/src/pki.if
+++++ b/base/selinux/src/pki.if
++@@ -221,6 +221,9 @@ template(`pki_ca_template',`
++        #reverse proxy
++        corenet_tcp_connect_dogtag_port($1_t)
++ 
+++       fs_getattr_xattr_fs($1_t)
+++       fs_rw_hugetlbfs_files($1_t)
+++
++ ')
++ 
++ ########################################
++diff --git a/base/selinux/src/pki.te b/base/selinux/src/pki.te
++index 846057b3aa93f0c20344f26c4baf9bb8b1919775..0dd0bba0c5213dda55fe157983d8e091f717db13 100644
++--- a/base/selinux/src/pki.te
+++++ b/base/selinux/src/pki.te
++@@ -1,4 +1,4 @@
++-policy_module(pki,6.4.1)
+++policy_module(pki,6.4.2)
++ 
++ attribute pki_ca_config;
++ attribute pki_ca_executable;
++-- 
++1.7.1
++

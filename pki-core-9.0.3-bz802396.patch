@@ -1,0 +1,13 @@
+diff --git a/pki/base/ca/shared/conf/tomcat6.conf b/pki/base/ca/shared/conf/tomcat6.conf
+index b3aa82d..2d7def5 100644
+--- a/pki/base/ca/shared/conf/tomcat6.conf
++++ b/pki/base/ca/shared/conf/tomcat6.conf
+@@ -48,7 +48,7 @@ TOMCAT_USER="[PKI_USER]"
+ CATALINA_PID="[TOMCAT_PIDFILE]"
+ 
+ # Set the tomcat log file
+-TOMCAT_LOG="[TOMCAT_LOG_DIR]/catalina.out"
++TOMCAT_LOG="[TOMCAT_LOG_DIR]/tomcat-initd.log"
+ 
+ # Connector port is 8080 for this tomcat6 instance
+ #CONNECTOR_PORT="8080"

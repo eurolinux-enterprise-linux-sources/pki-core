@@ -1,0 +1,652 @@
+diff -rupN pki-core-9.0.3.orig/base/ca/shared/conf/server.xml pki-core-9.0.3/base/ca/shared/conf/server.xml
+--- pki-core-9.0.3.orig/base/ca/shared/conf/server.xml	2015-02-10 12:06:20.000000000 -0800
++++ pki-core-9.0.3/base/ca/shared/conf/server.xml	2015-02-11 13:45:00.000000000 -0800
+@@ -129,11 +129,15 @@ Tomcat Port         = [TOMCAT_SERVER_POR
+ 	       ocspMinCacheEntryDuration="60"
+ 	       ocspMaxCacheEntryDuration="120"
+ 	       ocspTimeout="10"
++	       strictCiphers="true"
+ 	       clientAuth="[PKI_AGENT_CLIENTAUTH]"
+ 	       sslOptions="[TOMCAT_SSL_OPTIONS]"
+ 	       ssl2Ciphers="[TOMCAT_SSL2_CIPHERS]"
+ 	       ssl3Ciphers="[TOMCAT_SSL3_CIPHERS]"
+ 	       tls3Ciphers="[TOMCAT_TLS3_CIPHERS]"
++	       sslVersionRangeStream="[TOMCAT_SSL_VERSION_RANGE_STREAM]"
++	       sslVersionRangeDatagram="[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]"
++	       sslRangeCiphers="[TOMCAT_SSL_RANGE_CIPHERS]"
+ 	       serverCertNickFile="[PKI_INSTANCE_PATH]/conf/serverCertNick.conf"
+ 	       passwordFile="[PKI_INSTANCE_PATH]/conf/password.conf"
+ 	       passwordClass="org.apache.tomcat.util.net.jss.PlainPasswordFile"
+@@ -147,11 +151,15 @@ Tomcat Port         = [TOMCAT_SERVER_POR
+ 	       acceptCount="100" maxThreads="150" minSpareThreads="25" maxSpareThreads="75"
+ 	       enableLookups="false" disableUploadTimeout="true"
+ 	       SSLImplementation="org.apache.tomcat.util.net.jss.JSSImplementation"
++	       strictCiphers="true"
+ 	       clientAuth="false"
+ 	       sslOptions="[TOMCAT_SSL_OPTIONS]"
+ 	       ssl2Ciphers="[TOMCAT_SSL2_CIPHERS]"
+ 	       ssl3Ciphers="[TOMCAT_SSL3_CIPHERS]"
+ 	       tls3Ciphers="[TOMCAT_TLS3_CIPHERS]"
++	       sslVersionRangeStream="[TOMCAT_SSL_VERSION_RANGE_STREAM]"
++	       sslVersionRangeDatagram="[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]"
++	       sslRangeCiphers="[TOMCAT_SSL_RANGE_CIPHERS]"
+ 	       serverCertNickFile="[PKI_INSTANCE_PATH]/conf/serverCertNick.conf"
+ 	       passwordFile="[PKI_INSTANCE_PATH]/conf/password.conf"
+ 	       passwordClass="org.apache.tomcat.util.net.jss.PlainPasswordFile"
+@@ -164,11 +172,15 @@ Tomcat Port         = [TOMCAT_SERVER_POR
+ 	       acceptCount="100" maxThreads="150" minSpareThreads="25" maxSpareThreads="75"
+ 	       enableLookups="false" disableUploadTimeout="true"
+ 	       SSLImplementation="org.apache.tomcat.util.net.jss.JSSImplementation"
++	       strictCiphers="true"
+ 	       clientAuth="false"
+ 	       sslOptions="[TOMCAT_SSL_OPTIONS]"
+ 	       ssl2Ciphers="[TOMCAT_SSL2_CIPHERS]"
+ 	       ssl3Ciphers="[TOMCAT_SSL3_CIPHERS]"
+ 	       tls3Ciphers="[TOMCAT_TLS3_CIPHERS]"
++	       sslVersionRangeStream="[TOMCAT_SSL_VERSION_RANGE_STREAM]"
++	       sslVersionRangeDatagram="[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]"
++	       sslRangeCiphers="[TOMCAT_SSL_RANGE_CIPHERS]"
+ 	       serverCertNickFile="[PKI_INSTANCE_PATH]/conf/serverCertNick.conf"
+ 	       passwordFile="[PKI_INSTANCE_PATH]/conf/password.conf"
+ 	       passwordClass="org.apache.tomcat.util.net.jss.PlainPasswordFile"
+@@ -181,11 +193,15 @@ Tomcat Port         = [TOMCAT_SERVER_POR
+ 	       acceptCount="100" maxThreads="150" minSpareThreads="25" maxSpareThreads="75"
+ 	       enableLookups="false" disableUploadTimeout="true"
+ 	       SSLImplementation="org.apache.tomcat.util.net.jss.JSSImplementation"
++	       strictCiphers="true"
+ 	       clientAuth="true"
+ 	       sslOptions="[TOMCAT_SSL_OPTIONS]"
+ 	       ssl2Ciphers="[TOMCAT_SSL2_CIPHERS]"
+ 	       ssl3Ciphers="[TOMCAT_SSL3_CIPHERS]"
+ 	       tls3Ciphers="[TOMCAT_TLS3_CIPHERS]"
++	       sslVersionRangeStream="[TOMCAT_SSL_VERSION_RANGE_STREAM]"
++	       sslVersionRangeDatagram="[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]"
++	       sslRangeCiphers="[TOMCAT_SSL_RANGE_CIPHERS]"
+ 	       serverCertNickFile="[PKI_INSTANCE_PATH]/conf/serverCertNick.conf"
+ 	       passwordFile="[PKI_INSTANCE_PATH]/conf/password.conf"
+ 	       passwordClass="org.apache.tomcat.util.net.jss.PlainPasswordFile"
+diff -rupN pki-core-9.0.3.orig/base/common/src/com/netscape/cms/servlet/csadmin/GetConfigEntries.java pki-core-9.0.3/base/common/src/com/netscape/cms/servlet/csadmin/GetConfigEntries.java
+--- pki-core-9.0.3.orig/base/common/src/com/netscape/cms/servlet/csadmin/GetConfigEntries.java	2011-02-04 08:56:43.000000000 -0800
++++ pki-core-9.0.3/base/common/src/com/netscape/cms/servlet/csadmin/GetConfigEntries.java	2015-02-11 13:34:50.000000000 -0800
+@@ -161,10 +161,12 @@ public class GetConfigEntries extends CM
+                     } else 
+                         continue;
+                 }
+-             
+-                Node container = xmlObj.createContainer(root, "Config");
+-                xmlObj.addItemToContainer(container, "name", name);
+-                xmlObj.addItemToContainer(container, "value", value);
++
++                if (value != null) {
++                    Node container = xmlObj.createContainer(root, "Config");
++                    xmlObj.addItemToContainer(container, "name", name);
++                    xmlObj.addItemToContainer(container, "value", value);
++                }
+             }
+         }
+ 
+@@ -174,7 +176,8 @@ public class GetConfigEntries extends CM
+ 
+             outputResult(httpResp, "application/xml", cb);
+         } catch (Exception e) {
+-            CMS.debug("Failed to send the XML output");
++            CMS.debug("Failed to send the XML output: " + e);
++            e.printStackTrace();
+         }
+     }
+ 
+diff -rupN pki-core-9.0.3.orig/base/common/src/com/netscape/cmscore/ldapconn/LdapJssSSLSocketFactory.java pki-core-9.0.3/base/common/src/com/netscape/cmscore/ldapconn/LdapJssSSLSocketFactory.java
+--- pki-core-9.0.3.orig/base/common/src/com/netscape/cmscore/ldapconn/LdapJssSSLSocketFactory.java	2011-02-04 08:57:10.000000000 -0800
++++ pki-core-9.0.3/base/common/src/com/netscape/cmscore/ldapconn/LdapJssSSLSocketFactory.java	2015-02-11 11:54:41.000000000 -0800
+@@ -46,11 +46,13 @@ public class LdapJssSSLSocketFactory imp
+         SSLSocket s = null;
+ 
+         try {
+-            SSLSocket.enableSSL2Default(false);
++            /*
++             * let inherit TLS range and cipher settings
++             */
+             s = new SSLSocket(host, port);
+             s.setUseClientMode(true);
+-            s.enableSSL2(false);
+-            s.enableSSL2Default(false);
++            // XXX - Although it was NOT deleted upstream, shouldn't
++            //       's.enableV2CompatibleHello(false);' be deleted?
+             s.enableV2CompatibleHello(false);
+ 
+             SSLHandshakeCompletedListener listener = null;
+diff -rupN pki-core-9.0.3.orig/base/java-tools/src/com/netscape/cmstools/HttpClient.java pki-core-9.0.3/base/java-tools/src/com/netscape/cmstools/HttpClient.java
+--- pki-core-9.0.3.orig/base/java-tools/src/com/netscape/cmstools/HttpClient.java	2011-02-04 08:56:20.000000000 -0800
++++ pki-core-9.0.3/base/java-tools/src/com/netscape/cmstools/HttpClient.java	2015-02-11 12:01:03.000000000 -0800
+@@ -53,15 +53,6 @@ public class HttpClient
+     private boolean _secure = false;
+ 
+     public static final int    ARGC = 1;
+-    static final int cipherSuites[] = {
+-            SSLSocket.SSL3_RSA_WITH_RC4_128_MD5,
+-            SSLSocket.SSL3_RSA_WITH_3DES_EDE_CBC_SHA,
+-            SSLSocket.SSL3_RSA_WITH_DES_CBC_SHA,
+-            SSLSocket.SSL3_RSA_EXPORT_WITH_RC4_40_MD5,
+-            SSLSocket.SSL3_RSA_EXPORT_WITH_RC2_CBC_40_MD5,
+-            SSLSocket.SSL3_RSA_WITH_NULL_MD5,
+-            0
+-    };
+ 
+     public HttpClient(String host, int port, String secure) 
+          throws Exception
+@@ -116,31 +107,27 @@ public class HttpClient
+                 CryptoManager.InitializationValues vals =
+                   new CryptoManager.InitializationValues(dbdir, "", "", "secmod.db");
+                 CryptoManager.initialize(vals);
+-                SSLSocket socket = new SSLSocket(_host, _port);
+-                int i;
+-
+-                for (i = SSLSocket.SSL2_RC4_128_WITH_MD5;
+-                    i <= SSLSocket.SSL2_RC2_128_CBC_EXPORT40_WITH_MD5; ++i) {
+-                    try {
+-                        socket.setCipherPreference(i, true);
+-                    } catch( SocketException e) {
+-                    }
+-                }
+-                //skip SSL_EN_IDEA_128_EDE3_CBC_WITH_MD5
+-                for (i = SSLSocket.SSL2_DES_64_CBC_WITH_MD5;
+-                    i <= SSLSocket.SSL2_DES_192_EDE3_CBC_WITH_MD5; ++i) {
+-                    try { 
+-                        socket.setCipherPreference(i, true);
+-                    } catch( SocketException e) {
+-                    }
+-                }
+-                for (i = 0; cipherSuites[i] != 0; ++i) {
+-                    try {
+-                        socket.setCipherPreference(cipherSuites[i], true);
+-                    } catch( SocketException e) {
+-                    }
+-                }
+                 SSLHandshakeCompletedListener listener = new ClientHandshakeCB(this);
++                org.mozilla.jss.ssl.SSLSocket.SSLVersionRange stream_range =
++                    new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                        org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0,
++                        org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++                SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.STREAM,
++                    stream_range);
++
++                org.mozilla.jss.ssl.SSLSocket.SSLVersionRange datagram_range =
++                    new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                        org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_1,
++                        org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++                SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.DATA_GRAM,
++                    datagram_range);
++                SSLSocket socket = new SSLSocket(_host, _port);
++                // setSSLVersionRange needs to be exposed in jss
++                // socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+                 socket.addHandshakeCompletedListener(listener); 
+ 
+                 if (clientmode != null && clientmode.equals("true")) {
+diff -rupN pki-core-9.0.3.orig/base/setup/pkicreate pki-core-9.0.3/base/setup/pkicreate
+--- pki-core-9.0.3.orig/base/setup/pkicreate	2015-02-10 12:06:22.000000000 -0800
++++ pki-core-9.0.3/base/setup/pkicreate	2015-02-10 17:34:26.000000000 -0800
+@@ -302,6 +302,9 @@ my $PKI_USER_SLOT                       
+ my $TOMCAT_SERVER_PORT_SLOT             = "TOMCAT_SERVER_PORT";
+ my $TOMCAT_PIDFILE                      = "TOMCAT_PIDFILE";
+ my $TOMCAT_CFG                          = "TOMCAT_CFG";
++my $TOMCAT_SSL_VERSION_RANGE_STREAM_SLOT = "TOMCAT_SSL_VERSION_RANGE_STREAM";
++my $TOMCAT_SSL_VERSION_RANGE_DATAGRAM_SLOT = "TOMCAT_SSL_VERSION_RANGE_DATAGRAM";
++my $TOMCAT_SSL_RANGE_CIPHERS_SLOT = "TOMCAT_SSL_RANGE_CIPHERS";
+ my $TOMCAT_SSL_OPTIONS                  = "TOMCAT_SSL_OPTIONS";
+ my $TOMCAT_SSL2_CIPHERS                 = "TOMCAT_SSL2_CIPHERS";
+ my $TOMCAT_SSL3_CIPHERS                 = "TOMCAT_SSL3_CIPHERS";
+@@ -2473,7 +2476,43 @@ LoadModule nss_module  /opt/fortitude/mo
+         $slot_hash{$TOMCAT_SERVER_PORT_SLOT}   = $tomcat_server_port;
+         $slot_hash{$TOMCAT_PIDFILE}            = $tomcat6_instance_pid_file_path;
+         $slot_hash{$TOMCAT_CFG}                = $tomcat6_conf_instance_file_path;
+-        $slot_hash{$TOMCAT_SSL_OPTIONS}        = "ssl2=true,ssl3=true,tls=true";
++        $slot_hash{$TOMCAT_SSL_VERSION_RANGE_STREAM_SLOT} = "tls1_0:tls1_2";
++        $slot_hash{$TOMCAT_SSL_VERSION_RANGE_DATAGRAM_SLOT} = "tls1_1:tls1_2";
++        $slot_hash{$TOMCAT_SSL_RANGE_CIPHERS_SLOT} = "-TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA,"
++                                          . "-TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA,"
++                                          . "+TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA,"
++                                          . "+TLS_ECDH_RSA_WITH_AES_128_CBC_SHA,"
++                                          . "+TLS_ECDH_RSA_WITH_AES_256_CBC_SHA,"
++                                          . "-TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA,"
++                                          . "+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,"
++                                          . "+TLS_RSA_WITH_3DES_EDE_CBC_SHA,"
++                                          . "+TLS_RSA_WITH_AES_128_CBC_SHA,"
++                                          . "+TLS_RSA_WITH_AES_256_CBC_SHA,"
++                                          . "+TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA,"
++                                          . "+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,"
++                                          . "-TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,"
++                                          . "-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,"
++                                          . "-TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,"
++                                          . "+TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA,"
++                                          . "+TLS_DHE_DSS_WITH_AES_128_CBC_SHA,"
++                                          . "+TLS_DHE_DSS_WITH_AES_256_CBC_SHA,"
++                                          . "+TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA,"
++                                          . "+TLS_DHE_RSA_WITH_AES_128_CBC_SHA,"
++                                          . "+TLS_DHE_RSA_WITH_AES_256_CBC_SHA,"
++                                          . "+TLS_DHE_RSA_WITH_AES_128_CBC_SHA256,"
++                                          . "+TLS_DHE_RSA_WITH_AES_256_CBC_SHA256,"
++                                          . "+TLS_RSA_WITH_AES_128_CBC_SHA256,"
++                                          . "+TLS_RSA_WITH_AES_256_CBC_SHA256,"
++                                          . "+TLS_RSA_WITH_AES_128_GCM_SHA256,"
++                                          . "+TLS_DHE_RSA_WITH_AES_128_GCM_SHA256,"
++                                          . "+TLS_DHE_DSS_WITH_AES_128_GCM_SHA256,"
++                                          . "+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,"
++                                          . "+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,"
++                                          . "+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,"
++                                          . "+TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256,"
++                                          . "+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,"
++                                          . "+TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256";
++        $slot_hash{$TOMCAT_SSL_OPTIONS}        = "ssl2=false,ssl3=false,tls=true";
+         $slot_hash{$TOMCAT_SSL2_CIPHERS}       = "-SSL2_RC4_128_WITH_MD5,-SSL2_RC4_128_EXPORT40_WITH_MD5,"
+                                           . "-SSL2_RC2_128_CBC_WITH_MD5,-SSL2_RC2_128_CBC_EXPORT40_WITH_MD5,"
+                                           . "-SSL2_DES_64_CBC_WITH_MD5,-SSL2_DES_192_EDE3_CBC_WITH_MD5";
+diff -rupN pki-core-9.0.3.orig/base/silent/src/ca/DirEnroll.java pki-core-9.0.3/base/silent/src/ca/DirEnroll.java
+--- pki-core-9.0.3.orig/base/silent/src/ca/DirEnroll.java	2011-02-04 08:57:24.000000000 -0800
++++ pki-core-9.0.3/base/silent/src/ca/DirEnroll.java	2015-02-11 16:20:03.000000000 -0800
+@@ -117,6 +117,31 @@ public class DirEnroll extends TestClien
+         Authenticator = s;
+     }
+ 
++    public void setSSLVersionRangeDefaults() throws Exception {
++        try {
++            // Establish SSL Version Range Defaults
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange stream_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.STREAM,
++                    stream_range);
++
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange datagram_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_1,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.DATA_GRAM,
++                    datagram_range);
++        } catch (Exception e) {
++            System.out.println("exception " + e.toString());
++        }
++    }
++
+     public boolean enroll_load() {
+         buildquery();
+         return(Send());
+@@ -266,8 +291,11 @@ public class DirEnroll extends TestClien
+             ErrorDetail = null;
+             GregorianCalendar begin = new GregorianCalendar();
+ 
++            setSSLVersionRangeDefaults();
+             // SSLSocket socket = new SSLSocket(host,port);
+             SSLSocket socket = new SSLSocket(host, port, null, 0, this, null);
++            // setSSLVersionRange needs to be exposed in jss
++            // socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 
+             socket.setUseClientMode(true);
+ 
+diff -rupN pki-core-9.0.3.orig/base/silent/src/ca/UserEnroll.java pki-core-9.0.3/base/silent/src/ca/UserEnroll.java
+--- pki-core-9.0.3.orig/base/silent/src/ca/UserEnroll.java	2011-02-04 08:57:24.000000000 -0800
++++ pki-core-9.0.3/base/silent/src/ca/UserEnroll.java	2015-02-11 16:19:51.000000000 -0800
+@@ -109,6 +109,31 @@ public class UserEnroll extends TestClie
+         }
+     }
+ 
++    public void setSSLVersionRangeDefaults() throws Exception {
++        try {
++            // Establish SSL Version Range Defaults
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange stream_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.STREAM,
++                    stream_range);
++
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange datagram_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_1,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.DATA_GRAM,
++                    datagram_range);
++        } catch (Exception e) {
++            System.out.println("exception " + e.toString());
++        }
++    }
++
+     /**
+      * Set Certificate Request information. Takes parameters - subjectdn,E,CN,UID,OU,O 
+      */
+@@ -231,8 +256,11 @@ public class UserEnroll extends TestClie
+ 
+             GregorianCalendar begin = new GregorianCalendar();
+ 
++            setSSLVersionRangeDefaults();
+             // SSLSocket socket = new SSLSocket(host,port);
+             SSLSocket socket = new SSLSocket(host, port, null, 0, this, null);
++            // setSSLVersionRange needs to be exposed in jss
++            // socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 
+             socket.setUseClientMode(true);
+             OutputStream rawos = socket.getOutputStream();
+diff -rupN pki-core-9.0.3.orig/base/silent/src/ca/checkRequest.java pki-core-9.0.3/base/silent/src/ca/checkRequest.java
+--- pki-core-9.0.3.orig/base/silent/src/ca/checkRequest.java	2011-02-04 08:57:24.000000000 -0800
++++ pki-core-9.0.3/base/silent/src/ca/checkRequest.java	2015-02-11 16:20:19.000000000 -0800
+@@ -174,6 +174,31 @@ public class checkRequest extends TestCl
+         return 0;
+     }
+ 
++    public void setSSLVersionRangeDefaults() throws Exception {
++        try {
++            // Establish SSL Version Range Defaults
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange stream_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.STREAM,
++                    stream_range);
++
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange datagram_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_1,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.DATA_GRAM,
++                    datagram_range);
++        } catch (Exception e) {
++            System.out.println("exception " + e.toString());
++        }
++    }
++
+     /**
+      * Submits a checkRequestStatus request to the server
+      **/
+@@ -455,8 +480,11 @@ public class checkRequest extends TestCl
+ 
+             impStatus = false;
+ 
++            setSSLVersionRangeDefaults();
+             // SSLSocket socket = new SSLSocket(host,port);
+             SSLSocket socket = new SSLSocket(host, port, null, 0, this, null);
++            // setSSLVersionRange needs to be exposed in jss
++            // socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 
+             socket.setUseClientMode(true);
+ 
+diff -rupN pki-core-9.0.3.orig/base/silent/src/common/Con2Agent.java pki-core-9.0.3/base/silent/src/common/Con2Agent.java
+--- pki-core-9.0.3.orig/base/silent/src/common/Con2Agent.java	2011-02-04 08:57:25.000000000 -0800
++++ pki-core-9.0.3/base/silent/src/common/Con2Agent.java	2015-02-11 16:19:33.000000000 -0800
+@@ -161,6 +161,31 @@ public class Con2Agent implements SSLCli
+         ACTIONURL = url;
+     }
+ 
++    public void setSSLVersionRangeDefaults() throws Exception {
++        try {
++            // Establish SSL Version Range Defaults
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange stream_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.STREAM,
++                    stream_range);
++
++            org.mozilla.jss.ssl.SSLSocket.SSLVersionRange datagram_range =
++                new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_1,
++                    org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++            SSLSocket.setSSLVersionRangeDefault(
++                    org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.DATA_GRAM,
++                    datagram_range);
++        } catch (Exception e) {
++            System.out.println("exception " + e.toString());
++        }
++    }
++
+     // Submit requests 
+ 
+     public boolean Send() {
+@@ -172,7 +197,10 @@ public class Con2Agent implements SSLCli
+                 return false;
+             }
+ 
++            setSSLVersionRangeDefaults();
+             SSLSocket socket = new SSLSocket(host, port, null, 0, this, null);
++            // setSSLVersionRange needs to be exposed in jss
++            // socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 
+             System.out.println("Con2Agent.java: host = " + host);
+             System.out.println("Con2Agent.java: port = " + port);
+@@ -289,7 +317,10 @@ public class Con2Agent implements SSLCli
+                 return false;
+             }
+ 
++            setSSLVersionRangeDefaults();
+             SSLSocket socket = new SSLSocket(host, port, null, 0, this, null);
++            // setSSLVersionRange needs to be exposed in jss
++            // socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 
+             socket.setClientCertNickname(certnickname);
+             System.out.println("Connected to the socket");
+diff -rupN pki-core-9.0.3.orig/base/silent/src/http/HTTPClient.java pki-core-9.0.3/base/silent/src/http/HTTPClient.java
+--- pki-core-9.0.3.orig/base/silent/src/http/HTTPClient.java	2011-02-04 08:57:24.000000000 -0800
++++ pki-core-9.0.3/base/silent/src/http/HTTPClient.java	2015-02-11 16:19:01.000000000 -0800
+@@ -83,58 +83,29 @@ public class HTTPClient implements SSLCe
+ 		ecc_support = ecc;
+ 	}
+ 
+-	public boolean setCipherPref(SSLSocket socket)
+-	{
+-
+-		if(ecc_support)
+-		{
+-	    	int ecc_Ciphers[] = {
+-			SSLSocket.TLS_ECDH_ECDSA_WITH_NULL_SHA,         SSLSocket.TLS_ECDH_ECDSA_WITH_RC4_128_SHA,
+-			SSLSocket.TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA, SSLSocket.TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA,
+-			SSLSocket.TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA,  SSLSocket.TLS_ECDHE_ECDSA_WITH_NULL_SHA,
+-			SSLSocket.TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,     SSLSocket.TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA,
+-			SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA, SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+-			SSLSocket.TLS_ECDH_RSA_WITH_NULL_SHA,           SSLSocket.TLS_ECDH_RSA_WITH_RC4_128_SHA,
+-			SSLSocket.TLS_ECDH_RSA_WITH_AES_128_CBC_SHA,    SSLSocket.TLS_ECDH_RSA_WITH_AES_256_CBC_SHA,
+-			SSLSocket.TLS_ECDHE_RSA_WITH_NULL_SHA,          SSLSocket.TLS_ECDHE_RSA_WITH_RC4_128_SHA,
+-			SSLSocket.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,  SSLSocket.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+-			SSLSocket.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+-			0 };
+-
+-			try
+-			{
+-				for (int i=0; i < ecc_Ciphers.length; i++)
+-				{
+-						if(ecc_Ciphers[i] > 0)
+-							socket.setCipherPreference(
+-								ecc_Ciphers[i],true);
+-				}
+-			}
+-			catch(Exception e)
+-			{
+-				System.out.println("ERROR: unable to set ECC Cipher List");
+-				System.out.println("ERROR: Exception  = " + e.getMessage());
+-			}
+-
++	public void setSSLVersionRangeDefaults() throws Exception {
++		try {
++			// Establish SSL Version Range Defaults
++			org.mozilla.jss.ssl.SSLSocket.SSLVersionRange stream_range =
++				new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++					org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0,
++					org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++			SSLSocket.setSSLVersionRangeDefault(
++					org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.STREAM,
++					stream_range);
++
++			org.mozilla.jss.ssl.SSLSocket.SSLVersionRange datagram_range =
++				new org.mozilla.jss.ssl.SSLSocket.SSLVersionRange(
++					org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_1,
++					org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
++
++			SSLSocket.setSSLVersionRangeDefault(
++					org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant.DATA_GRAM,
++					datagram_range);
++		} catch (Exception e) {
++			System.out.println("exception " + e.toString());
+ 		}
+-		return true;
+-	}
+-
+-	public boolean disableSSL2(SSLSocket socket)
+-	{
+-		try
+-		{
+-			socket.enableSSL3Default(true);
+-			socket.enableSSL3(true);
+-			socket.enableSSL2(false);
+-			socket.enableSSL2Default(false);
+-            socket.enableV2CompatibleHello(false);
+-		}
+-		catch(Exception e)
+-		{
+-			System.out.println("ERROR: Exception  = " + e.getMessage());
+-		}
+-		return true;
+ 	}
+ 
+ 	public X509Certificate getServerCert()
+@@ -175,11 +146,12 @@ public class HTTPClient implements SSLCe
+ 			SSLClientCertificateSelectionCallback certSelectionCallback = 
+ 								new TestClientCertificateSelectionCallback();
+ 
++			setSSLVersionRangeDefaults();
+ 			Socket js = new Socket(InetAddress.getByName(hostname), port);
+ 			SSLSocket socket = new SSLSocket(js, hostname, this, 
+ 						certSelectionCallback );
+-			setCipherPref(socket);
+-			disableSSL2(socket);
++			// setSSLVersionRange needs to be exposed in jss
++			// socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 			socket.forceHandshake();
+ 			System.out.println("Connected.");
+ 			socket.setUseClientMode(true);
+@@ -232,11 +204,12 @@ public class HTTPClient implements SSLCe
+ 			// Client Cert for Auth is set here
+ 			certSelectionCallback.setClientCert(client_cert);
+ 
++			setSSLVersionRangeDefaults();
+ 			Socket js = new Socket(InetAddress.getByName(hostname), port);
+ 			SSLSocket socket = new SSLSocket(js, hostname, approvalCallback, 
+ 						certSelectionCallback );
+-			disableSSL2(socket);
+-			setCipherPref(socket);
++			// setSSLVersionRange needs to be exposed in jss
++			// socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 			socket.forceHandshake();
+ 			System.out.println("Connected.");
+ 			socket.setUseClientMode(true);
+@@ -323,11 +296,12 @@ public class HTTPClient implements SSLCe
+ 			SSLClientCertificateSelectionCallback certSelectionCallback = 
+ 								new TestClientCertificateSelectionCallback();
+ 
++			setSSLVersionRangeDefaults();
+ 			Socket js = new Socket(InetAddress.getByName(hostname), port);
+ 			SSLSocket socket = new SSLSocket(js, hostname, approvalCallback, 
+ 						certSelectionCallback );
+-			setCipherPref(socket);
+-			disableSSL2(socket);
++			// setSSLVersionRange needs to be exposed in jss
++			// socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 			socket.forceHandshake();
+ 			System.out.println("Connected.");
+ 			socket.setUseClientMode(true);
+@@ -1094,11 +1068,12 @@ public class HTTPClient implements SSLCe
+ 			SSLClientCertificateSelectionCallback certSelectionCallback = 
+ 								new TestClientCertificateSelectionCallback();
+ 
++			setSSLVersionRangeDefaults();
+ 			Socket js = new Socket(InetAddress.getByName(hostname), port);
+ 			SSLSocket socket = new SSLSocket(js, hostname, approvalCallback, 
+ 						certSelectionCallback );
+-			setCipherPref(socket);
+-			disableSSL2(socket);
++			// setSSLVersionRange needs to be exposed in jss
++			// socket.setSSLVersionRange(org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_0, org.mozilla.jss.ssl.SSLSocket.SSLVersionRange.tls1_2);
+ 			socket.forceHandshake();
+ 			System.out.println("Connected.");
+ 			socket.setUseClientMode(true);
+diff -rupN pki-core-9.0.3.orig/base/util/src/com/netscape/cmsutil/http/JssSSLSocketFactory.java pki-core-9.0.3/base/util/src/com/netscape/cmsutil/http/JssSSLSocketFactory.java
+--- pki-core-9.0.3.orig/base/util/src/com/netscape/cmsutil/http/JssSSLSocketFactory.java	2011-02-04 08:58:30.000000000 -0800
++++ pki-core-9.0.3/base/util/src/com/netscape/cmsutil/http/JssSSLSocketFactory.java	2015-02-10 14:31:56.000000000 -0800
+@@ -43,44 +43,6 @@ public class JssSSLSocketFactory impleme
+         mClientAuthCertNickname = certNickname;
+     }
+ 
+-    // XXX remove these static SSL cipher suite initializations later on.
+-    static final int cipherSuites[] = {
+-            SSLSocket.SSL3_RSA_WITH_RC4_128_MD5,
+-            SSLSocket.SSL3_RSA_WITH_3DES_EDE_CBC_SHA,
+-            SSLSocket.SSL3_RSA_WITH_DES_CBC_SHA,
+-            SSLSocket.SSL3_RSA_EXPORT_WITH_RC4_40_MD5,
+-            SSLSocket.SSL3_RSA_EXPORT_WITH_RC2_CBC_40_MD5,
+-            SSLSocket.SSL3_RSA_WITH_NULL_MD5,
+-            0
+-        };
+-	
+-    static {
+-        int i;
+-
+-        for (i = SSLSocket.SSL2_RC4_128_WITH_MD5;
+-            i <= SSLSocket.SSL2_RC2_128_CBC_EXPORT40_WITH_MD5; ++i) {
+-            try {
+-                SSLSocket.setCipherPreferenceDefault(i, false);
+-            } catch( SocketException e) {
+-            }
+-        }
+-
+-        //skip SSL_EN_IDEA_128_EDE3_CBC_WITH_MD5
+-        for (i = SSLSocket.SSL2_DES_64_CBC_WITH_MD5;
+-            i <= SSLSocket.SSL2_DES_192_EDE3_CBC_WITH_MD5; ++i) {
+-            try {
+-                SSLSocket.setCipherPreferenceDefault(i, false);
+-            } catch( SocketException e) {
+-            }
+-        }
+-        for (i = 0; cipherSuites[i] != 0; ++i) {
+-            try {
+-                SSLSocket.setCipherPreferenceDefault(cipherSuites[i], true);
+-            } catch( SocketException e) {
+-            }
+-        }
+-    }
+-
+     public Socket makeSocket(String host, int port) 
+         throws IOException, UnknownHostException {
+         return makeSocket(host, port, null, null);
+@@ -92,12 +54,12 @@ public class JssSSLSocketFactory impleme
+       throws IOException, UnknownHostException {
+ 
+         try {
++            /*
++             * let inherit tls range and cipher settings
++             */
+             s = new SSLSocket(host, port, null, 0, certApprovalCallback,
+               clientCertCallback);
+             s.setUseClientMode(true);
+-            s.enableSSL2(false);
+-            s.enableSSL2Default(false);
+-            s.enableV2CompatibleHello(false);
+ 
+             SSLHandshakeCompletedListener listener = null;
+ 

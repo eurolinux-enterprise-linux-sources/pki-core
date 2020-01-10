@@ -1,0 +1,31 @@
+From 7947d16c02559cc27e666ff54526c66063099221 Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Tue, 25 Sep 2012 11:19:05 -0700
+Subject: [PATCH] Resolves #844459 - Increase audit cert renewal range to 2 years
+
+---
+ base/ca/shared/profiles/ca/caSignedLogCert.cfg |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/base/ca/shared/profiles/ca/caSignedLogCert.cfg b/base/ca/shared/profiles/ca/caSignedLogCert.cfg
+index ad5a096..7c99f2b 100644
+--- a/base/ca/shared/profiles/ca/caSignedLogCert.cfg
++++ b/base/ca/shared/profiles/ca/caSignedLogCert.cfg
+@@ -20,12 +20,12 @@ policyset.caLogSigningSet.1.default.name=Subject Name Default
+ policyset.caLogSigningSet.1.default.params.name=
+ policyset.caLogSigningSet.2.constraint.class_id=validityConstraintImpl
+ policyset.caLogSigningSet.2.constraint.name=Validity Constraint
+-policyset.caLogSigningSet.2.constraint.params.range=365
++policyset.caLogSigningSet.2.constraint.params.range=720
+ policyset.caLogSigningSet.2.constraint.params.notBeforeCheck=false
+ policyset.caLogSigningSet.2.constraint.params.notAfterCheck=false
+ policyset.caLogSigningSet.2.default.class_id=validityDefaultImpl
+ policyset.caLogSigningSet.2.default.name=Validity Default
+-policyset.caLogSigningSet.2.default.params.range=180
++policyset.caLogSigningSet.2.default.params.range=720
+ policyset.caLogSigningSet.2.default.params.startTime=60
+ policyset.caLogSigningSet.3.constraint.class_id=keyConstraintImpl
+ policyset.caLogSigningSet.3.constraint.name=Key Constraint
+-- 
+1.7.1
+

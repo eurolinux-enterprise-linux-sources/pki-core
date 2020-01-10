@@ -1,0 +1,35 @@
+From 1bc7cec7097c381aa6ad6110bef8235edb3b0ee1 Mon Sep 17 00:00:00 2001
+From: Ade Lee <alee@redhat.com>
+Date: Thu, 29 Aug 2013 14:19:08 -0700
+Subject: [PATCH] Resolves #999055 - AVC denials during ipa server and replica installs
+
+---
+ base/selinux/src/pki.if |    1 +
+ base/selinux/src/pki.te |    2 +-
+ 2 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/base/selinux/src/pki.if b/base/selinux/src/pki.if
+index 737eb220a324219c24c2a1439ae2d6e4185d0c0f..de11ee0b45e9a725c3ff7514be10ac7e3b0c71dc 100644
+--- a/base/selinux/src/pki.if
++++ b/base/selinux/src/pki.if
+@@ -158,6 +158,7 @@ template(`pki_ca_template',`
+         corecmd_search_bin($1_t)
+ 
+ 	dev_list_sysfs($1_t)
++        dev_read_sysfs($1_t)
+ 	dev_read_rand($1_t)
+ 	dev_read_urand($1_t)
+ 
+diff --git a/base/selinux/src/pki.te b/base/selinux/src/pki.te
+index 846057b3aa93f0c20344f26c4baf9bb8b1919775..0dd0bba0c5213dda55fe157983d8e091f717db13 100644
+--- a/base/selinux/src/pki.te
++++ b/base/selinux/src/pki.te
+@@ -1,4 +1,4 @@
+-policy_module(pki,6.4.2)
++policy_module(pki,6.4.3)
+ 
+ attribute pki_ca_config;
+ attribute pki_ca_executable;
+-- 
+1.7.1
+

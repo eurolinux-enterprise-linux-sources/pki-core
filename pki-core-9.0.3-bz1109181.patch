@@ -1,0 +1,20 @@
+diff -rupN pki-core-9.0.3.orig/base/selinux/src/pki.if pki-core-9.0.3/base/selinux/src/pki.if
+--- pki-core-9.0.3.orig/base/selinux/src/pki.if	2014-06-26 14:43:13.000000000 -0700
++++ pki-core-9.0.3/base/selinux/src/pki.if	2014-06-26 14:52:31.000000000 -0700
+@@ -90,6 +90,7 @@ template(`pki_ca_template',`
+ 
+         # allow certmonger to read certdb files
+         pki_rw_tomcat_cert($1, certmonger_t)
++        allow certmonger_t $1_cert_t:dir {read write};
+         allow certmonger_t $1_var_lib_t:dir search;
+ 
+ 	## internal communication is often done using fifo and unix sockets.
+diff -rupN pki-core-9.0.3.orig/base/selinux/src/pki.te pki-core-9.0.3/base/selinux/src/pki.te
+--- pki-core-9.0.3.orig/base/selinux/src/pki.te	2014-06-26 14:43:13.000000000 -0700
++++ pki-core-9.0.3/base/selinux/src/pki.te	2014-06-26 14:52:55.000000000 -0700
+@@ -1,4 +1,4 @@
+-policy_module(pki,6.4.3)
++policy_module(pki,6.6.1)
+ 
+ attribute pki_ca_config;
+ attribute pki_ca_executable;

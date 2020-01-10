@@ -1,0 +1,16 @@
+diff -rupN pki-core-9.0.3.orig/base/ca/src/com/netscape/ca/CAService.java pki-core-9.0.3/base/ca/src/com/netscape/ca/CAService.java
+--- pki-core-9.0.3.orig/base/ca/src/com/netscape/ca/CAService.java	2011-02-04 08:56:27.000000000 -0800
++++ pki-core-9.0.3/base/ca/src/com/netscape/ca/CAService.java	2014-09-24 20:16:48.000000000 -0700
+@@ -636,10 +636,10 @@ public class CAService implements ICASer
+                 exts = (CertificateExtensions)
+                     certi.get(X509CertInfo.EXTENSIONS);
+                 if (exts != null) {
+-                    Enumeration e = exts.getElements();
++                    Enumeration<netscape.security.x509.Extension> e = exts.getElements();
+ 
+                     while (e.hasMoreElements()) {
+-                        Extension ext = (Extension) e.nextElement();
++                        netscape.security.x509.Extension ext = (netscape.security.x509.Extension) e.nextElement();
+ 
+                         if (ext.getExtensionId().toString().equals(PKIXExtensions.BasicConstraints_Id.toString())) {
+                             bc_ext = (BasicConstraintsExtension) ext;

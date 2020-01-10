@@ -1,0 +1,247 @@
+diff -rupN pki-core-9.0.3.orig/base/silent/scripts/pkisilent pki-core-9.0.3/base/silent/scripts/pkisilent
+--- pki-core-9.0.3.orig/base/silent/scripts/pkisilent	2014-05-23 11:50:00.000000000 -0700
++++ pki-core-9.0.3/base/silent/scripts/pkisilent	2014-06-03 15:27:37.000000000 -0700
+@@ -146,6 +146,7 @@ $ENV{CLASSPATH} = "/usr/share/java/${PRO
+ 	. "/usr/share/java/${PRODUCT}/pki-nsutil.jar:"
+ 	. "/usr/share/java/${PRODUCT}/pki-cmsutil.jar:"
+ 	. "/usr/share/java/${PRODUCT}/pki-tools.jar:"
++	. "/usr/share/java/jakarta-commons-io.jar:"
+ 	. "/usr/share/java/ldapjdk.jar:"
+ 	. "/usr/share/java/xerces-j2.jar:"
+ 	. "/usr/share/java/xml-commons-apis.jar:"
+diff -rupN pki-core-9.0.3.orig/base/silent/src/CMakeLists.txt pki-core-9.0.3/base/silent/src/CMakeLists.txt
+--- pki-core-9.0.3.orig/base/silent/src/CMakeLists.txt	2011-02-04 08:57:25.000000000 -0800
++++ pki-core-9.0.3/base/silent/src/CMakeLists.txt	2014-06-03 15:28:16.000000000 -0700
+@@ -1,5 +1,13 @@
+ project(pki-silent_java Java)
+ 
++find_file(JAKARTA_COMMONS_IO_JAR
++    NAMES
++        jakarta-commons-io.jar
++    PATHS
++        /usr/lib/java
++        /usr/share/java
++)
++
+ find_file(JSS_JAR
+     NAMES
+         jss4.jar
+@@ -75,6 +83,7 @@ set(pki-silent_java_SRCS
+ set(CMAKE_JAVA_INCLUDE_PATH
+     ${PKI_CERTSRV_JAR} ${PKI_CMS_JAR}
+     ${PKI_CMSUTIL_JAR} ${PKI_NSUTIL_JAR}
++    ${JAKARTA_COMMONS_IO_JAR}
+     ${LDAPJDK_JAR} ${XERCES_JAR}
+     ${JSS_JAR} ${OSUTIL_JAR} ${SYMKEY_JAR})
+ 
+diff -rupN pki-core-9.0.3.orig/base/silent/src/common/ParseXML.java pki-core-9.0.3/base/silent/src/common/ParseXML.java
+--- pki-core-9.0.3.orig/base/silent/src/common/ParseXML.java	2014-05-23 11:50:02.000000000 -0700
++++ pki-core-9.0.3/base/silent/src/common/ParseXML.java	2014-06-06 16:13:29.000000000 -0700
+@@ -17,12 +17,14 @@
+ // --- END COPYRIGHT BLOCK ---
+ 
+ import org.w3c.dom.*;
++import org.apache.commons.io.IOUtils;
+ import org.apache.xml.serialize.*;
+ 
+ import javax.xml.parsers.*;
+ import java.util.*;
+ import java.io.*;
+ import java.net.*;
++import java.nio.charset.Charset;
+ import java.text.*;
+ 
+ 
+@@ -32,7 +34,10 @@ public class ParseXML {
+ 
+     // set true to provide files containing original and filtered XML content:
+     // (NOTE:  only relevant when 'filterXML=true')
+-    private static boolean debugOriginalAndFilteredXML = true;
++    private static boolean debugOriginalAndFilteredXML = false;
++
++    // set true to provide a file containing calibrated XML content:
++    private static boolean debugCalibratedXML = false;
+ 
+     Document dom = null;
+ 
+@@ -63,8 +68,10 @@ public class ParseXML {
+ 
+             fis = new BufferedInputStream(is);
+             baos = new ByteArrayOutputStream();
+-            original = new FileOutputStream(original_data);
+-            filtered = new FileOutputStream(filtered_data);
++            if (debugOriginalAndFilteredXML) {
++                original = new FileOutputStream(original_data);
++                filtered = new FileOutputStream(filtered_data);
++            }
+ 
+             while ((i = fis.read()) != -1) {
+                 count++;
+@@ -117,6 +124,75 @@ public class ParseXML {
+         return bais;
+     }
+ 
++    // There are five special XML characters which need to be escaped:
++    //
++    //     &  -->  &amp;
++    //     <  -->  &lt;
++    //     >  -->  &gt;
++    //     "  -->  &quot;
++    //     '  -->  &apos;
++    //
++    // However, this method ONLY replaces '&' with '&amp;'.
++    //
++    //
++    // NOTE:  Adding 'import org.apache.commons.lang.StringEscapeUtils;'
++    //        and invoking 'StringEscapeUtils.escapeXml(str)' replaces the
++    //        XML tags as well since they are not sufficiently parsed out
++    //        or transformed within a DOM tree prior to entering this method,
++    //        and without this routine, 'db.parse(data)' may fail (e. g. -
++    //        if a DN contains the '&' character).
++    //
++    public static ByteArrayInputStream calibrateXMLData(java.io.InputStream is,
++                                                        String calibrated_data)
++                                       throws IOException {
++        ByteArrayInputStream bais = null;
++        FileOutputStream calibrated = null;
++
++        try {
++            // Read Input Stream into a String
++            String XMLData = IOUtils.toString(is, "UTF-8");
++
++            // Check for any occurences of '&' and replace with '&amp;'
++            if (XMLData.contains("&")) {
++                XMLData=XMLData.replaceAll("&", "&amp;");
++
++                // fix any inadvertant errors caused to previously escaped XML
++                if (XMLData.contains("&amp;amp;")) {
++                    XMLData=XMLData.replaceAll("&amp;amp;", "&amp;");
++                }
++                if (XMLData.contains("&amp;lt;")) {
++                    XMLData=XMLData.replaceAll("&amp;lt;", "&lt;");
++                }
++                if (XMLData.contains("&amp;gt;")) {
++                    XMLData=XMLData.replaceAll("&amp;gt;", "&gt;");
++                }
++                if (XMLData.contains("&amp;quot;")) {
++                    XMLData=XMLData.replaceAll("&amp;quot;", "&quot;");
++                }
++                if (XMLData.contains("&amp;apos;")) {
++                    XMLData=XMLData.replaceAll("&amp;apos;", "&apos;");
++                }
++            }
++
++            if (debugCalibratedXML) {
++                // save this data to the calibrated_data file
++                calibrated = new FileOutputStream(calibrated_data);
++                calibrated.write(XMLData.getBytes(Charset.forName("UTF-8")));
++            }
++
++            // place the calibrated XML into a new ByteArrayInputStream
++            bais = new ByteArrayInputStream(XMLData.getBytes());
++        } catch(IOException e) {
++            System.out.println("IOException: " + e);
++        } finally {
++            if (calibrated!=null) {
++                calibrated.close();
++            }
++        }
++
++        return bais;
++    }
++
+     public void parse(java.io.InputStream is) {
+         try {
+             // get the factory
+@@ -125,12 +201,17 @@ public class ParseXML {
+             // Using factory get an instance of document builder
+             DocumentBuilder db = dbf.newDocumentBuilder();
+ 
+-            if (filterXML) {
+-                // establish a timestamp
+-                Date now = new Date();
+-                SimpleDateFormat df = new SimpleDateFormat("yyyyMMddHHmmssSSS");
+-                String dateString = df.format(now);
++            // establish a timestamp
++            Date now = new Date();
++            SimpleDateFormat df = new SimpleDateFormat("yyyyMMddHHmmssSSS");
++            String dateString = df.format(now);
++
++            String calibrated_data = "/tmp/calibrated_XML_data" + "." +
++                                     dateString;
+ 
++            ByteArrayInputStream data = null;
++
++            if (filterXML) {
+                 // create two XML data file names (original and filtered)
+                 String original_data = "/tmp/original_XML_data" + "." +
+                                        dateString;
+@@ -138,40 +219,43 @@ public class ParseXML {
+                                        dateString;
+ 
+                 int size = 0;
+-                // filter XML from original InputStream
+-                if (is != null) {
+-                    if (debugOriginalAndFilteredXML) {
+-                        // advertise name of original data file
+-                        System.out.println("ORIGINAL XML data:  " +
+-                                           original_data);
++                if (debugOriginalAndFilteredXML) {
++                    if (is != null) {
++                            // advertise name of original data file
++                            System.out.println("ORIGINAL XML data:  " +
++                                               original_data);
++                        size = is.available();
++                        System.out.println("ORIGINAL size of XML data:  " + size);
++                    } else {
++                        System.out.println("ORIGINAL size of XML data is NULL!");
+                     }
+-                    size = is.available();
+-                    System.out.println("ORIGINAL size of XML data:  " + size);
+-                } else {
+-                    System.out.println("ORIGINAL size of XML data is NULL!");
+                 }
++
++                // filter XML from original InputStream
+                 ByteArrayInputStream bais = filterXMLData(is, original_data,
+                                                           filtered_data);
+-                if (bais != null) {
+-                    size = bais.available();
+-                    System.out.println("FILTERED size of XML data:  " + size);
+-                    if (debugOriginalAndFilteredXML) {
+-                        // advertise name of filtered data file
+-                        System.out.println("FILTERED XML data:  " +
+-                                           filtered_data);
++                if (debugOriginalAndFilteredXML) {
++                    if (bais != null) {
++                            // advertise name of filtered data file
++                            System.out.println("FILTERED XML data:  " +
++                                               filtered_data);
++                        size = bais.available();
++                        System.out.println("FILTERED size of XML data:  " + size);
++                    } else {
++                        System.out.println("FILTERED size of XML data is NULL!");
+                     }
+-                } else {
+-                    System.out.println("FILTERED size of XML data is NULL!");
+                 }
+ 
+-                // parse using builder to get DOM representation
+-                // of the filtered XML file
+-                dom = db.parse(bais);
++                // calibrate XML data from the filtered data
++                data = calibrateXMLData(bais, calibrated_data);
+             } else {
+-                // parse using builder to get DOM representation
+-                // of the original XML file
+-                dom = db.parse(is);
++                // calibrate XML data from the original un-filtered data
++                data = calibrateXMLData(is, calibrated_data);
+             }
++
++            // parse using builder to get DOM representation
++            // of the calibrated XML file
++            dom = db.parse(data);
+         } catch (Exception se) {
+             System.out.println("ERROR: unable to parse xml");
+             se.printStackTrace();

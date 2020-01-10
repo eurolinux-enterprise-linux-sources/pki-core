@@ -1,0 +1,30 @@
+diff -rupN pki-core-9.0.3.orig/base/selinux/src/pki.if pki-core-9.0.3/base/selinux/src/pki.if
+--- pki-core-9.0.3.orig/base/selinux/src/pki.if	2014-07-30 13:54:48.000000000 -0700
++++ pki-core-9.0.3/base/selinux/src/pki.if	2014-07-31 11:38:08.000000000 -0700
+@@ -41,6 +41,7 @@ template(`pki_ca_template',`
+ 		type setfiles_t;
+                 type httpd_t;
+                 type certmonger_t;
++		type tomcat_cache_t;
+ 	')
+ 	########################################
+ 	#
+@@ -223,6 +224,9 @@ template(`pki_ca_template',`
+        #reverse proxy
+        corenet_tcp_connect_dogtag_port($1_t)
+ 
++       # new tomcat permissions for rhel 6.6
++       allow $1_t tomcat_cache_t:dir {search getattr};
++
+        fs_getattr_xattr_fs($1_t)
+        fs_rw_hugetlbfs_files($1_t)
+ 
+diff -rupN pki-core-9.0.3.orig/base/selinux/src/pki.te pki-core-9.0.3/base/selinux/src/pki.te
+--- pki-core-9.0.3.orig/base/selinux/src/pki.te	2014-07-30 13:54:48.000000000 -0700
++++ pki-core-9.0.3/base/selinux/src/pki.te	2014-07-30 14:03:09.000000000 -0700
+@@ -1,4 +1,4 @@
+-policy_module(pki,6.6.1)
++policy_module(pki,6.6.2)
+ 
+ attribute pki_ca_config;
+ attribute pki_ca_executable;

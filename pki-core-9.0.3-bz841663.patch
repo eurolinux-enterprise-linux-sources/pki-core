@@ -1,0 +1,78 @@
+From fa594bed9aef7bafd78ee192a47ed252ec1f1391 Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Tue, 25 Sep 2012 11:54:21 -0700
+Subject: [PATCH] Resolves #841663 -  serial number incorrectly cast from BigInt to integer in
+ installation wizard
+
+---
+ .../com/netscape/cms/servlet/csadmin/CertUtil.java |    8 ++++----
+ .../com/netscape/cmsutil/crypto/CryptoUtil.java    |    8 ++++----
+ 2 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
+index dc8adaf..844c157 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
+@@ -338,15 +338,15 @@ public class CertUtil {
+             if (type.equals("selfsign")) {
+                 CMS.debug("Creating local certificate... issuerdn=" + dn);
+                 CMS.debug("Creating local certificate... dn=" + dn);
+-                info = CryptoUtil.createX509CertInfo(x509key, serialNo.intValue(), dn, dn, date,
+-                        date, keyAlgorithm);
++                info = CryptoUtil.createX509CertInfo(x509key, serialNo, dn, dn,
++                        date, date, keyAlgorithm);
+             } else { 
+                 String issuerdn = config.getString("preop.cert.signing.dn", "");
+                 CMS.debug("Creating local certificate... issuerdn=" + issuerdn);
+                 CMS.debug("Creating local certificate... dn=" + dn);
+ 
+-                info = CryptoUtil.createX509CertInfo(x509key,
+-                        serialNo.intValue(), issuerdn, dn, date, date, keyAlgorithm);
++                info = CryptoUtil.createX509CertInfo(x509key, serialNo,
++                        issuerdn, dn, date, date, keyAlgorithm);
+             }
+             CMS.debug("Cert Template: " + info.toString());
+ 
+diff --git a/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java b/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
+index 0083dc9..e86619b 100644
+--- a/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
++++ b/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
+@@ -567,7 +567,7 @@ public class CryptoUtil {
+      * Creates a Certificate template.
+      */
+     public static X509CertInfo createX509CertInfo(KeyPair pair,
+-            int serialno, String issuername, String subjname, 
++            BigInteger serialno, String issuername, String subjname,
+             Date notBefore, Date notAfter)
+         throws IOException, 
+                 CertificateException, 
+@@ -577,7 +577,7 @@ public class CryptoUtil {
+     }
+ 
+     public static X509CertInfo createX509CertInfo(PublicKey publickey,
+-            int serialno, String issuername, String subjname, 
++            BigInteger serialno, String issuername, String subjname,
+             Date notBefore, Date notAfter)
+         throws IOException, 
+                 CertificateException, 
+@@ -587,7 +587,7 @@ public class CryptoUtil {
+     }
+ 
+     public static X509CertInfo createX509CertInfo(X509Key x509key,
+-            int serialno, String issuername, String subjname, 
++            BigInteger serialno, String issuername, String subjname,
+             Date notBefore, Date notAfter)
+         throws IOException, 
+                 CertificateException, 
+@@ -603,7 +603,7 @@ public class CryptoUtil {
+     }
+ 
+     public static X509CertInfo createX509CertInfo(X509Key x509key,
+-            int serialno, String issuername, String subjname, 
++            BigInteger serialno, String issuername, String subjname,
+             Date notBefore, Date notAfter, String alg)
+         throws IOException, 
+                 CertificateException, 
+-- 
+1.7.1
+

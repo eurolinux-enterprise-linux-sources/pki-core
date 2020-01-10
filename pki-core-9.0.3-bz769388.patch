@@ -1,0 +1,30 @@
+From d11fa0d0ac3df05dcc4596ceea88879d7e3542ad Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Mon, 5 Mar 2012 19:17:28 -0800
+Subject: [PATCH] BZ 769388 - pki-silent does not properly escape command-line
+ arguments
+
+---
+ pki/base/silent/scripts/pkisilent |    6 +++++-
+ 1 files changed, 5 insertions(+), 1 deletions(-)
+
+diff --git a/pki/base/silent/scripts/pkisilent b/pki/base/silent/scripts/pkisilent
+index 2141f36..2815851 100755
+--- a/pki/base/silent/scripts/pkisilent
++++ b/pki/base/silent/scripts/pkisilent
+@@ -161,7 +161,11 @@ $ENV{CLASSPATH} = "/usr/share/java/${PRODUCT}/pki-silent.jar:"
+ ##      based upon the preset LD_LIBRARY_PATH and CP environment variables.  ##
+ ###############################################################################
+ 
+-my $output = `java -cp $ENV{CLASSPATH} @ARGV`;
++my @args = ();
++foreach (@ARGV) {
++    push(@args, quotemeta($_));
++}
++my $output = `java -cp $ENV{CLASSPATH} @args`;
+ my $status = $?;
+ 
+ print "#######################################################################\n";
+-- 
+1.7.7.6
+
