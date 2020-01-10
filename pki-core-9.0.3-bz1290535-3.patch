@@ -1,0 +1,45 @@
+commit e19ab4832e176cd75ff947722c501563d11a413d
+Author: Ade Lee <alee@redhat.com>
+Date:   Mon Mar 14 13:02:43 2016 -0700
+
+    Set pkisilent to use Java 1.7
+    
+    Part of BZ 1290535
+
+diff --git a/base/silent/scripts/pkisilent b/base/silent/scripts/pkisilent
+index 21180d1..c6aa878 100755
+--- a/base/silent/scripts/pkisilent
++++ b/base/silent/scripts/pkisilent
+@@ -24,6 +24,7 @@
+ 
+ my $PRODUCT="pki";
+ my $libpath="";
++my $java_cmd="java";
+ 
+ 
+ ###############################################################################
+@@ -69,6 +70,7 @@ if($OS eq "Linux")
+ 		$ENV{LD_LIBRARY_PATH} = "/usr/lib/osutil:"
+ 					. "/usr/lib/jss:"
+ 					. "/usr/lib/:/lib/:" ;
++		$java_cmd = '/usr/lib/jvm/jre-1.7.0-openjdk/bin/java';
+ 	}
+ 
+ 	elsif($ARCHITECTURE eq "x86_64") 
+@@ -81,6 +83,7 @@ if($OS eq "Linux")
+ 					. "/usr/lib/osutil:"
+ 					. "/usr/lib/jss:"
+ 					. "/usr/lib/:/lib/:" ;
++		$java_cmd = '/usr/lib/jvm/jre-1.7.0-openjdk.x86_64/bin/java';
+ 	}
+ 	else
+ 	{
+@@ -166,7 +169,7 @@ my @args = ();
+ foreach (@ARGV) {
+     push(@args, quotemeta($_));
+ }
+-my $output = `java -cp $ENV{CLASSPATH} @args`;
++my $output = `$java_cmd -cp $ENV{CLASSPATH} @args`;
+ my $status = $?;
+ 
+ print "#######################################################################\n";

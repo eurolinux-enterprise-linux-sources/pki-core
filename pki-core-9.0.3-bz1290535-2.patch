@@ -1,0 +1,366 @@
+From 7da2547558bc999ad741bb6b6015106c9ee6820e Mon Sep 17 00:00:00 2001
+From: Ade Lee <alee@redhat.com>
+Date: Thu, 10 Mar 2016 06:49:23 -0800
+Subject: [PATCH] Fix java_home and other 6.8 bugs
+
+Fixes:
+1.  BZ 1306989 - Crash seen with pki-common pkg during IPA server install
+    Crash in upgrade script occurs because prior to configuration,
+    CS.cfg has lines that are comments and that do not parse neatly
+    into a foo=bar pattern.  Now, we will ignore comments and blank lines.
+
+2.  BZ 1290535 - Check for incompatible Java at startup
+    The bulk of this change.  Sets the JAVA_HOME to the 1.7.0 JRE.
+    rather than relying on alternatives.  Also includes migration script
+    for existing instances.
+
+3.  BZ1313207 - ca.subsystem.certreq missing from CS.cfg
+    certreq is not really needed right now for the upgrade scripts.
+    This will ignore the error if it is not present.
+---
+ base/ca/setup/registry_instance                   |    3 +
+ base/ca/shared/conf/tomcat6.conf                  |    1 +
+ base/common/python/pki/server/__init__.py         |   44 ++++++++---
+ base/common/python/pki/server/cli/upgrade.py      |    1 +
+ base/common/python/pki/server/upgrade/__init__.py |   16 ++++
+ base/common/scripts/functions                     |   26 ------
+ base/common/scripts/set-java-home.py              |   85 +++++++++++++++++++++
+ base/setup/pkicreate                              |    7 ++
+ 14 files changed, 158 insertions(+), 37 deletions(-)
+ create mode 100755 base/common/scripts/set-java-home.py
+
+diff --git a/base/ca/setup/registry_instance b/base/ca/setup/registry_instance
+index 3210b9131ae7e08e6cf326aab53ac54ec6dc8392..86a4a4d9c881a8824637ae9712cbb68eaf9528ec 100644
+--- a/base/ca/setup/registry_instance
++++ b/base/ca/setup/registry_instance
+@@ -29,6 +29,9 @@ export PKI_SERVER_XML_CONF
+ CATALINA_BASE=$PKI_INSTANCE_PATH
+ export CATALINA_BASE
+ 
++JAVA_HOME=[PKI_JAVA_HOME]
++export JAVA_HOME
++
+ TOMCAT_PROG=$PKI_INSTANCE_ID
+ export TOMCAT_PROG
+ 
+diff --git a/base/ca/shared/conf/tomcat6.conf b/base/ca/shared/conf/tomcat6.conf
+index 2d7def5ec9256dc59d89c3197c5e723c113a3779..b6706716a11bae827ca43e80beee097b32243121 100644
+--- a/base/ca/shared/conf/tomcat6.conf
++++ b/base/ca/shared/conf/tomcat6.conf
+@@ -16,6 +16,7 @@
+ 
+ # Where your java installation lives
+ #JAVA_HOME="/usr/lib/jvm/java"
++JAVA_HOME="[PKI_JAVA_HOME]"
+ 
+ # Where your tomcat installation lives
+ CATALINA_BASE="[PKI_INSTANCE_PATH]"
+diff --git a/base/common/python/pki/server/__init__.py b/base/common/python/pki/server/__init__.py
+index 34911cc0419015ca14bc6ac6aaec1eb1f84b8841..d15e8fa73c92abb891b5e9816c7901a2f613e526 100644
+--- a/base/common/python/pki/server/__init__.py
++++ b/base/common/python/pki/server/__init__.py
+@@ -24,6 +24,7 @@ import ldap
+ import ldap.filter
+ import nss.nss as nss
+ import os
++import platform
+ 
+ 
+ class PKISubsystem(object):
+@@ -34,9 +35,11 @@ class PKISubsystem(object):
+         self.dir = dir
+         self.cs_conf = os.path.join(self.dir, 'conf', 'CS.cfg')
+         self.password_conf = os.path.join(self.dir, 'conf', 'password.conf')
++        self.sysconfig_conf = os.path.join('/etc/sysconfig', self.name)
+ 
+         self.config = {}
+         self.passwords = {}
++        self.sysconfig = {}
+ 
+         self.type = None
+         self.prefix = None
+@@ -46,27 +49,43 @@ class PKISubsystem(object):
+     def load(self):
+ 
+         self.config = {}
+-
+-        lines =  open(self.cs_conf).read().splitlines()
+-
+-        for line in lines:
+-            parts = line.split('=', 1)
+-            name = parts[0]
+-            value = parts[1]
+-            self.config[name] = value
++        PKISubsystem.load_config_file(self.cs_conf, self.config)
+ 
+         self.type = self.config['cs.type']
+         self.prefix = self.type.lower()
+ 
+         self.passwords = {}
++        PKISubsystem.load_config_file(self.password_conf, self.passwords)
+ 
+-        lines =  open(self.password_conf).read().splitlines()
++        self.sysconfig = {}
++        PKISubsystem.load_config_file(self.sysconfig_conf, self.sysconfig)
+ 
++    @staticmethod
++    def load_config_file(conf_file, conf_hash):
++        lines =  open(conf_file).read().splitlines()
+         for line in lines:
++            if line.startswith('#') or not line.strip():
++                continue
+             parts = line.split('=', 1)
+             name = parts[0]
+             value = parts[1]
+-            self.passwords[name] = value
++            conf_hash[name] = value
++
++    @staticmethod
++    def save_config_file(conf_file, conf_hash):
++        with open(conf_file, "w") as f:
++            for k,v in conf_hash.items():
++                f.write('%s=%s\n' % (k,v))
++
++
++    def rewrite_java_home(self, version):
++        if platform.machine() == 'x86_64':
++            self.sysconfig['JAVA_HOME'] = (
++                "/usr/lib/jvm/jre-%s-openjdk.x86_64" % (version))
++        else:  #i686
++            self.sysconfig['JAVA_HOME'] = (
++                "/usr/lib/jvm/jre-%s-openjdk" % (version))
++        PKISubsystem.save_config_file(self.sysconfig_conf, self.sysconfig)
+ 
+     def get_system_certs(self):
+ 
+@@ -90,7 +109,10 @@ class PKISubsystem(object):
+         cert['usage'] = self.config['%s.cert.%s.certusage' % (self.prefix, tag)]
+         cert['token'] = self.config['%s.%s.tokenname' % (self.prefix, tag)]
+         cert['certificate'] = base64.b64decode(self.config['%s.%s.cert' % (self.prefix, tag)])
+-        cert['request'] = base64.b64decode(self.config['%s.%s.certreq' % (self.prefix, tag)])
++        
++        request_tag = '%s.%s.certreq' % (self.prefix, tag)
++        if request_tag in self.config:
++            cert['request'] = base64.b64decode(self.config[request_tag])
+ 
+         if not nss.nss_is_initialized():
+             nss.nss_init_nodb()
+diff --git a/base/common/python/pki/server/cli/upgrade.py b/base/common/python/pki/server/cli/upgrade.py
+index c435ecbd405cd1e3f6d5b0e0a80be4efdfeb009e..45abd07c210f712aaee47ccfce0991de032357c4 100644
+--- a/base/common/python/pki/server/cli/upgrade.py
++++ b/base/common/python/pki/server/cli/upgrade.py
+@@ -89,6 +89,7 @@ class UpgradeCLI(pki.cli.CLI):
+         if type == 'CA':
+             # This upgrade scriptlet has only been tested against CA
+             scriptlets.append(pki.server.upgrade.RestoreSubsystemUser())
++            scriptlets.append(pki.server.upgrade.SetJavaHome())
+ 
+         counter = 1
+         for scriptlet in scriptlets:
+diff --git a/base/common/python/pki/server/upgrade/__init__.py b/base/common/python/pki/server/upgrade/__init__.py
+index b5fd6d9f4318167301cdd99dff5845d6c4574c30..8f42b383e35416ebb5acaa02033a7634774273a9 100644
+--- a/base/common/python/pki/server/upgrade/__init__.py
++++ b/base/common/python/pki/server/upgrade/__init__.py
+@@ -140,3 +140,19 @@ class RestoreSubsystemUser(object):
+ 
+         if not self.silent:
+             print 'Subsystem user %s restored' % user_id
++
++class SetJavaHome(object):
++
++    def __init__(self):
++        self.description = 'Set Java Home'
++        self.subsystem = None
++        self.verbose = False
++        self.silent = False
++        self.java_version = '1.7.0'
++
++    def execute(self):
++        self.subsystem.rewrite_java_home(self.java_version)
++
++        if not self.silent:
++            print 'Java version set to %s' % self.java_version
++
+diff --git a/base/common/scripts/functions b/base/common/scripts/functions
+index e8348a943788b586aaae08a2f30724e91081dcab..8f8b233ce6b0a07977e9aaf99e151403805e7c75 100644
+--- a/base/common/scripts/functions
++++ b/base/common/scripts/functions
+@@ -210,27 +210,6 @@ if [ -n "${pki_instance}" ]; then
+     fi
+ fi
+ 
+-check_java_version()
+-{
+-    rv=0
+-
+-    cmd="alternatives --set java /usr/lib/jvm/jre-1.7.0-openjdk.x86_64/bin/java"
+-    java_version=`java -version 2>&1 | awk -F '"' '/version/ {print $2}'`
+-    major_version=`echo ${java_version} | cut -d. -f2`
+-
+-    if [ ${major_version} -ge 8 ] ; then
+-        echo "Incompatible Java version '${java_version}'!"
+-        echo
+-        echo "    As root, download and install 'jre-1.7.0-openjdk' and run"
+-        echo "    '${cmd}'."
+-        echo
+-        # 7 program is not running
+-        rv=7
+-    fi
+-
+-    return $rv
+-}
+-
+ check_pki_configuration_status()
+ {
+     rv=0
+@@ -1010,11 +989,6 @@ start()
+         return 5
+     fi
+ 
+-    check_java_version
+-    if [ $rv -ne 0 ]; then
+-        return $rv
+-    fi
+-
+     if [ ${TOTAL_PKI_REGISTRY_ENTRIES} -gt 1 ]; then
+         echo "BEGIN STARTING '${PKI_TYPE}' INSTANCES:"
+     fi
+diff --git a/base/common/scripts/set-java-home.py b/base/common/scripts/set-java-home.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..498e48a24109af47d77a2a239cccdae6f752e4db
+--- /dev/null
++++ b/base/common/scripts/set-java-home.py
+@@ -0,0 +1,85 @@
++#!/usr/bin/python
++# Authors:
++#     Ade Lee <alee@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2016 Red Hat, Inc.
++# All rights reserved.
++#
++
++import getopt
++import sys
++
++import pki.server
++import pki.server.upgrade
++
++def print_help():
++    print 'Usage: set-java-home.py [OPTIONS]'
++    print
++    print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++    print '  -r <version>                 Java version (eg. 1.7.0)'
++    print
++    print '  -v, --verbose                Run in verbose mode.'
++    print '      --silent                 Run in silent mode.'
++    print '      --help                   Show help message.'
++    print
++
++try:
++    opts, _ = getopt.gnu_getopt(sys.argv, 's:r:v', [
++        'subsystem=',
++        'verbose', 'silent', 'help'])
++
++except getopt.GetoptError as e:
++    print 'ERROR: ' + str(e)
++    print_help()
++    sys.exit(1)
++
++subsystem_dir = '/var/lib/pki-ca'
++java_version = '1.7.0'
++verbose = False
++silent = False
++
++for o, a in opts:
++    if o in ('-v', '--verbose'):
++        verbose = True
++
++    elif o == '--silent':
++        silent = True
++
++    elif o == '--help':
++        print_help()
++        sys.exit()
++
++    elif o in ('-s', '--subsystem'):
++        subsystem_dir = a
++
++    elif o == '-r':
++        java_version = a
++
++    else:
++        print 'ERROR: unknown option ' + o
++        self.print_help()
++        sys.exit(1)
++
++subsystem = pki.server.PKISubsystem(subsystem_dir)
++
++scriptlet = pki.server.upgrade.SetJavaHome()
++scriptlet.subsystem = subsystem
++scriptlet.verbose = verbose
++scriptlet.silent = silent
++scriptlet.java_version = java_version
++
++scriptlet.execute()
++
+diff --git a/base/setup/pkicreate b/base/setup/pkicreate
+index f7af4e8e13db40a63204a940d32dafcfefaea53d..8f11dff14385597ac33890e18736dd070758e8e5 100755
+--- a/base/setup/pkicreate
++++ b/base/setup/pkicreate
+@@ -287,6 +287,7 @@ my $PKI_CFG_PATH_NAME_SLOT              = "PKI_CFG_PATH_NAME";
+ my $PKI_GROUP_SLOT                      = "PKI_GROUP";
+ my $PKI_INSTANCE_PATH_SLOT              = "PKI_INSTANCE_PATH";
+ my $PKI_INSTANCE_ROOT_SLOT              = "PKI_INSTANCE_ROOT";
++my $PKI_JAVA_HOME_SLOT                  = "PKI_JAVA_HOME";
+ my $PKI_MACHINE_NAME_SLOT               = "PKI_MACHINE_NAME";
+ my $PKI_RANDOM_NUMBER_SLOT              = "PKI_RANDOM_NUMBER";
+ my $PKI_SECURE_PORT_SLOT                = "PKI_SECURE_PORT";
+@@ -411,6 +412,7 @@ my $ui_subsystem_path        = undef;  # CA, KRA, OCSP, TKS, RA, TPS
+ 
+ # Base instance directory paths
+ my $pki_instance_path               = undef;  # CA, KRA, OCSP, TKS, RA, TPS
++my $pki_java_home                   = undef;  # CA, KRA, OCSP, TKS
+ my $alias_instance_path             = undef;  # CA, KRA, OCSP, TKS, RA, TPS
+ my $bin_instance_path               = undef;  # TPS
+ my $cgibin_instance_path            = undef;  # TPS (Apache)
+@@ -596,12 +598,16 @@ if ($^O eq "linux") {
+     if ($default_hardware_platform eq "i386") {
+         # 32-bit Linux
+ 
++        $pki_java_home = "/usr/lib/jvm/java-1.7.0-openjdk";
++
+         # Supported hardware token PKCS #11 modules
+         %supported_sec_modules_hash = ("lunasa" => "/usr/lunasa/lib/libCryptoki2.so",
+                                        "nfast"  => "/opt/nfast/toolkits/pkcs11/libcknfast.so");
+     } elsif ($default_hardware_platform eq "x86_64") {
+         # 64-bit Linux
+ 
++        $pki_java_home = "/usr/lib/jvm/java-1.7.0-openjdk.x86_64";
++
+         # Supported hardware token PKCS #11 modules
+         %supported_sec_modules_hash = ("lunasa" => "/usr/lunasa/lib/libCryptoki2_64.so",
+                                        "nfast"  => "/opt/nfast/toolkits/pkcs11/libcknfast.so");
+@@ -2377,6 +2383,7 @@ LoadModule nss_module  /opt/fortitude/modules.local/libmodnss.so
+         $slot_hash{$PKI_CERT_DB_PASSWORD_SLOT} = $db_password;
+         $slot_hash{$PKI_CFG_PATH_NAME_SLOT}    = $pki_cfg_instance_file_path;
+         $slot_hash{$PKI_INSTANCE_PATH_SLOT}    = $pki_instance_path;
++        $slot_hash{$PKI_JAVA_HOME_SLOT}        = $pki_java_home;
+         $slot_hash{$PKI_MACHINE_NAME_SLOT}     = $host;
+         $slot_hash{$PKI_RANDOM_NUMBER_SLOT}    = $random;
+         $slot_hash{$PKI_SERVER_XML_CONF}       = $server_xml_instance_file_path;
+-- 
+1.7.1
+

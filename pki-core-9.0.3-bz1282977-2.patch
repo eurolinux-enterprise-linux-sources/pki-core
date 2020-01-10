@@ -1,0 +1,465 @@
+From ff74745321cb95c755273f7fc3e1e48587a87bac Mon Sep 17 00:00:00 2001
+From: Endi S. Dewata <edewata@redhat.com>
+Date: Tue, 19 Jan 2016 23:16:53 +0100
+Subject: [PATCH] Fixed duplicate keys.
+
+The SizePanel has been modified to generate the keys only if
+the parameters have changed. This will avoid duplicate keys in
+the NSS database.
+
+Bug #1282977
+---
+ .classpath                                         |   49 ++++++++++++
+ .project                                           |   23 ++++++
+ .../cms/servlet/csadmin/BackupKeyCertPanel.java    |   10 ++-
+ .../cms/servlet/csadmin/CertRequestPanel.java      |   80 ++++++++++----------
+ .../netscape/cms/servlet/csadmin/SizePanel.java    |   45 +++++++----
+ .../netscape/cms/servlet/wizard/WizardServlet.java |   10 +--
+ 6 files changed, 150 insertions(+), 67 deletions(-)
+ create mode 100644 .classpath
+ create mode 100644 .project
+
+diff --git a/.classpath b/.classpath
+new file mode 100644
+index 0000000000000000000000000000000000000000..99073702820c358ee9c1681de6f8bbb3c4735d32
+--- /dev/null
++++ b/.classpath
+@@ -0,0 +1,49 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<classpath>
++	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/symkey/src"/>
++	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/util/src"/>
++	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/common/src"/>
++	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/java-tools/src"/>
++	<classpathentry excluding="**/CMakeLists.txt" kind="src" path="base/ca/src"/>
++	<classpathentry kind="src" path="base/silent/src"/>
++	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
++	<classpathentry kind="lib" path="/usr/share/java/apache-commons-cli.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/apache-commons-logging.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/commons-codec.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/commons-httpclient.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/idm-console-base.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/idm-console-mcc.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/idm-console-nmclf.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jakarta-commons-httpclient.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/junit.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/ldapjdk.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jackson/jackson-core-asl.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jackson/jackson-jaxrs.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jackson/jackson-mapper-asl.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jackson/jackson-mrbean.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jackson/jackson-smile.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jackson/jackson-xc.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/jaxb-api.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/httpcomponents/httpclient.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/httpcomponents/httpcore.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/resteasy/jaxrs-api.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/resteasy/resteasy-client.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/resteasy/resteasy-jaxb-provider.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/resteasy/resteasy-jaxrs.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/resteasy/resteasy-jackson-provider.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/scannotation.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/servlet.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/velocity.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/xerces-j2.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/xml-commons-apis.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/istack-commons-runtime.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/apache-commons-lang.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/resteasy/resteasy-atom-provider.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/tomcat/catalina.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/tomcat/tomcat-util.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/commons-io.jar"/>
++	<classpathentry kind="lib" path="/usr/lib/java/nuxwdog.jar"/>
++	<classpathentry kind="lib" path="/usr/lib/java/jss4.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/tomcatjss.jar"/>
++	<classpathentry kind="output" path="build/classes"/>
++</classpath>
+diff --git a/.project b/.project
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0b8d5d5977e2e74051e89a2b15453ed67177064
+--- /dev/null
++++ b/.project
+@@ -0,0 +1,23 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<projectDescription>
++	<name>pki-9.0</name>
++	<comment></comment>
++	<projects>
++	</projects>
++	<buildSpec>
++		<buildCommand>
++			<name>org.python.pydev.PyDevBuilder</name>
++			<arguments>
++			</arguments>
++		</buildCommand>
++		<buildCommand>
++			<name>org.eclipse.jdt.core.javabuilder</name>
++			<arguments>
++			</arguments>
++		</buildCommand>
++	</buildSpec>
++	<natures>
++		<nature>org.eclipse.jdt.core.javanature</nature>
++		<nature>org.python.pydev.pythonNature</nature>
++	</natures>
++</projectDescription>
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/BackupKeyCertPanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/BackupKeyCertPanel.java
+index 7e2aedad2da7fd96effa3d0c3ac455ff40c1b991..96d2d26051d11eb8dd551f3e693376498a2b4bfc 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/BackupKeyCertPanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/BackupKeyCertPanel.java
+@@ -267,18 +267,20 @@ public class BackupKeyCertPanel extends WizardPanelBase {
+                 x509cert = cm.findCertByNickname(nickname);
+                 localKeyId = addCertBag(x509cert, nickname, safeContents);
+             } catch (IOException e) {
++                CMS.debug("BackupKeyCertPanel backupKeysCerts: Unable to add cert " + nickname);
+                 throw e;
++
+             } catch (Exception e) {
+-                CMS.debug("BackupKeyCertPanel: Exception="+e.toString());
+-                throw new IOException("Failed to create pkcs12 file.");
++                CMS.debug("BackupKeyCertPanel backupKeysCerts: Unable to add cert " + nickname);
++                throw new IOException("Failed to create pkcs12 file.", e);
+             }
+ 
+             try {
+                 PrivateKey pkey = cm.findPrivKeyByCert(x509cert);
+                 addKeyBag(pkey, x509cert, pass, localKeyId, encSafeContents);
+             } catch (Exception e) {
+-                CMS.debug("BackupKeyCertPanel: Exception="+e.toString());
+-                throw new IOException("Failed to create pkcs12 file.");
++                CMS.debug("BackupKeyCertPanel backupKeysCerts: Unable to add private key for cert " + nickname);
++                throw new IOException("Failed to create pkcs12 file.", e);
+             }
+         } //while loop
+    
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
+index 842f87b5fd0ae3e448105f1b5167c2ff6ebacfd4..8877f30ad86ce498e5eccb18065b865bb83b5b43 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
+@@ -128,12 +128,17 @@ public class CertRequestPanel extends WizardPanelBase {
+                 }
+                 return true;
+             }
++        } catch (ObjectNotFoundException e) {
++            CMS.debug("CertRequestPanel findCertificate: Cert " + fullnickname + " not found.");
++            return false;
++
+         } catch (IOException e) {
+-            CMS.debug("CertRequestPanel findCertificate: throw exception:"+e.toString());
++            CMS.debug("CertRequestPanel findCertificate: Exception: " + e);
+             throw e;
++
+         } catch (Exception e) {
+-            CMS.debug("CertRequestPanel findCertificate: Exception="+e.toString());
+-            return false;
++            CMS.debug("CertRequestPanel findCertificate: Exception: " + e);
++            throw new IOException(e);
+         }
+     }
+ 
+@@ -238,22 +243,20 @@ public class CertRequestPanel extends WizardPanelBase {
+     }
+ 
+     public void getCert(IConfigStore config,
+-            Context context, String certTag, Cert cert) {
++            Context context, String certTag, Cert cert) throws Exception {
+         try {
+ 
+             String subsystem = config.getString(
+                     PCERT_PREFIX + certTag + ".subsystem");
+ 
+             String certs = config.getString(subsystem + "." + certTag + ".cert", "");
++            CMS.debug("CertRequestPanel getCert: certTag=" + certTag + " cert=" + certs);
+ 
+             if (cert != null) {
+                 String certf = certs;
+ 
+-                CMS.debug(
+-                        "CertRequestPanel getCert: certTag=" + certTag
+-                        + " cert=" + certs);
+                 //get and set formated cert
+-                if (!certs.startsWith("...")) { 
++                if (!certs.startsWith("...")) {
+                     certf = CryptoUtil.certFormat(certs);
+                 }
+                 cert.setCert(certf);
+@@ -261,11 +264,14 @@ public class CertRequestPanel extends WizardPanelBase {
+                 //get and set cert pretty print
+                 byte[] certb = CryptoUtil.base64Decode(certs);
+                 CertPrettyPrint pp = new CertPrettyPrint(certb);
+-                cert.setCertpp(pp.toString(Locale.getDefault()));
++                String out = pp.toString(Locale.getDefault());
++                cert.setCertpp(out);
++
+             } else {
+                 CMS.debug( "CertRequestPanel::getCert() - cert is null!" );
+                 return;
+             }
++
+             String userfriendlyname = config.getString(
+                     PCERT_PREFIX + certTag + ".userfriendlyname");
+ 
+@@ -276,8 +282,9 @@ public class CertRequestPanel extends WizardPanelBase {
+             String dn = config.getString(PCERT_PREFIX + certTag + ".dn");
+ 
+             cert.setDN(dn);
++
+         } catch (Exception e) {
+-            CMS.debug("CertRequestPanel:getCert" + e.toString());
++            CMS.debug(e);
+         } // try
+     }
+ 
+@@ -307,7 +314,10 @@ public class CertRequestPanel extends WizardPanelBase {
+     }
+ 
+     public void handleCertRequest(IConfigStore config,
+-            Context context, String certTag, Cert cert) {
++            Context context, String certTag, Cert cert) throws Exception {
++
++        CMS.debug("CertRequestPanel.handleCertRequest(" + certTag + ")");
++
+         try {
+             // get public key
+             String pubKeyType = config.getString(
+@@ -365,7 +375,6 @@ public class CertRequestPanel extends WizardPanelBase {
+             config.commit(false);
+             cert.setRequest(certReqf);
+         } catch (Exception e) {
+-            CMS.debug("CertRequestPanel::handleCertRequest" + e.toString());
+             CMS.debug(e);
+         } // try
+ 
+@@ -420,11 +429,7 @@ public class CertRequestPanel extends WizardPanelBase {
+                 }
+             }
+         } catch (Exception e) {
+-            CMS.debug(
+-                    "CertRequestPanel:display() Exception caught: "
+-                            + e.toString());
+-            System.err.println("Exception caught: " + e.toString());
+-
++            CMS.debug(e);
+         } // try
+ 
+         context.put("reqscerts", mCerts);
+@@ -516,8 +521,7 @@ public class CertRequestPanel extends WizardPanelBase {
+ 
+                 String nickname = cert.getNickname();
+ 
+-                CMS.debug(
+-                        "CertRequestPanel: update() for cert tag "
++                CMS.debug("CertRequestPanel: update() for cert tag "
+                                 + cert.getCertTag());
+                 // String b64 = config.getString(CERT_PREFIX+ certTag +".cert", "");
+                 String b64 = HttpInput.getCert(request, certTag);
+@@ -575,13 +579,17 @@ public class CertRequestPanel extends WizardPanelBase {
+                         }
+                     }
+                 } else if (cert.getType().equals("remote")) {
++
++                    CMS.debug("CertRequestPanel: in update() process remote...import cert");
++
+                     if (b64 != null && b64.length() > 0
+                             && !b64.startsWith("...")) {
++
+                         String b64chain = HttpInput.getCertChain(request, certTag+"_cc");
+-                        CMS.debug(
+-                                "CertRequestPanel: in update() process remote...import cert");
++                        CMS.debug("CertRequestPanel cert chain for " + certTag + ": " + b64chain);
+ 
+                         String input = HttpInput.getCert(request, cert.getCertTag());
++                        CMS.debug("CertRequestPanel " + certTag + ": " + input);
+ 
+                         if (input != null) {
+                             try {
+@@ -593,44 +601,36 @@ public class CertRequestPanel extends WizardPanelBase {
+                             } catch (Exception e) {
+                                 CMS.debug("CertRequestPanel update (remote): deleteCert Exception="+e.toString());
+                             }
++
+                             input = CryptoUtil.stripCertBrackets(input.trim());
+                             String certs = CryptoUtil.normalizeCertStr(input);
+                             byte[] certb = CryptoUtil.base64Decode(certs);
+ 
+-                            config.putString(subsystem + "." + certTag + ".cert",
+-                                    certs);
++                            config.putString(subsystem + "." + certTag + ".cert", certs);
+                             try {
+                                 CryptoManager cm = CryptoManager.getInstance();
+-                                X509Certificate x509cert = cm.importCertPackage(
+-                                        certb, nickname);
+ 
++                                CMS.debug("CertRequestPanel: Importing cert " + nickname);
++                                X509Certificate x509cert = cm.importCertPackage(certb, nickname);
+                                 CryptoUtil.trustCertByNickname(nickname);
+-                                X509Certificate[] certchains = cm.buildCertificateChain(
+-                                        x509cert);
++
++                                X509Certificate[] certchains = cm.buildCertificateChain(x509cert);
+                                 X509Certificate leaf = null;
+ 
+                                 if (certchains != null) {
+-                                    CMS.debug(
+-                                            "CertRequestPanel certchains length="
+-                                                    + certchains.length);
++                                    CMS.debug("CertRequestPanel certchains length: " + certchains.length);
+                                     leaf = certchains[certchains.length - 1];
+                                 }
+ 
+-                                if( leaf == null ) {
++                                if (leaf == null) {
+                                     CMS.debug( "CertRequestPanel::update() - "
+                                              + "leaf is null!" );
+                                     throw new IOException( "leaf is null" );
+                                 }
+ 
+-                                if (/*(certchains.length <= 1) &&*/
+-				    (b64chain != null)) {
+-                                  CMS.debug("CertRequestPanel: cert might not have contained chain...calling importCertificateChain");
+-                                  try {
+-                                    CryptoUtil.importCertificateChain(
+-				      CryptoUtil.normalizeCertAndReq(b64chain));
+-                                  } catch (Exception e) {
+-                                      CMS.debug("CertRequestPanel: importCertChain: Exception: "+e.toString());
+-                                  }
++                                if (b64chain != null) {
++                                    CMS.debug("CertRequestPanel: Importing cert chain:");
++                                    CryptoUtil.importCertificateChain(CryptoUtil.normalizeCertAndReq(b64chain));
+                                 }
+ 
+                                 InternalCertificate icert = (InternalCertificate) leaf;
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/SizePanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/SizePanel.java
+index 0ff27aa018b54015adbee17de50576aa1f8bd9e4..f44a98590fce80c0b105cfd2b7736a404b652d8b 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/SizePanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/SizePanel.java
+@@ -213,6 +213,7 @@ public class SizePanel extends WizardPanelBase {
+             HttpServletResponse response,
+             Context context) throws IOException, NumberFormatException {
+         CMS.debug("SizePanel: update()");
++
+         boolean hasErr = false;
+         IConfigStore config = CMS.getConfigStore();
+         String select1 = "";
+@@ -247,6 +248,7 @@ public class SizePanel extends WizardPanelBase {
+             while (c.hasMoreElements()) {
+                 Cert cert = (Cert) c.nextElement();
+                 String ct = cert.getCertTag();
++
+                 boolean enable = config.getBoolean(PCERT_PREFIX+ct+".enable", true); 
+                 if (!enable)
+                     continue;
+@@ -384,6 +386,7 @@ public class SizePanel extends WizardPanelBase {
+ 
+             if (hasChanged || (val1 != null && !val1.equals(""))) {
+                 mServlet.cleanUpFromPanel(mServlet.getPanelNo(request));
++
+             } else if (isPanelDone()) {
+                 context.put("updateStatus", "success");
+                 return;
+@@ -396,11 +399,33 @@ public class SizePanel extends WizardPanelBase {
+             CMS.debug("SizePanel: update() NumberFormatException caught: " + e.toString());
+             context.put("updateStatus", "failure");
+             throw e;
+-        } catch (Exception e) { 
++        } catch (Exception e) {
+             CMS.debug("SizePanel: update() Exception caught: " + e.toString());
+         }
+ 
+-        // generate key pair 
++        if (hasChanged) {
++            CMS.debug("SizePanel: generating key pairs");
++            generateKeyPairs(context, token);
++        }
++
++        if (hasErr == false) {
++            config.putBoolean("preop.SizePanel.done", true);
++            try {
++                config.commit(false);
++            } catch (EBaseException e) {
++                CMS.debug("SizePanel: update() Exception caught at config commit: " + e);
++            }
++        }
++
++        CMS.debug("SizePanel: update() done");
++        context.put("updateStatus", "success");
++
++    }
++
++    public void generateKeyPairs(Context context, String token) throws IOException {
++
++        IConfigStore config = CMS.getConfigStore();
++
+         Enumeration c = mCerts.elements();
+ 
+         while (c.hasMoreElements()) {
+@@ -408,6 +433,7 @@ public class SizePanel extends WizardPanelBase {
+             String ct = cert.getCertTag();
+             String friendlyName = ct;
+             boolean enable = true;
++            CMS.debug("SizePanel: generating key for " + ct);
+             try {
+                 enable = config.getBoolean(PCERT_PREFIX+ct+".enable", true);
+                 friendlyName = config.getString(PCERT_PREFIX + ct + ".userfriendlyname", ct);
+@@ -432,6 +458,7 @@ public class SizePanel extends WizardPanelBase {
+                     createECCKeyPair(token, curveName, config, ct);
+                 }
+                 config.commit(false);
++
+             } catch (Exception e) {
+                 CMS.debug(e);
+                 CMS.debug("SizePanel: key generation failure: " + e.toString());
+@@ -440,20 +467,6 @@ public class SizePanel extends WizardPanelBase {
+                                       ".  See the logs for details.");
+             }
+         } // while
+-
+-        if (hasErr == false) {
+-          config.putBoolean("preop.SizePanel.done", true);
+-          try {
+-            config.commit(false);
+-          } catch (EBaseException e) { 
+-            CMS.debug(
+-                  "SizePanel: update() Exception caught at config commit: "
+-                            + e.toString());
+-	  }
+-	}
+-        CMS.debug("SizePanel: update() done");
+-        context.put("updateStatus", "success");
+-
+     }
+ 
+     public void createECCKeyPair(String token, String curveName, IConfigStore config, String ct) 
+diff --git a/base/common/src/com/netscape/cms/servlet/wizard/WizardServlet.java b/base/common/src/com/netscape/cms/servlet/wizard/WizardServlet.java
+index 5de52fc2833fbf5278c3f9cf285a4c31190dc89d..46dc8ecd8bd9200458f4d26d9c145b376b1fa851 100644
+--- a/base/common/src/com/netscape/cms/servlet/wizard/WizardServlet.java
++++ b/base/common/src/com/netscape/cms/servlet/wizard/WizardServlet.java
+@@ -310,8 +310,7 @@ public class WizardServlet extends VelocityServlet {
+ 
+         IWizardPanel panel = (IWizardPanel)mPanels.elementAt(p);
+         try {
+-          panel.validate(request, response, context);
+-          try {
++            panel.validate(request, response, context);
+             panel.update(request, response, context);
+             if (stay == true) { // "apply"
+ 
+@@ -331,13 +330,10 @@ public class WizardServlet extends VelocityServlet {
+                 panel = nextpanel;
+             }
+             context.put("errorString", "");
+-          } catch (Exception e) {
++        } catch (Exception e) {
++            CMS.debug(e);
+             context.put("errorString", e.getMessage());
+             panel.displayError(request, response, context);
+-          }
+-        } catch (IOException eee) {
+-          context.put("errorString", eee.getMessage());
+-          panel.displayError(request, response, context);
+         }
+         p = panel.getPanelNo();
+         CMS.debug("panel no=" + p);
+-- 
+1.7.1
+

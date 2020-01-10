@@ -6,7 +6,7 @@ distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
 
 Name:             pki-core
 Version:          9.0.3
-Release:          45%{?dist}
+Release:          49%{?dist}
 Summary:          Certificate System - PKI Core Components
 URL:              http://pki.fedoraproject.org/
 License:          GPLv2
@@ -97,7 +97,12 @@ Patch47:          %{name}-%{version}-bz1144608.patch
 Patch48:          %{name}-%{version}-bz1171848.patch
 Patch49:          %{name}-%{version}-bz21220423.patch
 Patch50:          %{name}-%{version}-bz1225589.patch
-Patch51:          %{name}-%{version}-bz1291747.patch
+Patch51:          %{name}-%{version}-bz1290535.patch
+Patch52:          %{name}-%{version}-bz1282977-1.patch
+Patch53:          %{name}-%{version}-bz1282977-2.patch
+Patch54:          %{name}-%{version}-bz1256039.patch
+Patch55:          %{name}-%{version}-bz1290535-2.patch
+Patch56:          %{name}-%{version}-bz1290535-3.patch
 
 
 %if 0%{?rhel}
@@ -510,6 +515,11 @@ This package is a part of the PKI Core used by the Certificate System.
 %patch49 -p1
 %patch50 -p1
 %patch51 -p1
+%patch52 -p1
+%patch53 -p1
+%patch54 -p1
+%patch55 -p1
+%patch56 -p1
 
 %clean
 %{__rm} -rf %{buildroot}
@@ -767,8 +777,22 @@ fi
 
 
 %changelog
-* Wed Jan 27 2016 Endi S. Dewata <edewata@redhat.com> 9.0.3-45
-- Resolves #1291747 - Fixed incorrect patch for fixing missing subsystem user on external CA case.
+* Mon Mar 14 2016 Ade Lee <alee@redhat.com> 9.0.3-49
+- Resolves #1290535 - Check for incompatible Java at startup (pkisilent)
+
+* Thu Mar 10 2016 Ade Lee <alee@redhat.com> 9.0.3-48
+- Resolves #1306989 - Crash seen with pki-common pkg during IPA server install
+- Resolves #1290535 - Check for incompatible Java at startup
+- Resolves #1313207 - ca.subsystem.certreq missing from CS.cfg
+
+* Wed Jan 27 2016 Endi S. Dewata <edewata@redhat.com> 9.0.3-47
+- Resolves #1256039 - Fixed incorrect patch for fixing missing subsystem user on external CA case.
+
+* Tue Jan 19 2016 Endi S. Dewata <edewata@redhat.com> 9.0.3-46
+- Resolves #1282977 - IPA installation fails with external PKI CA
+
+* Mon Jan 4 2016 Matthew Harmsen <mharmsen@redhat.com> 9.0.3-45
+- Resolves #1290535 - Check for incompatible Java at startup
 
 * Fri Dec 4 2015 Endi S. Dewata <edewata@redhat.com> 9.0.3-44
 - Resolves #1256039 - Fixed missing subsystem user on external CA case.

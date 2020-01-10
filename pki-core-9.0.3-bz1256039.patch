@@ -1,6 +1,6 @@
-From b832de263401ded8edeb72e4e858bd701f151fbe Mon Sep 17 00:00:00 2001
-From: "Endi S. Dewata" <edewata@redhat.com>
-Date: Mon, 23 Nov 2015 23:47:02 +0100
+From 906620f2fd229f59fe9c526dc417a09b115fbd89 Mon Sep 17 00:00:00 2001
+From: Endi S. Dewata <edewata@redhat.com>
+Date: Thu, 28 Jan 2016 00:26:43 +0100
 Subject: [PATCH] Fixed missing subsystem user on external CA case.
 
 The NamePanel and CertRequestPanel have been modified to create
@@ -20,87 +20,39 @@ into an upgrade scriptlet. The scriptlet has also been modified
 to check the cs.state property to ensure it only runs after the
 server has completed the installation.
 
-Resolves: rhbz#1291747
+Resolves: rhbz#1256039
 ---
- .classpath                                         |  14 ++
- .project                                           |  17 +++
- .../src/com/netscape/ca/CertificateAuthority.java  |   7 +-
- base/common/python/pki/server/__init__.py          |   1 +
- base/common/python/pki/server/cli/upgrade.py       | 110 ++++++++++++++++
- base/common/python/pki/server/upgrade/__init__.py  | 142 +++++++++++++++++++++
- base/common/sbin/pki-server                        |   2 +
- base/common/scripts/functions                      |   2 +
- base/common/scripts/restore-subsystem-user.py      | 104 +++------------
- .../com/netscape/certsrv/base/EBaseException.java  |   2 +-
- .../cms/servlet/csadmin/CertRequestPanel.java      |  47 +++++--
- .../com/netscape/cms/servlet/csadmin/CertUtil.java |  31 ++---
- .../netscape/cms/servlet/csadmin/DonePanel.java    |   1 +
- .../netscape/cms/servlet/csadmin/NamePanel.java    |  19 ++-
- .../com/netscape/cmscore/usrgrp/UGSubsystem.java   |   2 +
- base/silent/src/ca/ConfigureCA.java                |  31 ++---
- 16 files changed, 383 insertions(+), 149 deletions(-)
- create mode 100644 .classpath
- create mode 100644 .project
+ .../src/com/netscape/ca/CertificateAuthority.java  |    5 +-
+ base/common/python/pki/server/__init__.py          |    1 +
+ base/common/python/pki/server/cli/upgrade.py       |  110 +++++++++++++++
+ base/common/python/pki/server/upgrade/__init__.py  |  142 ++++++++++++++++++++
+ base/common/sbin/pki-server                        |    2 +
+ base/common/scripts/functions                      |    2 +
+ base/common/scripts/restore-subsystem-user.py      |  104 ++------------
+ .../com/netscape/certsrv/base/EBaseException.java  |    2 +-
+ .../cms/servlet/csadmin/CertRequestPanel.java      |   39 ++++--
+ .../com/netscape/cms/servlet/csadmin/CertUtil.java |   31 +++--
+ .../netscape/cms/servlet/csadmin/DonePanel.java    |    1 +
+ .../netscape/cms/servlet/csadmin/NamePanel.java    |   19 ++-
+ .../com/netscape/cmscore/usrgrp/UGSubsystem.java   |    2 +
+ base/silent/src/ca/ConfigureCA.java                |   31 ++---
+ 14 files changed, 347 insertions(+), 144 deletions(-)
  create mode 100644 base/common/python/pki/server/cli/upgrade.py
  create mode 100644 base/common/python/pki/server/upgrade/__init__.py
 
-diff --git a/.classpath b/.classpath
-new file mode 100644
-index 0000000000000000000000000000000000000000..1d51a8d96258ba778d8913939dccfc83f794291c
---- /dev/null
-+++ b/.classpath
-@@ -0,0 +1,14 @@
-+<?xml version="1.0" encoding="UTF-8"?>
-+<classpath>
-+	<classpathentry kind="src" path="base/java-tools/src"/>
-+	<classpathentry kind="src" path="base/common/src"/>
-+	<classpathentry kind="src" path="base/util/src"/>
-+	<classpathentry kind="src" path="base/symkey/src"/>
-+	<classpathentry kind="src" path="base/ca/src"/>
-+	<classpathentry kind="src" path="base/silent/src"/>
-+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
-+	<classpathentry kind="lib" path="/usr/lib/java/jss4.jar"/>
-+	<classpathentry kind="lib" path="/usr/share/java/ldapjdk.jar"/>
-+	<classpathentry kind="lib" path="/usr/share/java/tomcat/tomcat-servlet-3.0-api.jar"/>
-+	<classpathentry kind="output" path="bin"/>
-+</classpath>
-diff --git a/.project b/.project
-new file mode 100644
-index 0000000000000000000000000000000000000000..b54311c30dfd6848b95f96570cc54dda68be66af
---- /dev/null
-+++ b/.project
-@@ -0,0 +1,17 @@
-+<?xml version="1.0" encoding="UTF-8"?>
-+<projectDescription>
-+	<name>pki-rhel-6</name>
-+	<comment></comment>
-+	<projects>
-+	</projects>
-+	<buildSpec>
-+		<buildCommand>
-+			<name>org.eclipse.jdt.core.javabuilder</name>
-+			<arguments>
-+			</arguments>
-+		</buildCommand>
-+	</buildSpec>
-+	<natures>
-+		<nature>org.eclipse.jdt.core.javanature</nature>
-+	</natures>
-+</projectDescription>
 diff --git a/base/ca/src/com/netscape/ca/CertificateAuthority.java b/base/ca/src/com/netscape/ca/CertificateAuthority.java
-index 8210d7192fc1a41db4b29ec3e04eb50af44d3019..03e9415406e4ba6baf78e4c82524af0b59ebd8dc 100644
+index c728111f797e3307baea3289548e843a5e150099..0e050c20db12f987fa4b48242d7f9eb85e5b56f8 100644
 --- a/base/ca/src/com/netscape/ca/CertificateAuthority.java
 +++ b/base/ca/src/com/netscape/ca/CertificateAuthority.java
-@@ -261,9 +261,10 @@ public class CertificateAuthority implements ICertificateAuthority, ICertAuthori
+@@ -263,9 +263,10 @@ public class CertificateAuthority implements ICertificateAuthority, ICertAuthori
              // init default CA attributes like cert version, validity.
              initDefCaAttrs();
          } catch (EBaseException e) {
 -            if (CMS.isPreOpMode())
--                ;
--            else
 +            CMS.debug(e);
 +            if (CMS.isPreOpMode()) {
-+                CMS.debug("CertificateAuthority: Ignoring errors in pre-op mode");
+                 CMS.debug("CertificateAuthority: Ignoring exception in pre-op mode: " + e);
+-            else
 +            } else
                  throw e;
          }
@@ -402,10 +354,10 @@ index 4749a8e5ad0b7b160b27f626326a70c1fccc50c4..3f3d9962b8223ab322bc34340d54fff5
      def get_full_module_name(self, module_name):
          return module_name
 diff --git a/base/common/scripts/functions b/base/common/scripts/functions
-index 390a9217c5db4c78d0b526425b6823103f92089c..8f8b233ce6b0a07977e9aaf99e151403805e7c75 100644
+index 1912ff0ef2eebd14a23e23bbaf02a7b16fcc45d8..e8348a943788b586aaae08a2f30724e91081dcab 100644
 --- a/base/common/scripts/functions
 +++ b/base/common/scripts/functions
-@@ -835,6 +835,8 @@ start_instance()
+@@ -856,6 +856,8 @@ start_instance()
          rm -f ${RESTART_SERVER}
      fi
  
@@ -577,7 +529,7 @@ index 728b412c492b99fd1010292fa324b4ab8167c4c8..dec1f5e9eba58f585af28a9556409db6
          mParams[0] = param;
      }
 diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
-index 842f87b5fd0ae3e448105f1b5167c2ff6ebacfd4..15c3006c3a8a878c48d0fc2683b7a8a92461d653 100644
+index 8877f30ad86ce498e5eccb18065b865bb83b5b43..c5c5cfa5b7cd8bff26163a002ff0f98c3c5bc2f9 100644
 --- a/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
 +++ b/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
 @@ -99,11 +99,13 @@ public class CertRequestPanel extends WizardPanelBase {
@@ -616,22 +568,17 @@ index 842f87b5fd0ae3e448105f1b5167c2ff6ebacfd4..15c3006c3a8a878c48d0fc2683b7a8a9
              try {
                  boolean done = cs.getBoolean("preop.CertRequestPanel.done");
                  return true;
-@@ -129,11 +141,11 @@ public class CertRequestPanel extends WizardPanelBase {
+@@ -128,9 +140,6 @@ public class CertRequestPanel extends WizardPanelBase {
+                 }
                  return true;
              }
-         } catch (IOException e) {
--            CMS.debug("CertRequestPanel findCertificate: throw exception:"+e.toString());
-+            CMS.debug("CertRequestPanel findCertificate: throw exception: " + e);
-             throw e;
-         } catch (Exception e) {
--            CMS.debug("CertRequestPanel findCertificate: Exception="+e.toString());
+-        } catch (ObjectNotFoundException e) {
+-            CMS.debug("CertRequestPanel findCertificate: Cert " + fullnickname + " not found.");
 -            return false;
-+            CMS.debug("CertRequestPanel findCertificate: Exception: " + e);
-+            throw new IOException(e);
-         }
-     }
  
-@@ -414,16 +426,11 @@ public class CertRequestPanel extends WizardPanelBase {
+         } catch (IOException e) {
+             CMS.debug("CertRequestPanel findCertificate: Exception: " + e);
+@@ -423,9 +432,7 @@ public class CertRequestPanel extends WizardPanelBase {
                      c.setSubsystem(subsystem);
                      mCerts.addElement(c);
                  } catch (Exception e) {
@@ -642,15 +589,7 @@ index 842f87b5fd0ae3e448105f1b5167c2ff6ebacfd4..15c3006c3a8a878c48d0fc2683b7a8a9
                  }
              }
          } catch (Exception e) {
--            CMS.debug(
--                    "CertRequestPanel:display() Exception caught: "
--                            + e.toString());
--            System.err.println("Exception caught: " + e.toString());
-+            CMS.debug(e);
- 
-         } // try
- 
-@@ -548,6 +555,12 @@ public class CertRequestPanel extends WizardPanelBase {
+@@ -552,6 +559,12 @@ public class CertRequestPanel extends WizardPanelBase {
  
                          cert.setCert(certs);
                          config.putString(subsystem + "." + certTag + ".cert", certs);
@@ -663,14 +602,14 @@ index 842f87b5fd0ae3e448105f1b5167c2ff6ebacfd4..15c3006c3a8a878c48d0fc2683b7a8a9
                          /* import certificate */
                          CMS.debug(
                                  "CertRequestPanel configCert: nickname="
-@@ -574,6 +587,7 @@ public class CertRequestPanel extends WizardPanelBase {
+@@ -578,6 +591,7 @@ public class CertRequestPanel extends WizardPanelBase {
  //                            hasErr = true;
                          }
                      }
 +
                  } else if (cert.getType().equals("remote")) {
-                     if (b64 != null && b64.length() > 0
-                             && !b64.startsWith("...")) {
+ 
+                     CMS.debug("CertRequestPanel: in update() process remote...import cert");
 @@ -674,6 +688,11 @@ public class CertRequestPanel extends WizardPanelBase {
                          CMS.debug("CertRequestPanel update: deleteCert Exception="+ee.toString());
                      }
@@ -695,10 +634,10 @@ index 842f87b5fd0ae3e448105f1b5167c2ff6ebacfd4..15c3006c3a8a878c48d0fc2683b7a8a9
  
          //reset the attribute of the user certificate to u,u,u
 diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
-index dc3437b1ae3b3178f2edf54f10ebcf82dea25146..fb6829058ab8668f0855e0d8ac02e7706e818e46 100644
+index 045ad5179d19415aafb60e18e4c3161d86fae783..396231764c5213a09712c448e6e2766b7ec870bc 100644
 --- a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
 +++ b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
-@@ -524,23 +524,25 @@ public class CertUtil {
+@@ -547,23 +547,25 @@ public class CertUtil {
          return cert;
      }
  
@@ -732,7 +671,7 @@ index dc3437b1ae3b3178f2edf54f10ebcf82dea25146..fb6829058ab8668f0855e0d8ac02e770
          }
  
          num++;
-@@ -550,6 +552,7 @@ public class CertUtil {
+@@ -573,6 +575,7 @@ public class CertUtil {
          try {
              cs.commit(false);
          } catch (Exception e) {
@@ -740,7 +679,7 @@ index dc3437b1ae3b3178f2edf54f10ebcf82dea25146..fb6829058ab8668f0855e0d8ac02e770
          }
  
          IUser user = null;
-@@ -567,8 +570,9 @@ public class CertUtil {
+@@ -590,8 +593,9 @@ public class CertUtil {
              user.setX509Certificates(certs);
              system.addUser(user);
              CMS.debug("CertUtil addUserCertificate: successfully add the user");
@@ -751,7 +690,7 @@ index dc3437b1ae3b3178f2edf54f10ebcf82dea25146..fb6829058ab8668f0855e0d8ac02e770
              if (e.getLDAPResultCode() != LDAPException.ENTRY_ALREADY_EXISTS) {
                  try {
                      user = system.getUser(id);
-@@ -577,29 +581,26 @@ public class CertUtil {
+@@ -600,29 +604,26 @@ public class CertUtil {
                      CMS.debug("CertUtil addUserCertificate: successfully find the user");
                  }
              }
@@ -990,5 +929,5 @@ index f07e694ae50ae8a1aaa47426dfe6ed3191e16ab2..188dc1bb4637b480a717808fa09a0f83
  
          // set variables
 -- 
-2.4.3
+1.7.1
 

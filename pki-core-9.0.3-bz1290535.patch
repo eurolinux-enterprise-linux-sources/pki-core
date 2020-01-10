@@ -1,0 +1,43 @@
+diff -rupN pki-core-9.0.3.orig/base/common/scripts/functions pki-core-9.0.3/base/common/scripts/functions
+--- pki-core-9.0.3.orig/base/common/scripts/functions	2016-01-04 15:57:29.000000000 -0800
++++ pki-core-9.0.3/base/common/scripts/functions	2016-01-07 14:03:34.000000000 -0800
+@@ -210,6 +210,27 @@ if [ -n "${pki_instance}" ]; then
+     fi
+ fi
+ 
++check_java_version()
++{
++    rv=0
++
++    cmd="alternatives --set java /usr/lib/jvm/jre-1.7.0-openjdk.x86_64/bin/java"
++    java_version=`java -version 2>&1 | awk -F '"' '/version/ {print $2}'`
++    major_version=`echo ${java_version} | cut -d. -f2`
++
++    if [ ${major_version} -ge 8 ] ; then
++        echo "Incompatible Java version '${java_version}'!"
++        echo
++        echo "    As root, download and install 'jre-1.7.0-openjdk' and run"
++        echo "    '${cmd}'."
++        echo
++        # 7 program is not running
++        rv=7
++    fi
++
++    return $rv
++}
++
+ check_pki_configuration_status()
+ {
+     rv=0
+@@ -987,6 +1008,11 @@ start()
+         return 5
+     fi
+ 
++    check_java_version
++    if [ $rv -ne 0 ]; then
++        return $rv
++    fi
++
+     if [ ${TOTAL_PKI_REGISTRY_ENTRIES} -gt 1 ]; then
+         echo "BEGIN STARTING '${PKI_TYPE}' INSTANCES:"
+     fi
