@@ -1,0 +1,994 @@
+From b832de263401ded8edeb72e4e858bd701f151fbe Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Mon, 23 Nov 2015 23:47:02 +0100
+Subject: [PATCH] Fixed missing subsystem user on external CA case.
+
+The NamePanel and CertRequestPanel have been modified to create
+the subsystem user properly after the subsystem certificate is
+created either locally or externally.
+
+Some log messages have been cleaned up to help future debugging.
+Some Eclipse project files have been added to simplify future
+development.
+
+The server startup script has been modified to execute database
+upgrade on every restart. Database upgrade consists of idempotent
+scriptlets so it should not cause a problem.
+
+The script to restore missing subsystem user has been refactored
+into an upgrade scriptlet. The scriptlet has also been modified
+to check the cs.state property to ensure it only runs after the
+server has completed the installation.
+
+Resolves: rhbz#1291747
+---
+ .classpath                                         |  14 ++
+ .project                                           |  17 +++
+ .../src/com/netscape/ca/CertificateAuthority.java  |   7 +-
+ base/common/python/pki/server/__init__.py          |   1 +
+ base/common/python/pki/server/cli/upgrade.py       | 110 ++++++++++++++++
+ base/common/python/pki/server/upgrade/__init__.py  | 142 +++++++++++++++++++++
+ base/common/sbin/pki-server                        |   2 +
+ base/common/scripts/functions                      |   2 +
+ base/common/scripts/restore-subsystem-user.py      | 104 +++------------
+ .../com/netscape/certsrv/base/EBaseException.java  |   2 +-
+ .../cms/servlet/csadmin/CertRequestPanel.java      |  47 +++++--
+ .../com/netscape/cms/servlet/csadmin/CertUtil.java |  31 ++---
+ .../netscape/cms/servlet/csadmin/DonePanel.java    |   1 +
+ .../netscape/cms/servlet/csadmin/NamePanel.java    |  19 ++-
+ .../com/netscape/cmscore/usrgrp/UGSubsystem.java   |   2 +
+ base/silent/src/ca/ConfigureCA.java                |  31 ++---
+ 16 files changed, 383 insertions(+), 149 deletions(-)
+ create mode 100644 .classpath
+ create mode 100644 .project
+ create mode 100644 base/common/python/pki/server/cli/upgrade.py
+ create mode 100644 base/common/python/pki/server/upgrade/__init__.py
+
+diff --git a/.classpath b/.classpath
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d51a8d96258ba778d8913939dccfc83f794291c
+--- /dev/null
++++ b/.classpath
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<classpath>
++	<classpathentry kind="src" path="base/java-tools/src"/>
++	<classpathentry kind="src" path="base/common/src"/>
++	<classpathentry kind="src" path="base/util/src"/>
++	<classpathentry kind="src" path="base/symkey/src"/>
++	<classpathentry kind="src" path="base/ca/src"/>
++	<classpathentry kind="src" path="base/silent/src"/>
++	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
++	<classpathentry kind="lib" path="/usr/lib/java/jss4.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/ldapjdk.jar"/>
++	<classpathentry kind="lib" path="/usr/share/java/tomcat/tomcat-servlet-3.0-api.jar"/>
++	<classpathentry kind="output" path="bin"/>
++</classpath>
+diff --git a/.project b/.project
+new file mode 100644
+index 0000000000000000000000000000000000000000..b54311c30dfd6848b95f96570cc54dda68be66af
+--- /dev/null
++++ b/.project
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<projectDescription>
++	<name>pki-rhel-6</name>
++	<comment></comment>
++	<projects>
++	</projects>
++	<buildSpec>
++		<buildCommand>
++			<name>org.eclipse.jdt.core.javabuilder</name>
++			<arguments>
++			</arguments>
++		</buildCommand>
++	</buildSpec>
++	<natures>
++		<nature>org.eclipse.jdt.core.javanature</nature>
++	</natures>
++</projectDescription>
+diff --git a/base/ca/src/com/netscape/ca/CertificateAuthority.java b/base/ca/src/com/netscape/ca/CertificateAuthority.java
+index 8210d7192fc1a41db4b29ec3e04eb50af44d3019..03e9415406e4ba6baf78e4c82524af0b59ebd8dc 100644
+--- a/base/ca/src/com/netscape/ca/CertificateAuthority.java
++++ b/base/ca/src/com/netscape/ca/CertificateAuthority.java
+@@ -261,9 +261,10 @@ public class CertificateAuthority implements ICertificateAuthority, ICertAuthori
+             // init default CA attributes like cert version, validity.
+             initDefCaAttrs();
+         } catch (EBaseException e) {
+-            if (CMS.isPreOpMode())
+-                ;
+-            else
++            CMS.debug(e);
++            if (CMS.isPreOpMode()) {
++                CMS.debug("CertificateAuthority: Ignoring errors in pre-op mode");
++            } else
+                 throw e;
+         }
+ 
+diff --git a/base/common/python/pki/server/__init__.py b/base/common/python/pki/server/__init__.py
+index 7d6bae442db9cd73d015a71c95fee617b656ff8d..34911cc0419015ca14bc6ac6aaec1eb1f84b8841 100644
+--- a/base/common/python/pki/server/__init__.py
++++ b/base/common/python/pki/server/__init__.py
+@@ -30,6 +30,7 @@ class PKISubsystem(object):
+ 
+     def __init__(self, dir):
+ 
++        self.name = os.path.basename(dir)
+         self.dir = dir
+         self.cs_conf = os.path.join(self.dir, 'conf', 'CS.cfg')
+         self.password_conf = os.path.join(self.dir, 'conf', 'password.conf')
+diff --git a/base/common/python/pki/server/cli/upgrade.py b/base/common/python/pki/server/cli/upgrade.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c435ecbd405cd1e3f6d5b0e0a80be4efdfeb009e
+--- /dev/null
++++ b/base/common/python/pki/server/cli/upgrade.py
+@@ -0,0 +1,110 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import getopt
++import sys
++
++import pki
++import pki.server
++import pki.server.upgrade
++
++
++class UpgradeCLI(pki.cli.CLI):
++
++    def __init__(self):
++        super(UpgradeCLI, self).__init__('upgrade', 'Upgrade subsystem')
++
++    def print_help(self):
++        print 'Usage: pki-server %s [OPTIONS]' % self.get_full_name()
++        print
++        print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
++        print
++        print '  -v, --verbose                Run in verbose mode.'
++        print '      --silent                 Run in silent mode.'
++        print '      --help                   Show help message.'
++        print
++
++    def execute(self, argv):
++
++        try:
++            opts, _ = getopt.gnu_getopt(argv, 's:v', [
++                'subsystem=',
++                'verbose', 'silent', 'help'])
++
++        except getopt.GetoptError as e:
++            print 'ERROR: ' + str(e)
++            self.print_help()
++            sys.exit(1)
++
++        subsystem_dir = '/var/lib/pki-ca'
++        silent = False
++
++        for o, a in opts:
++            if o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--silent':
++                silent = True
++
++            elif o == '--help':
++                self.print_help()
++                sys.exit()
++
++            elif o in ('-s', '--subsystem'):
++                subsystem_dir = a
++
++            else:
++                print 'ERROR: unknown option ' + o
++                self.print_help()
++                sys.exit(1)
++
++        subsystem = pki.server.PKISubsystem(subsystem_dir)
++        type = subsystem.config['cs.type']
++
++        if not silent:
++            print 'Upgrading %s:' % subsystem.name
++
++        # TODO: check database version and load required scriptlets only
++
++        scriptlets = []
++
++        if type == 'CA':
++            # This upgrade scriptlet has only been tested against CA
++            scriptlets.append(pki.server.upgrade.RestoreSubsystemUser())
++
++        counter = 1
++        for scriptlet in scriptlets:
++
++            if not silent:
++                print '%d. %s' % (counter, scriptlet.description)
++
++            scriptlet.subsystem = subsystem
++            scriptlet.verbose = self.verbose
++            scriptlet.silent = silent
++
++            scriptlet.execute()
++
++            counter += 1
++
++        # TODO: increment database version
++
++        if not silent:
++            print 'Upgrade complete'
+diff --git a/base/common/python/pki/server/upgrade/__init__.py b/base/common/python/pki/server/upgrade/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b5fd6d9f4318167301cdd99dff5845d6c4574c30
+--- /dev/null
++++ b/base/common/python/pki/server/upgrade/__init__.py
+@@ -0,0 +1,142 @@
++#!/usr/bin/python
++# Authors:
++#     Endi S. Dewata <edewata@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; version 2 of the License.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along
++# with this program; if not, write to the Free Software Foundation, Inc.,
++# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++#
++# Copyright (C) 2015 Red Hat, Inc.
++# All rights reserved.
++#
++
++import base64
++import getopt
++import ldap
++import sys
++
++
++class RestoreSubsystemUser(object):
++
++    def __init__(self):
++        self.description = 'Restore subsystem user'
++        self.subsystem = None
++        self.verbose = False
++        self.silent = False
++
++    def execute(self):
++
++        state = self.subsystem.config['cs.state']
++        if state != '1':
++            if not self.silent:
++                print 'Subsystem not yet configured'
++            return
++
++        type = self.subsystem.config['cs.type']
++        hostname = self.subsystem.config['machineName']
++        port = self.subsystem.config['service.securePort']
++
++        user_id = '%s-%s-%s' % (type, hostname, port)
++
++        cert = self.subsystem.get_system_cert('subsystem')
++        version = cert['version']
++        serial_number = cert['serial_number']
++        issuer = cert['issuer']
++        subject = cert['subject']
++
++        description = '%s;%s;%s;%s' % (version, serial_number, issuer, subject)
++        if self.verbose:
++            print 'Subsystem certificate: %s' % description
++
++        certificate = cert['certificate']
++        if self.verbose:
++            print '-----BEGIN CERTIFICATE-----'
++            print base64.b64encode(certificate)
++            print '-----END CERTIFICATE-----'
++
++        users = self.subsystem.find_system_users(certificate=certificate)
++        members = self.subsystem.get_system_group_members('Subsystem Group')
++
++        for user in users:
++            if self.verbose:
++                print 'User %s has subsystem certificate' % user['uid']
++
++            if user['uid'] in members:
++                if self.verbose:
++                    print 'User already in Subsystem Group'
++
++                if 'description' in user:
++                    desc = user['description']
++                else:
++                    desc = None
++
++                if desc == description:
++                    if self.verbose:
++                        print 'User has the correct certificate mapping'
++
++                    if not self.silent:
++                        print 'Subsystem user %s is OK' % user['uid']
++
++                else:
++                    changes = {}
++                    changes['description'] = description
++                    self.subsystem.modify_system_user(user_id, changes)
++
++                    if self.verbose:
++                        print 'Certificate mapping fixed'
++
++                    if not self.silent:
++                        print 'Subsystem user %s restored' % user['uid']
++
++                return
++
++        # If the user with the subsystem certificate doesn't exist,
++        # or if the user exists but not in the Subsystem Group,
++        # create a new subsystem user
++
++        try:
++            user = {}
++            user['uid'] = user_id
++            user['cn'] = user_id
++            user['sn'] = user_id
++            user['type'] = 'agentType'
++            user['description'] = description
++            user['certificate'] = certificate
++            user['state'] = '1'
++
++            self.subsystem.add_system_user(user)
++            if self.verbose:
++                print 'New subsystem user %s added' % user_id
++
++        except ldap.ALREADY_EXISTS:
++            if self.verbose:
++                print 'Subsystem user %s already exists' % user_id
++            user = self.subsystem.get_system_user(user_id)
++
++            changes = {}
++            changes['description'] = description
++            changes['certificate'] = certificate
++            self.subsystem.modify_system_user(user_id, changes)
++            if self.verbose:
++                print 'User certificate updated'
++
++        try:
++            self.subsystem.add_system_group_member('Subsystem Group', user_id)
++            if self.verbose:
++                print 'User added to Subsystem Group'
++
++        except ldap.TYPE_OR_VALUE_EXISTS:
++            if self.verbose:
++                print 'User already in Subsystem Group'
++
++        if not self.silent:
++            print 'Subsystem user %s restored' % user_id
+diff --git a/base/common/sbin/pki-server b/base/common/sbin/pki-server
+index 4749a8e5ad0b7b160b27f626326a70c1fccc50c4..3f3d9962b8223ab322bc34340d54fff5f8b70bd2 100644
+--- a/base/common/sbin/pki-server
++++ b/base/common/sbin/pki-server
+@@ -24,6 +24,7 @@ import sys
+ 
+ import pki.cli
+ import pki.server.cli.ca
++import pki.server.cli.upgrade
+ 
+ 
+ class PKIServerCLI(pki.cli.CLI):
+@@ -33,6 +34,7 @@ class PKIServerCLI(pki.cli.CLI):
+         super(PKIServerCLI, self).__init__('pki-server', 'PKI server command-line interface')
+ 
+         self.add_module(pki.server.cli.ca.CACLI())
++        self.add_module(pki.server.cli.upgrade.UpgradeCLI())
+ 
+     def get_full_module_name(self, module_name):
+         return module_name
+diff --git a/base/common/scripts/functions b/base/common/scripts/functions
+index 390a9217c5db4c78d0b526425b6823103f92089c..8f8b233ce6b0a07977e9aaf99e151403805e7c75 100644
+--- a/base/common/scripts/functions
++++ b/base/common/scripts/functions
+@@ -835,6 +835,8 @@ start_instance()
+         rm -f ${RESTART_SERVER}
+     fi
+ 
++    pki-server upgrade --subsystem "$PKI_INSTANCE_PATH" --silent
++
+     # Invoke the initscript for this instance
+     case $PKI_SUBSYSTEM_TYPE in
+         ca|kra|ocsp|tks)
+diff --git a/base/common/scripts/restore-subsystem-user.py b/base/common/scripts/restore-subsystem-user.py
+index 40ff3cea80145ce2be7ba0744db90041d9f28c32..f76258a1114e2c62bd4e1b9a2a5854b1ffe8e4d1 100644
+--- a/base/common/scripts/restore-subsystem-user.py
++++ b/base/common/scripts/restore-subsystem-user.py
+@@ -19,12 +19,11 @@
+ # All rights reserved.
+ #
+ 
+-import base64
+ import getopt
+-import ldap
+ import sys
+ 
+-from pki.server import PKISubsystem
++import pki.server
++import pki.server.upgrade
+ 
+ def print_help():
+     print 'Usage: restore-subsystem-user.py [OPTIONS]'
+@@ -32,26 +31,31 @@ def print_help():
+     print '  -s, --subsystem <directory>  Subsystem directory (default: /var/lib/pki-ca).'
+     print
+     print '  -v, --verbose                Run in verbose mode.'
++    print '      --silent                 Run in silent mode.'
+     print '      --help                   Show help message.'
+     print
+ 
+ try:
+     opts, _ = getopt.gnu_getopt(sys.argv, 's:v', [
+         'subsystem=',
+-        'verbose', 'help'])
++        'verbose', 'silent', 'help'])
+ 
+ except getopt.GetoptError as e:
+     print 'ERROR: ' + str(e)
+     print_help()
+     sys.exit(1)
+ 
+-verbose = False
+ subsystem_dir = '/var/lib/pki-ca'
++verbose = False
++silent = False
+ 
+ for o, a in opts:
+     if o in ('-v', '--verbose'):
+         verbose = True
+ 
++    elif o == '--silent':
++        silent = True
++
+     elif o == '--help':
+         print_help()
+         sys.exit()
+@@ -64,89 +68,11 @@ for o, a in opts:
+         self.print_help()
+         sys.exit(1)
+ 
+-print 'Restoring subsystem user'
++subsystem = pki.server.PKISubsystem(subsystem_dir)
+ 
+-subsystem = PKISubsystem(subsystem_dir)
++scriptlet = pki.server.upgrade.RestoreSubsystemUser()
++scriptlet.subsystem = subsystem
++scriptlet.verbose = verbose
++scriptlet.silent = silent
+ 
+-type = subsystem.config['cs.type']
+-hostname = subsystem.config['machineName']
+-port = subsystem.config['service.securePort']
+-
+-user_id = '%s-%s-%s' % (type, hostname, port)
+-
+-cert = subsystem.get_system_cert('subsystem')
+-version = cert['version']
+-serial_number = cert['serial_number']
+-issuer = cert['issuer']
+-subject = cert['subject']
+-
+-description = '%s;%s;%s;%s' % (version, serial_number, issuer, subject)
+-print 'Subsystem certificate: %s' % description
+-
+-certificate = cert['certificate']
+-print '-----BEGIN CERTIFICATE-----'
+-print base64.b64encode(certificate)
+-print '-----END CERTIFICATE-----'
+-
+-users = subsystem.find_system_users(certificate=certificate)
+-members = subsystem.get_system_group_members('Subsystem Group')
+-
+-for user in users:
+-    print 'User %s has subsystem certificate' % user['uid']
+-
+-    if user['uid'] in members:
+-        print 'User already in Subsystem Group'
+-
+-        if 'description' in user:
+-            desc = user['description']
+-        else:
+-            desc = None
+-
+-        if desc == description:
+-            print 'User has the correct certificate mapping'
+-            print 'User %s is the subsystem user' % user['uid']
+-
+-        else:
+-            changes = {}
+-            changes['description'] = description
+-            subsystem.modify_system_user(user_id, changes)
+-            print 'Certificate mapping fixed'
+-            print 'Subsystem user %s restored' % user['uid']
+-
+-        sys.exit()
+-
+-# If the user with the subsystem certificate doesn't exist,
+-# or if the user exists but not in the Subsystem Group,
+-# create a new subsystem user
+-
+-try:
+-    user = {}
+-    user['uid'] = user_id
+-    user['cn'] = user_id
+-    user['sn'] = user_id
+-    user['type'] = 'agentType'
+-    user['description'] = description
+-    user['certificate'] = certificate
+-    user['state'] = '1'
+-
+-    subsystem.add_system_user(user)
+-    print 'New subsystem user %s added' % user_id
+-
+-except ldap.ALREADY_EXISTS:
+-    print 'Subsystem user %s already exists' % user_id
+-    user = subsystem.get_system_user(user_id)
+-
+-    changes = {}
+-    changes['description'] = description
+-    changes['certificate'] = certificate
+-    subsystem.modify_system_user(user_id, changes)
+-    print 'User certificate updated'
+-
+-try:
+-    subsystem.add_system_group_member('Subsystem Group', user_id)
+-    print 'User added to Subsystem Group'
+-
+-except ldap.TYPE_OR_VALUE_EXISTS:
+-    print 'User already in Subsystem Group'
+-
+-print 'Subsystem user %s restored' % user_id
++scriptlet.execute()
+diff --git a/base/common/src/com/netscape/certsrv/base/EBaseException.java b/base/common/src/com/netscape/certsrv/base/EBaseException.java
+index 728b412c492b99fd1010292fa324b4ab8167c4c8..dec1f5e9eba58f585af28a9556409db655393dda 100644
+--- a/base/common/src/com/netscape/certsrv/base/EBaseException.java
++++ b/base/common/src/com/netscape/certsrv/base/EBaseException.java
+@@ -92,7 +92,7 @@ public class EBaseException extends Exception {
+      * @param param The parameter as an exception
+      */
+     public EBaseException(String msgFormat, Exception param) {
+-        super(msgFormat);
++        super(msgFormat, param);
+         mParams = new Exception[1];
+         mParams[0] = param;
+     }
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
+index 842f87b5fd0ae3e448105f1b5167c2ff6ebacfd4..15c3006c3a8a878c48d0fc2683b7a8a92461d653 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/CertRequestPanel.java
+@@ -99,11 +99,13 @@ public class CertRequestPanel extends WizardPanelBase {
+ 
+     private boolean findCertificate(String tokenname, String nickname) 
+       throws IOException {
++        CMS.debug("CertRequestPanel: findCertificate(" + tokenname + ", " + nickname + ")");
+         IConfigStore cs = CMS.getConfigStore();
+         CryptoManager cm = null;
+         try {
+             cm = CryptoManager.getInstance();
+         } catch (Exception e) {
++            throw new IOException(e);
+         }
+ 
+         String fullnickname = nickname;
+@@ -115,9 +117,19 @@ public class CertRequestPanel extends WizardPanelBase {
+         }
+ 
+         try {
+-            X509Certificate cert = cm.findCertByNickname(fullnickname);
+-            if (cert == null)
++            X509Certificate cert;
++            try {
++                cert = cm.findCertByNickname(fullnickname);
++            } catch (ObjectNotFoundException e) {
++                CMS.debug("CertRequestPanel: cert " + fullnickname + " not found: " + e);
+                 return false;
++            }
++
++            if (cert == null) {
++                CMS.debug("CertRequestPanel: cert " + fullnickname + " not found");
++                return false;
++            }
++
+             try {
+                 boolean done = cs.getBoolean("preop.CertRequestPanel.done");
+                 return true;
+@@ -129,11 +141,11 @@ public class CertRequestPanel extends WizardPanelBase {
+                 return true;
+             }
+         } catch (IOException e) {
+-            CMS.debug("CertRequestPanel findCertificate: throw exception:"+e.toString());
++            CMS.debug("CertRequestPanel findCertificate: throw exception: " + e);
+             throw e;
+         } catch (Exception e) {
+-            CMS.debug("CertRequestPanel findCertificate: Exception="+e.toString());
+-            return false;
++            CMS.debug("CertRequestPanel findCertificate: Exception: " + e);
++            throw new IOException(e);
+         }
+     }
+ 
+@@ -414,16 +426,11 @@ public class CertRequestPanel extends WizardPanelBase {
+                     c.setSubsystem(subsystem);
+                     mCerts.addElement(c);
+                 } catch (Exception e) {
+-                    CMS.debug(
+-                            "CertRequestPanel:display() Exception caught: "
+-                                    + e.toString() + " for certTag " + certTag);
++                    CMS.debug(e);
+                 }
+             }
+         } catch (Exception e) {
+-            CMS.debug(
+-                    "CertRequestPanel:display() Exception caught: "
+-                            + e.toString());
+-            System.err.println("Exception caught: " + e.toString());
++            CMS.debug(e);
+ 
+         } // try
+ 
+@@ -548,6 +555,12 @@ public class CertRequestPanel extends WizardPanelBase {
+ 
+                         cert.setCert(certs);
+                         config.putString(subsystem + "." + certTag + ".cert", certs);
++
++                        if (certTag.equals("subsystem")) {
++                            CMS.debug("CertRequestPanel: create subsystem user with externally created subsystem cert");
++                            CertUtil.addUserCertificate(impl);
++                        }
++
+                         /* import certificate */
+                         CMS.debug(
+                                 "CertRequestPanel configCert: nickname="
+@@ -574,6 +587,7 @@ public class CertRequestPanel extends WizardPanelBase {
+ //                            hasErr = true;
+                         }
+                     }
++
+                 } else if (cert.getType().equals("remote")) {
+                     if (b64 != null && b64.length() > 0
+                             && !b64.startsWith("...")) {
+@@ -674,6 +688,11 @@ public class CertRequestPanel extends WizardPanelBase {
+                         CMS.debug("CertRequestPanel update: deleteCert Exception="+ee.toString());
+                     }
+ 
++                    if (certTag.equals("subsystem")) {
++                        CMS.debug("CertRequestPanel: create subsystem user with locally created subsystem cert");
++                        CertUtil.addUserCertificate(impl);
++                    }
++
+                     try {
+                         if (certTag.equals("signing") && subsystem.equals("ca"))
+                             CryptoUtil.importUserCertificate(impl, nickname);
+@@ -706,8 +725,8 @@ public class CertRequestPanel extends WizardPanelBase {
+             }
+             config.commit(false);
+         } catch (Exception e) {
+-            CMS.debug("CertRequestPanel: Exception caught: " + e.toString());
+-            System.err.println("Exception caught: " + e.toString());
++            CMS.debug(e);
++            throw new IOException(e);
+         }
+ 
+         //reset the attribute of the user certificate to u,u,u
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
+index dc3437b1ae3b3178f2edf54f10ebcf82dea25146..fb6829058ab8668f0855e0d8ac02e7706e818e46 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/CertUtil.java
+@@ -524,23 +524,25 @@ public class CertUtil {
+         return cert;
+     }
+ 
+-    public static void addUserCertificate(X509CertImpl cert) {
++    public static void addUserCertificate(X509CertImpl cert) throws Exception {
+         IConfigStore cs = CMS.getConfigStore();
+         int num=0;
+         try {
+             num = cs.getInteger("preop.subsystem.count", 0);
+         } catch (Exception e) {
++            throw e;
+         }
++
+         IUGSubsystem system = (IUGSubsystem) (CMS.getSubsystem(IUGSubsystem.ID));
+         String id = "user"+num;
+ 
+-        try { 
+-          String sysType = cs.getString("cs.type", "");
+-          String machineName = cs.getString("machineName", "");
+-          String securePort = cs.getString("service.securePort", "");
+-          id = sysType + "-" + machineName + "-" + securePort;
+-        } catch (Exception e1) {
+-          // ignore
++        try {
++            String sysType = cs.getString("cs.type", "");
++            String machineName = cs.getString("machineName", "");
++            String securePort = cs.getString("service.securePort", "");
++            id = sysType + "-" + machineName + "-" + securePort;
++        } catch (Exception e) {
++            throw e;
+         }
+ 
+         num++;
+@@ -550,6 +552,7 @@ public class CertUtil {
+         try {
+             cs.commit(false);
+         } catch (Exception e) {
++            throw e;
+         }
+ 
+         IUser user = null;
+@@ -567,8 +570,9 @@ public class CertUtil {
+             user.setX509Certificates(certs);
+             system.addUser(user);
+             CMS.debug("CertUtil addUserCertificate: successfully add the user");
++
+         } catch (LDAPException e) {
+-            CMS.debug("CertUtil addUserCertificate" + e.toString());
++            CMS.debug("CertUtil addUserCertificate: " + e);
+             if (e.getLDAPResultCode() != LDAPException.ENTRY_ALREADY_EXISTS) {
+                 try {
+                     user = system.getUser(id);
+@@ -577,29 +581,26 @@ public class CertUtil {
+                     CMS.debug("CertUtil addUserCertificate: successfully find the user");
+                 }
+             }
+-        } catch (Exception e) {
+-            CMS.debug("CertUtil addUserCertificate addUser " + e.toString());
+         }
+ 
+         try {
+             system.addUserCert(user);
+             CMS.debug("CertUtil addUserCertificate: successfully add the user certificate");
+         } catch (Exception e) {
+-            CMS.debug("CertUtil addUserCertificate exception="+e.toString());
++            CMS.debug("CertUtil addUserCertificate exception: " + e);
+         }
+ 
+-        IGroup group = null;
+         String groupName = "Subsystem Group";
+ 
+         try {
+-            group = system.getGroupFromName(groupName);
++            IGroup group = system.getGroupFromName(groupName);
+             if (!group.isMember(id)) {
+                 group.addMemberName(id);
+                 system.modifyGroup(group);
+                 CMS.debug("CertUtil addUserCertificate: update: successfully added the user to the group.");
+             }
+         } catch (Exception e) {
+-            CMS.debug("CertUtil addUserCertificate update: modifyGroup " + e.toString());
++            CMS.debug("CertUtil addUserCertificate update: modifyGroup " + e);
+         }
+     }
+ 
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/DonePanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/DonePanel.java
+index f21a56de9db99a3603c7b36d778b9b620feacc3c..a6a724672c20b4e579fec269c000a0b1d51a1a12 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/DonePanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/DonePanel.java
+@@ -613,6 +613,7 @@ public class DonePanel extends WizardPanelBase {
+                 cs.commit(false);
+             }
+         } catch (Exception e) {
++            CMS.debug(e);
+         }
+ 
+         try {
+diff --git a/base/common/src/com/netscape/cms/servlet/csadmin/NamePanel.java b/base/common/src/com/netscape/cms/servlet/csadmin/NamePanel.java
+index 9e0b3c863f302e674fb065a2060787faecc3c50d..d22a915ef6007fde6246dec2ff7775babd2518de 100644
+--- a/base/common/src/com/netscape/cms/servlet/csadmin/NamePanel.java
++++ b/base/common/src/com/netscape/cms/servlet/csadmin/NamePanel.java
+@@ -463,9 +463,9 @@ public class NamePanel extends WizardPanelBase {
+         try {
+             updateConfig(config, certTag);
+             if (caType.equals("remote")) {
++                CMS.debug("NamePanel: remote CA");
+                 String v = config.getString("preop.ca.type", "");
+ 
+-                CMS.debug("NamePanel configCert: remote CA");
+                 String pkcs10 = CertUtil.getPKCS10(config, PCERT_PREFIX, 
+                   certObj, context);
+                 certObj.setRequest(pkcs10);
+@@ -508,12 +508,14 @@ public class NamePanel extends WizardPanelBase {
+                         throw new IOException("Error: remote certificate is null");
+                     }
+                 } else if (v.equals("otherca")) {
++                    CMS.debug("NamePanel: external CA");
+                     config.putString(subsystem + "." + certTag + ".cert",
+                             "...paste certificate here...");
+                 } else {  
+                     CMS.debug("NamePanel: no preop.ca.type is provided");
+                 }    
+             } else { // not remote CA, ie, self-signed or local
++                CMS.debug("NamePanel: local CA");
+                 ISubsystem ca = CMS.getSubsystem(ICertificateAuthority.ID);
+ 
+                 if (ca == null) {
+@@ -561,6 +563,7 @@ public class NamePanel extends WizardPanelBase {
+                                 PCERT_PREFIX, certTag, caType, context);
+                     }
+                   }
++
+                 } else if (pubKeyType.equals("ecc")) {
+                   String pubKeyEncoded = config.getString(
+                         PCERT_PREFIX + certTag + ".pubkey.encoded");
+@@ -588,14 +591,12 @@ public class NamePanel extends WizardPanelBase {
+                                 PCERT_PREFIX, certTag, caType, context);
+                     }
+                   }
++
+                 } else {
+                    // invalid key type
+-                   CMS.debug("Invalid key type " + pubKeyType);
+-                }
+-                if (cert != null) {
+-                    if (certTag.equals("subsystem"))
+-                        CertUtil.addUserCertificate(cert);
++                   CMS.debug("NamePanel: Invalid key type " + pubKeyType);
+                 }
++
+             } // done self-signed or local
+ 
+             if (cert != null) {
+@@ -608,10 +609,14 @@ public class NamePanel extends WizardPanelBase {
+                 config.putString(subsystem + "." + certTag + ".cert", certs);
+             }
+             config.commit(false);
++
+         } catch (IOException e) {
++            CMS.debug(e);
+             throw e;
++
+         } catch (Exception e) {
+-            CMS.debug("NamePanel configCert() exception caught:" + e.toString());
++            CMS.debug(e);
++            throw new IOException(e);
+         }
+     }
+  
+diff --git a/base/common/src/com/netscape/cmscore/usrgrp/UGSubsystem.java b/base/common/src/com/netscape/cmscore/usrgrp/UGSubsystem.java
+index a29de66f682b573654979bbbf82b7d10d7987f62..0ce8ef82f662fae430d0b66f3fb2ca353b612bc5 100644
+--- a/base/common/src/com/netscape/cmscore/usrgrp/UGSubsystem.java
++++ b/base/common/src/com/netscape/cmscore/usrgrp/UGSubsystem.java
+@@ -647,6 +647,7 @@ public final class UGSubsystem implements IUGSubsystem {
+      * addUserCert() 
+      */
+     public void addUser(IUser identity) throws EUsrGrpException, LDAPException {
++        CMS.debug("UGSubsystem: addUser(" + identity.getUserID() + ")");
+         User id = (User) identity;
+ 
+         if (id == null) {
+@@ -962,6 +963,7 @@ public final class UGSubsystem implements IUGSubsystem {
+      * Removes identity.
+      */
+     public void removeUser(String userid) throws EUsrGrpException {
++        CMS.debug("UGSubsystem: removeUser(" + userid + ")");
+         if (userid == null) {
+             return;
+         }
+diff --git a/base/silent/src/ca/ConfigureCA.java b/base/silent/src/ca/ConfigureCA.java
+index f07e694ae50ae8a1aaa47426dfe6ed3191e16ab2..188dc1bb4637b480a717808fa09a0f8372ddcd51 100644
+--- a/base/silent/src/ca/ConfigureCA.java
++++ b/base/silent/src/ca/ConfigureCA.java
+@@ -612,7 +612,7 @@ public class ConfigureCA {
+         }
+     }
+ 
+-    public boolean CertSubjectPanel() {
++    public boolean CertSubjectPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -753,14 +753,12 @@ public class ConfigureCA {
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in CertSubjectPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+ 
+     }
+ 
+-    public boolean CertificatePanel() {
++    public boolean CertificatePanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -782,14 +780,12 @@ public class ConfigureCA {
+ 		
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in CertificatePanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+ 
+     }
+ 
+-    public boolean CertificatePanelExternal() {
++    public boolean CertificatePanelExternal() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -877,14 +873,12 @@ public class ConfigureCA {
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in CertificatePanelExternal(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+ 
+     }
+ 
+-    public boolean BackupPanel() {
++    public boolean BackupPanel() throws Exception {
+         try {
+             boolean st = false;
+             HTTPResponse hr = null;
+@@ -939,16 +933,13 @@ public class ConfigureCA {
+ 
+                     fis.close();
+                 } catch (Exception e) {
+-                    e.printStackTrace();
+-                    return false;
++                    throw e;
+                 }
+             }
+ 
+             return true;
+         } catch (Exception e) {
+-            System.out.println("Exception in BackupPanel(): " + e.toString());
+-            e.printStackTrace();
+-            return false;
++            throw e;
+         }
+     }
+ 
+@@ -1135,7 +1126,7 @@ public class ConfigureCA {
+ 
+     }
+ 
+-    public boolean ConfigureCAInstance() {
++    public boolean ConfigureCAInstance() throws Exception {
+         // 0. login to cert db
+         ComCrypto cCrypt = new ComCrypto(client_certdb_dir, client_certdb_pwd,
+                 null, null, null);
+@@ -1341,7 +1332,7 @@ public class ConfigureCA {
+         }
+     }
+ 
+-    public static void main(String args[]) {
++    public static void main(String args[]) throws Exception {
+         ConfigureCA ca = new ConfigureCA();
+ 
+         // set variables
+-- 
+2.4.3
+
