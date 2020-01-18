@@ -1,0 +1,161 @@
+<!-- --- BEGIN COPYRIGHT BLOCK ---
+     This program is free software; you can redistribute it and/or modify
+     it under the terms of the GNU General Public License as published by
+     the Free Software Foundation; version 2 of the License.
+
+     This program is distributed in the hope that it will be useful,
+     but WITHOUT ANY WARRANTY; without even the implied warranty of
+     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+     GNU General Public License for more details.
+
+     You should have received a copy of the GNU General Public License along
+     with this program; if not, write to the Free Software Foundation, Inc.,
+     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+     Copyright (C) 2014 Red Hat, Inc.
+     All rights reserved.
+     --- END COPYRIGHT BLOCK --- -->
+<div class="pki-header">
+<ol class="breadcrumb">
+    <li><a href="#">Home</a></li>
+    <li><a href="#connectors">Subsystem Connections</a></li>
+    <li class="active"><strong><span name="title">Subsystem Connection ${id}</span></strong></li>
+</ol>
+
+<span name="title" class="pki-title">Subsystem Connection ${id}</span>
+
+<span class="pki-actions">
+
+<ul name="view" class="pki-actions-menu">
+<li name="edit" style="display: none;"><a href="#">Edit</a></li>
+<li name="submit" style="display: none;"><a href="#">Submit</a></li>
+<li name="cancel" style="display: none;"><a href="#">Cancel</a></li>
+<li name="approve" style="display: none;"><a href="#">Approve</a></li>
+<li name="reject" style="display: none;"><a href="#">Reject</a></li>
+<li name="enable" style="display: none;"><a href="#">Enable</a></li>
+<li name="disable" style="display: none;"><a href="#">Disable</a></li>
+</ul>
+
+<span name="edit" class="pki-actions-menu" style="display: none;">
+<button name="cancel">Cancel</button>
+<button name="save" class="primary">Save</button>
+</span>
+
+</span>
+
+</div>
+
+<div name="connector" class="pki-fields">
+<fieldset>
+    <label>Connector ID</label>
+    <input name="connectorID" readonly="readonly">
+    <br>
+    <label>Status</label>
+    <input name="status" readonly="readonly">
+    <br>
+</fieldset>
+</div>
+
+<div name="properties">
+
+<h2>Properties</h2>
+
+<table name="list">
+<thead>
+    <tr>
+         <th class="pki-table-actions" colspan="3">
+             <span name="search">
+                 <input name="search" type="text" placeholder="Search...">
+             </span>
+             <span class="pki-table-buttons">
+                 <button name="add">Add</button>
+                 <button name="remove">Remove</button>
+                 <button name="showEditor">Switch View</button>
+             </span>
+         </th>
+    </tr>
+    <tr>
+        <th class="pki-select-column"><input id="connector-properties-selectall" type="checkbox"><label for="connector-properties-selectall">&nbsp;</label></th>
+        <th class="pki-property-name-column">Name</th>
+        <th>Value</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td class="pki-select-column"><input id="connector-properties-select" type="checkbox"><label for="connector-properties-select">&nbsp;</label></td>
+        <td name="id" class="pki-property-name-column"><a href="/tps/ui/connectors/${parent.id}/properties/${id}">${id}</a></td>
+        <td name="value">${value}</td>
+    </tr>
+</tbody>
+<tfoot>
+    <tr>
+         <th class="pki-table-actions" colspan="3">
+             <div class="pki-table-info">
+                 Total: <span name="totalEntries">0</span> entries
+             </div>
+             <div class="pki-page-controls">
+                 <ul class="pagination">
+                     <li><a href="#" name="first"><span class="i fa fa-angle-double-left"></span></a></li>
+                     <li><a href="#" name="prev"><span class="i fa fa-angle-left"></span></a></li>
+                 </ul>
+                 <span class="pki-page-jump">
+                     <input name="page" type="text" value="1"> of <span name="totalPages">1</span>
+                 </span>
+                 <ul class="pagination">
+                     <li><a href="#" name="next"><span class="i fa fa-angle-right"></span></a></li>
+                     <li><a href="#" name="last"><span class="i fa fa-angle-double-right"></span></a></li>
+                 </ul>
+             </div>
+         </th>
+    </tr>
+</tfoot>
+</table>
+
+<table name="editor" style="display: none;">
+<thead>
+    <tr>
+         <th class="pki-table-actions">
+             <span class="pki-table-buttons">
+                 <button name="showList">Switch View</button>
+             </span>
+         </th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td style="padding: 0;">
+            <textarea style="width: 100%;" rows="20">
+            </textarea>
+        </td>
+    </tr>
+</tbody>
+</table>
+
+</div>
+
+<div id="property-dialog" class="modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">
+                    <span class="pficon pficon-close"></span>
+                </button>
+                <h4 class="modal-title">Edit Property</h4>
+            </div>
+            <div class="modal-body">
+		        <fieldset>
+		            <label>Name</label>
+		            <input name="name" readonly="readonly"><br>
+		            <label>Value</label>
+		            <input name="value" readonly="readonly"><br>
+		        </fieldset>
+            </div>
+            <div class="modal-footer">
+	            <button name="add" class="btn btn-primary">Add</button>
+	            <button name="save" class="btn btn-primary">Save</button>
+	            <button name="close" class="btn btn-primary">Close</button>
+	            <button name="cancel" class="btn btn-default" data-dismiss="modal">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,4270 @@
+From 8d109e0b7ca6af60f862c641a6287d93a1dcb01b Mon Sep 17 00:00:00 2001
+From: Jack Magne <jmagne@redhat.com>
+Date: Tue, 7 Nov 2017 11:05:55 -0800
+Subject: Fix #2735 Secure removal of secret data storage (phase 2)
+
+This portion of the fix attempts to take care of the remaining secret data
+storage issues that could be practically taken care of with respect to
+servers and clients.
+
+A new method was placed in CryptoUtil to server the needs of clients.
+Change-Id: I1a14daabcad72e531572d1be8bc255e2e501b70a
+
+(cherry picked from commit f5ec7c2af4a1fb44d5731c74672bf789e9240499)
+---
+ base/common/src/com/netscape/certsrv/key/Key.java  |   6 +
+ .../src/com/netscape/cmstools/CMCRequest.java      |  23 ++-
+ .../src/com/netscape/cmstools/CMCSharedToken.java  |   2 +
+ .../src/com/netscape/cmstools/PasswordCache.java   |   1 +
+ .../com/netscape/cmstools/key/KeyRetrieveCLI.java  | 162 +++++++++++----------
+ .../cms/servlet/tks/SecureChannelProtocol.java     |  14 +-
+ .../com/netscape/cmsutil/crypto/CryptoUtil.java    |  20 +++
+ 7 files changed, 139 insertions(+), 89 deletions(-)
+
+diff --git a/base/common/src/com/netscape/certsrv/key/Key.java b/base/common/src/com/netscape/certsrv/key/Key.java
+index 1afd54c..69b59f3 100644
+--- a/base/common/src/com/netscape/certsrv/key/Key.java
++++ b/base/common/src/com/netscape/certsrv/key/Key.java
+@@ -6,6 +6,7 @@ import javax.xml.bind.annotation.XmlElement;
+ import javax.xml.bind.annotation.XmlRootElement;
+ 
+ import com.netscape.certsrv.request.RequestId;
++import com.netscape.cmsutil.crypto.CryptoUtil;
+ import com.netscape.cmsutil.util.Utils;
+ 
+ /**
+@@ -159,4 +160,9 @@ public class Key {
+     public void setPublicKey(String publicKey) {
+         this.publicKey = publicKey;
+     }
++
++    public void clearSensitiveData() {
++        CryptoUtil.obscureBytes(data, "random");
++        data = null;
++    }
+ }
+diff --git a/base/java-tools/src/com/netscape/cmstools/CMCRequest.java b/base/java-tools/src/com/netscape/cmstools/CMCRequest.java
+index 37752cd..fc58f4e 100644
+--- a/base/java-tools/src/com/netscape/cmstools/CMCRequest.java
++++ b/base/java-tools/src/com/netscape/cmstools/CMCRequest.java
+@@ -38,13 +38,6 @@ import java.util.Arrays;
+ import java.util.Date;
+ import java.util.StringTokenizer;
+ 
+-import netscape.security.pkcs.PKCS10;
+-import netscape.security.x509.KeyIdentifier;
+-import netscape.security.x509.PKIXExtensions;
+-import netscape.security.x509.SubjectKeyIdentifierExtension;
+-import netscape.security.x509.X500Name;
+-import netscape.security.x509.X509CertImpl;
+-
+ import org.mozilla.jss.CryptoManager;
+ import org.mozilla.jss.asn1.ANY;
+ import org.mozilla.jss.asn1.ASN1Util;
+@@ -114,6 +107,13 @@ import com.netscape.cmsutil.util.Cert;
+ import com.netscape.cmsutil.util.HMACDigest;
+ import com.netscape.cmsutil.util.Utils;
+ 
++import netscape.security.pkcs.PKCS10;
++import netscape.security.x509.KeyIdentifier;
++import netscape.security.x509.PKIXExtensions;
++import netscape.security.x509.SubjectKeyIdentifierExtension;
++import netscape.security.x509.X500Name;
++import netscape.security.x509.X509CertImpl;
++
+ /**
+  * Tool for creating CMC full request
+  *
+@@ -1803,6 +1803,7 @@ public class CMCRequest {
+             System.exit(1);
+         }
+ 
++        byte challenge[] = null;
+         try {
+             TaggedRequest request = encryptedPop.getRequest();
+             AlgorithmIdentifier thePOPAlgID = encryptedPop.getThePOPAlgID();
+@@ -1838,7 +1839,7 @@ public class CMCRequest {
+             }
+             System.out.println(method + "symKey unwrapped.");
+ 
+-            byte challenge[] = CryptoUtil.decryptUsingSymmetricKey(
++            challenge = CryptoUtil.decryptUsingSymmetricKey(
+                     token,
+                     ivps,
+                     encCI.getEncryptedContent().toByteArray(),
+@@ -1857,13 +1858,16 @@ public class CMCRequest {
+                 MessageDigest hash = MessageDigest.getInstance(CryptoUtil.getNameFromHashAlgorithm(witnessAlgID));
+                 byte[] digest = hash.digest(challenge);
+                 boolean witnessChecked = Arrays.equals(digest, witness.toByteArray());
++                CryptoUtil.obscureBytes(digest,"random");
+                 if (witnessChecked) {
+                     System.out.println(method + "Yay! witness verified");
+                 } else {
++                    CryptoUtil.obscureBytes(challenge, "random");
+                     System.out.println(method + "Oops! witness failed to verify.  Must abort!");
+                     System.exit(1);
+                 }
+             } catch (Exception ex) {
++                CryptoUtil.obscureBytes(challenge, "random");
+                 System.out.println(method + ex);
+                 System.exit(1);
+             }
+@@ -1877,6 +1881,7 @@ public class CMCRequest {
+                 hmacDigest.update(ASN1Util.encode(request));
+                 popProofValue = hmacDigest.digest();
+             } catch (Exception ex) {
++                CryptoUtil.obscureBytes(challenge, "random");
+                 System.out.println(method + "calculating POP Proof Value failed: " + ex);
+                 System.exit(1);
+             }
+@@ -1912,6 +1917,8 @@ public class CMCRequest {
+         } catch (Exception e) {
+             System.out.println(method + e);
+             System.exit(1);
++        } finally {
++            CryptoUtil.obscureBytes(challenge, "random");
+         }
+ 
+         System.out.println(method + " completes.");
+diff --git a/base/java-tools/src/com/netscape/cmstools/CMCSharedToken.java b/base/java-tools/src/com/netscape/cmstools/CMCSharedToken.java
+index a0a7651..d16dd0c 100644
+--- a/base/java-tools/src/com/netscape/cmstools/CMCSharedToken.java
++++ b/base/java-tools/src/com/netscape/cmstools/CMCSharedToken.java
+@@ -299,6 +299,8 @@ public class CMCSharedToken {
+ 
+                 String ver_spassphrase = new String(ver_passphrase, "UTF-8");
+ 
++                CryptoUtil.obscureBytes(ver_passphrase, "random");
++
+                 System.out.println("ver_passphrase String = " + ver_spassphrase);
+                 System.out.println("ver_passphrase UTF-8 bytes = ");
+                 System.out.println(Arrays.toString(ver_spassphrase.getBytes("UTF-8")));
+diff --git a/base/java-tools/src/com/netscape/cmstools/PasswordCache.java b/base/java-tools/src/com/netscape/cmstools/PasswordCache.java
+index 7f17c8f..859eda3 100644
+--- a/base/java-tools/src/com/netscape/cmstools/PasswordCache.java
++++ b/base/java-tools/src/com/netscape/cmstools/PasswordCache.java
+@@ -554,6 +554,7 @@ class PWsdrCache {
+                 byte[] dcryptb = sdr.decrypt(bos.toByteArray());
+ 
+                 dcrypts = new String(dcryptb, "UTF-8");
++                CryptoUtil.obscureBytes(dcryptb, "random");
+             } catch (TokenException e) {
+                 System.out.println("password cache decrypto failed " + e.toString());
+                 e.printStackTrace();
+diff --git a/base/java-tools/src/com/netscape/cmstools/key/KeyRetrieveCLI.java b/base/java-tools/src/com/netscape/cmstools/key/KeyRetrieveCLI.java
+index 736c6e6..8339218 100644
+--- a/base/java-tools/src/com/netscape/cmstools/key/KeyRetrieveCLI.java
++++ b/base/java-tools/src/com/netscape/cmstools/key/KeyRetrieveCLI.java
+@@ -87,106 +87,116 @@ public class KeyRetrieveCLI extends CLI {
+             throw new Exception("Incorrect number of parameters provided.");
+         }
+ 
+-        String keyId = cmd.getOptionValue("keyID");
+-        String passphrase = cmd.getOptionValue("passphrase");
+-        String requestId = cmd.getOptionValue("requestID");
+-        String outputFilePath = cmd.getOptionValue("output");
+-        String outputDataFile = cmd.getOptionValue("output-data");
+-        String requestFile = cmd.getOptionValue("input");
+-        String transportNickname = cmd.getOptionValue("transport");
+-
+-        KeyClient keyClient = keyCLI.getKeyClient(transportNickname);
+         Key keyData = null;
+ 
+-        if (requestFile != null) {
+-            JAXBContext context = JAXBContext.newInstance(KeyRecoveryRequest.class);
+-            Unmarshaller unmarshaller = context.createUnmarshaller();
+-            FileInputStream fis = new FileInputStream(requestFile);
+-            KeyRecoveryRequest req = (KeyRecoveryRequest) unmarshaller.unmarshal(fis);
+-
+-            if (req.getKeyId() == null) {
+-                throw new Exception("Key ID must be specified in the request file.");
+-            }
+-
+-            if (req.getCertificate() != null) {
+-                keyData = keyClient.retrieveKeyByPKCS12(req.getKeyId(), req.getCertificate(),
+-                        req.getPassphrase());
++        try {
++            String keyId = cmd.getOptionValue("keyID");
++            String passphrase = cmd.getOptionValue("passphrase");
++            String requestId = cmd.getOptionValue("requestID");
++            String outputFilePath = cmd.getOptionValue("output");
++            String outputDataFile = cmd.getOptionValue("output-data");
++            String requestFile = cmd.getOptionValue("input");
++            String transportNickname = cmd.getOptionValue("transport");
++
++            KeyClient keyClient = keyCLI.getKeyClient(transportNickname);
++
++            if (requestFile != null) {
++                JAXBContext context = JAXBContext.newInstance(KeyRecoveryRequest.class);
++                Unmarshaller unmarshaller = context.createUnmarshaller();
++                FileInputStream fis = new FileInputStream(requestFile);
++                KeyRecoveryRequest req = (KeyRecoveryRequest) unmarshaller.unmarshal(fis);
++
++                if (req.getKeyId() == null) {
++                    throw new Exception("Key ID must be specified in the request file.");
++                }
+ 
+-            } else if (req.getPassphrase() != null) {
+-                keyData = keyClient.retrieveKeyByPassphrase(req.getKeyId(), req.getPassphrase());
++                if (req.getCertificate() != null) {
++                    keyData = keyClient.retrieveKeyByPKCS12(req.getKeyId(), req.getCertificate(),
++                            req.getPassphrase());
+ 
+-            } else if (req.getSessionWrappedPassphrase() != null) {
+-                keyData = keyClient.retrieveKeyUsingWrappedPassphrase(req.getKeyId(),
+-                        Utils.base64decode(req.getTransWrappedSessionKey()),
+-                        Utils.base64decode(req.getSessionWrappedPassphrase()),
+-                        Utils.base64decode(req.getNonceData()));
++                } else if (req.getPassphrase() != null) {
++                    keyData = keyClient.retrieveKeyByPassphrase(req.getKeyId(), req.getPassphrase());
+ 
+-            } else if (req.getTransWrappedSessionKey() != null) {
+-                keyData = keyClient.retrieveKey(req.getKeyId(),
+-                        Utils.base64decode(req.getTransWrappedSessionKey()));
++                } else if (req.getSessionWrappedPassphrase() != null) {
++                    keyData = keyClient.retrieveKeyUsingWrappedPassphrase(req.getKeyId(),
++                            Utils.base64decode(req.getTransWrappedSessionKey()),
++                            Utils.base64decode(req.getSessionWrappedPassphrase()),
++                            Utils.base64decode(req.getNonceData()));
+ 
+-            } else {
+-                keyData = keyClient.retrieveKey(req.getKeyId());
+-            }
++                } else if (req.getTransWrappedSessionKey() != null) {
++                    keyData = keyClient.retrieveKey(req.getKeyId(),
++                            Utils.base64decode(req.getTransWrappedSessionKey()));
+ 
+-        } else {
+-            // Using command line options.
+-            if (requestId == null && keyId == null) {
+-                throw new Exception("Either requestID or keyID must be specified");
+-            }
+-
+-            if (passphrase != null) {
+-                if (requestId != null) {
+-                    keyData = keyClient.retrieveKeyByRequestWithPassphrase(
+-                            new RequestId(requestId), passphrase);
+                 } else {
+-                    keyData = keyClient.retrieveKeyByPassphrase(new KeyId(keyId), passphrase);
++                    keyData = keyClient.retrieveKey(req.getKeyId());
+                 }
+ 
+             } else {
+-                if (requestId != null) {
+-                    keyData = keyClient.retrieveKeyByRequest(new RequestId(requestId));
+-                } else {
+-                    keyData = keyClient.retrieveKey(new KeyId(keyId));
++                // Using command line options.
++                if (requestId == null && keyId == null) {
++                    throw new Exception("Either requestID or keyID must be specified");
+                 }
+ 
+-                clientEncryption = false;
++                if (passphrase != null) {
++                    if (requestId != null) {
++                        keyData = keyClient.retrieveKeyByRequestWithPassphrase(
++                                new RequestId(requestId), passphrase);
++                    } else {
++                        keyData = keyClient.retrieveKeyByPassphrase(new KeyId(keyId), passphrase);
++                    }
++
++                } else {
++                    if (requestId != null) {
++                        keyData = keyClient.retrieveKeyByRequest(new RequestId(requestId));
++                    } else {
++                        keyData = keyClient.retrieveKey(new KeyId(keyId));
++                    }
++
++                    clientEncryption = false;
+ 
+-                // No need to return the encrypted data since encryption
+-                // is done locally.
+-                keyData.setEncryptedData(null);
++                    // No need to return the encrypted data since encryption
++                    // is done locally.
++                    keyData.setEncryptedData(null);
++                }
+             }
+-        }
+ 
+-        MainCLI.printMessage("Retrieve Key Information");
++            MainCLI.printMessage("Retrieve Key Information");
+ 
+-        if (outputDataFile != null) {
++            if (outputDataFile != null) {
+ 
+-            byte[] data;
+-            if (clientEncryption) { // store encrypted data
+-                data = keyData.getEncryptedData();
++                byte[] data;
++                if (clientEncryption) { // store encrypted data
++                    data = keyData.getEncryptedData();
+ 
+-            } else { // store unencrypted data
+-                data = keyData.getData();
+-            }
++                } else { // store unencrypted data
++                    data = keyData.getData();
++                }
+ 
+-            Path path = Paths.get(outputDataFile);
+-            Files.write(path, data);
++                Path path = Paths.get(outputDataFile);
++                Files.write(path, data);
+ 
+-            printKeyInfo(keyData);
+-            System.out.println("  Output: " + outputDataFile);
++                printKeyInfo(keyData);
++                System.out.println("  Output: " + outputDataFile);
+ 
+-        } else if (outputFilePath != null) {
+-            JAXBContext context = JAXBContext.newInstance(Key.class);
+-            Marshaller marshaller = context.createMarshaller();
+-            marshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, true);
+-            marshaller.marshal(keyData, new File(outputFilePath));
++            } else if (outputFilePath != null) {
++                JAXBContext context = JAXBContext.newInstance(Key.class);
++                Marshaller marshaller = context.createMarshaller();
++                marshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, true);
++                marshaller.marshal(keyData, new File(outputFilePath));
+ 
+-            System.out.println("  Output: " + outputFilePath);
++                System.out.println("  Output: " + outputFilePath);
+ 
+-        } else {
+-            printKeyInfo(keyData);
+-            printKeyData(keyData);
++            } else {
++                printKeyInfo(keyData);
++                printKeyData(keyData);
++            }
++
++        } catch (Exception e) {
++            throw e;
++        } finally {
++            if (keyData != null) {
++                keyData.clearSensitiveData();
++            }
+         }
+     }
+ 
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/tks/SecureChannelProtocol.java b/base/server/cms/src/com/netscape/cms/servlet/tks/SecureChannelProtocol.java
+index c3b3952..1110cc6 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/tks/SecureChannelProtocol.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/tks/SecureChannelProtocol.java
+@@ -25,12 +25,13 @@ import org.mozilla.jss.crypto.SymmetricKey.NotExtractableException;
+ import org.mozilla.jss.crypto.SymmetricKeyDeriver;
+ import org.mozilla.jss.crypto.TokenException;
+ 
+-import sun.security.pkcs11.wrapper.PKCS11Constants;
+-
+ import com.netscape.certsrv.apps.CMS;
+ import com.netscape.certsrv.base.EBaseException;
++import com.netscape.cmscore.security.JssSubsystem;
+ import com.netscape.cmsutil.crypto.CryptoUtil;
+ 
++import sun.security.pkcs11.wrapper.PKCS11Constants;
++
+ public class SecureChannelProtocol {
+ 
+     static String sharedSecretKeyName = null;
+@@ -341,7 +342,8 @@ public class SecureChannelProtocol {
+                     byte[] finalKeyBytes = nistKdf.kdf_AES_CMAC_SCP03(divKey, context, constant, 16);
+                     sessionKey = unwrapAESSymKeyOnToken(token, finalKeyBytes, false);
+ 
+-                    Arrays.fill(finalKeyBytes,(byte) 0);
++                    JssSubsystem jssSubsystem = (JssSubsystem) CMS.getSubsystem(JssSubsystem.ID);
++                    jssSubsystem.obscureBytes(finalKeyBytes);
+ 
+                     //The final session key is AES.
+                 }
+@@ -393,7 +395,8 @@ public class SecureChannelProtocol {
+                     byte[] finalKeyBytes = nistKdf.kdf_AES_CMAC_SCP03(divKey, context, constant, 16);
+                     sessionKey = unwrapAESSymKeyOnToken(token, finalKeyBytes, false);
+ 
+-                    Arrays.fill(finalKeyBytes,(byte) 0);
++                    JssSubsystem jssSubsystem = (JssSubsystem) CMS.getSubsystem(JssSubsystem.ID);
++                    jssSubsystem.obscureBytes(finalKeyBytes);
+                 }
+             }
+         }
+@@ -908,7 +911,8 @@ public class SecureChannelProtocol {
+             finalAESKey = keyUnWrap.unwrapSymmetric(wrappedKey, SymmetricKey.AES, 16);
+ 
+ 
+-            Arrays.fill(wrappedKey,(byte) 0);
++            JssSubsystem jssSubsystem = (JssSubsystem) CMS.getSubsystem(JssSubsystem.ID);
++            jssSubsystem.obscureBytes(wrappedKey);
+ 
+             //byte[] finalKeyBytes = finalAESKey.getKeyData();
+             //displayByteArray(finalKeyBytes, false);
+diff --git a/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java b/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
+index 1337803..8a0ea08 100644
+--- a/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
++++ b/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
+@@ -2176,6 +2176,26 @@ public class CryptoUtil {
+ 
+     }
+ 
++    public static void obscureBytes(byte[] memory, String method) {
++        if (memory == null || memory.length == 0) {
++            //in case we want to log
++            return;
++        }
++
++        SecureRandom rnd;
++        try {
++            rnd = getRandomNumberGenerator();
++        } catch (GeneralSecurityException e) {
++            throw new RuntimeException(e);
++        }
++
++        if ("zeroes".equals(method)) {
++            Arrays.fill(memory, (byte)0);
++        } else {
++            rnd.nextBytes(memory);
++        }
++    }
++
+     public static byte[] unwrapUsingPassphrase(byte[] wrappedRecoveredKey, String recoveryPassphrase)
+             throws IOException, InvalidBERException, InvalidKeyException, IllegalStateException,
+             NoSuchAlgorithmException, InvalidAlgorithmParameterException, NotInitializedException, TokenException,
+-- 
+1.8.3.1
+
+
+From 0cbe30064861a9908475aa95a686e69e3012a841 Mon Sep 17 00:00:00 2001
+From: Christian Heimes <cheimes@redhat.com>
+Date: Wed, 8 Nov 2017 20:46:57 +0100
+Subject: Ignore empty key in read_environment_files
+
+Don't set empty key or key '_' (last command) in read_environment_files.
+Fixes "ValueError: illegal environment variable name".
+
+Change-Id: I22d295ebbf0845bcf8aab3019e1b1f5a3a731e10
+Closes: https://pagure.io/dogtagpki/issue/2850
+Signed-off-by: Christian Heimes <cheimes@redhat.com>
+(cherry picked from commit a105341f777354429dfc9f28c7baf5bddd2d5e1f)
+---
+ base/common/python/pki/util.py | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/base/common/python/pki/util.py b/base/common/python/pki/util.py
+index 5832f55..871c899 100644
+--- a/base/common/python/pki/util.py
++++ b/base/common/python/pki/util.py
+@@ -272,4 +272,6 @@ def read_environment_files(env_file_list=None):
+ 
+     for env_val in env_vals:
+         (key, _, value) = env_val.partition("=")
++        if not key.strip() or key == u'_':
++            continue
+         os.environ[key] = value
+-- 
+1.8.3.1
+
+
+From 45c07d48a8a5f4acda8ce4ca3be5803c2596901e Mon Sep 17 00:00:00 2001
+From: Jack Magne <jmagne@redhat.com>
+Date: Fri, 10 Nov 2017 15:55:36 -0800
+Subject: ReFix for  #2824 TPS new configuration to allow the protocol of the
+ to determine applet loaded.
+
+The problem discovered was that in only the external registration case, there was a problem obtaining the protocol
+information for the token being enrolled. This simple fix makes sure the protocol info is obtained correctly for external
+reg and non external reg enrollment cases.
+
+Change-Id: Iccd40adbdafd5e94e04cbb8c391bd2706e483a1f
+(cherry picked from commit e48374cd8a744fad5a03f64e8685ec3b3c465553)
+---
+ .../src/org/dogtagpki/server/tps/processor/TPSProcessor.java   | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/base/tps/src/org/dogtagpki/server/tps/processor/TPSProcessor.java b/base/tps/src/org/dogtagpki/server/tps/processor/TPSProcessor.java
+index 57e5d79..a78db64 100644
+--- a/base/tps/src/org/dogtagpki/server/tps/processor/TPSProcessor.java
++++ b/base/tps/src/org/dogtagpki/server/tps/processor/TPSProcessor.java
+@@ -33,8 +33,6 @@ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+ 
+-import netscape.security.x509.RevocationReason;
+-
+ import org.dogtagpki.server.tps.TPSSession;
+ import org.dogtagpki.server.tps.TPSSubsystem;
+ import org.dogtagpki.server.tps.authentication.AuthUIParameter;
+@@ -104,6 +102,8 @@ import com.netscape.cms.servlet.tks.SecureChannelProtocol;
+ import com.netscape.cmsutil.crypto.CryptoUtil;
+ import com.netscape.symkey.SessionKey;
+ 
++import netscape.security.x509.RevocationReason;
++
+ public class TPSProcessor {
+ 
+     private static Logger signedAuditLogger = SignedAuditLogger.getLogger();
+@@ -558,8 +558,10 @@ public class TPSProcessor {
+             CMS.debug("TPSProcessor.setupSecureChannel: obtained randomData");
+         }
+ 
+-        // We already do this when checking for applet upgrade earlier.
+-        //acquireChannelPlatformAndProtocolInfo();
++        // Do this on behalf of external reg, which needs it
++        // If already called, the routine will return anyway.
++
++        acquireChannelPlatformAndProtocolInfo();
+ 
+         TPSBuffer initUpdateResp = initializeUpdate(keyVersion, keyIndex, randomData);
+ 
+-- 
+1.8.3.1
+
+
+From 23ce60193a31c070441f93238565a7250cff981b Mon Sep 17 00:00:00 2001
+From: Jack Magne <jmagne@redhat.com>
+Date: Fri, 10 Nov 2017 10:57:36 -0800
+Subject: Fix #2735 Secure removal of secret data storage (phase 3)
+
+Add more secure data removal with respect to passwords.
+Concentrate on the CMC Shared Token area. Done by changing
+String based passwords to char[] based password, which then can be cleaned.
+Cleaned up a couple of minor review suggestions.
+
+Change-Id: I898814000353978f403f19f679083474548edc5e
+(cherry picked from commit daff3951340246d97a9877d5dde4782c8c675974)
+---
+ .../certsrv/authentication/ISharedToken.java       |  10 +-
+ .../servlet/test/GeneratePKIArchiveOptions.java    |   9 +-
+ base/kra/src/com/netscape/kra/RecoveryService.java |  30 +-
+ .../com/netscape/kra/SecurityDataProcessor.java    |   8 +-
+ .../netscape/cms/authentication/SharedSecret.java  |  24 +-
+ .../netscape/cms/profile/common/EnrollProfile.java | 349 ++++++++++++---------
+ .../cms/servlet/common/CMCOutputTemplate.java      |  19 +-
+ .../cms/servlet/csadmin/ConfigurationUtils.java    | 266 +++++++++-------
+ .../netscape/cmscore/security/JssSubsystem.java    |   8 +
+ .../com/netscape/cmsutil/crypto/CryptoUtil.java    |  65 +++-
+ 10 files changed, 494 insertions(+), 294 deletions(-)
+
+diff --git a/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java b/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java
+index b33ae7b..761c344 100644
+--- a/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java
++++ b/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java
+@@ -16,24 +16,24 @@
+ // All rights reserved.
+ // --- END COPYRIGHT BLOCK ---
+ package com.netscape.certsrv.authentication;
+-import com.netscape.certsrv.base.EBaseException;
+-
+ import java.math.BigInteger;
+ 
+ import org.mozilla.jss.pkix.cmc.PKIData;
+ 
++import com.netscape.certsrv.base.EBaseException;
++
+ /**
+  * Shared Token interface.
+  */
+ public interface ISharedToken {
+ 
+     // support for id_cmc_identification
+-    public String getSharedToken(String identification)
++    public char[] getSharedToken(String identification)
+             throws EBaseException;
+ 
+-    public String getSharedToken(PKIData cmcData)
++    public char[] getSharedToken(PKIData cmcData)
+             throws EBaseException;
+ 
+-    public String getSharedToken(BigInteger serialnum)
++    public char[] getSharedToken(BigInteger serialnum)
+             throws EBaseException;
+ }
+diff --git a/base/kra/functional/src/com/netscape/cms/servlet/test/GeneratePKIArchiveOptions.java b/base/kra/functional/src/com/netscape/cms/servlet/test/GeneratePKIArchiveOptions.java
+index e1a9816..5ccf7a8 100644
+--- a/base/kra/functional/src/com/netscape/cms/servlet/test/GeneratePKIArchiveOptions.java
++++ b/base/kra/functional/src/com/netscape/cms/servlet/test/GeneratePKIArchiveOptions.java
+@@ -213,8 +213,15 @@ public class GeneratePKIArchiveOptions {
+                 new OCTET_STRING(ivps.getIV()));
+ 
+         if (passphraseMode) {
++            char[] pwdChars = passphrase.toCharArray();
++            try {
+             encoded = CryptoUtil.createEncodedPKIArchiveOptions(
+-                    token, transportCert.getPublicKey(), passphrase, params, aid);
++                    token, transportCert.getPublicKey(), pwdChars, params, aid);
++            } catch (Exception e) {
++                throw e;
++            } finally {
++                CryptoUtil.obscureChars(pwdChars);
++            }
+         } else {
+             encoded = CryptoUtil.createEncodedPKIArchiveOptions(
+                     token, transportCert.getPublicKey(), vek, params, aid);
+diff --git a/base/kra/src/com/netscape/kra/RecoveryService.java b/base/kra/src/com/netscape/kra/RecoveryService.java
+index d562c15..96ee73b 100644
+--- a/base/kra/src/com/netscape/kra/RecoveryService.java
++++ b/base/kra/src/com/netscape/kra/RecoveryService.java
+@@ -461,6 +461,7 @@ public class RecoveryService implements IService {
+     public void createPFX(IRequest request, Hashtable<String, Object> params,
+             PrivateKey priKey, CryptoToken ct) throws EBaseException {
+         CMS.debug("RecoverService: createPFX() allowEncDecrypt_recovery=false");
++        org.mozilla.jss.util.Password pass = null;
+         try {
+             // create p12
+             X509Certificate x509cert =
+@@ -493,9 +494,14 @@ public class RecoveryService implements IService {
+             // add key
+             mKRA.log(ILogger.LL_INFO, "KRA adds key to P12");
+             CMS.debug("RecoverService: createPFX() adds key to P12");
+-            org.mozilla.jss.util.Password pass = new
++            char[] pwdChar = pwd.toCharArray();
++            pass = new
+                     org.mozilla.jss.util.Password(
+-                            pwd.toCharArray());
++                            pwdChar);
++            {
++                JssSubsystem jssSubsystem = (JssSubsystem) CMS.getSubsystem(JssSubsystem.ID);
++                jssSubsystem.obscureChars(pwdChar);
++            }
+ 
+             SEQUENCE safeContents = new SEQUENCE();
+             PasswordConverter passConverter = new
+@@ -580,7 +586,6 @@ public class RecoveryService implements IService {
+                     ByteArrayOutputStream();
+ 
+             pfx.encode(fos);
+-            pass.clear();
+ 
+             // put final PKCS12 into volatile request
+             params.put(ATTR_PKCS12, fos.toByteArray());
+@@ -590,6 +595,10 @@ public class RecoveryService implements IService {
+             CMS.debug("RecoverService: createPFX() exception caught:"+
+                 e.toString());
+             throw new EKRAException(CMS.getUserMessage("CMS_KRA_PKCS12_FAILED_1", e.toString()));
++        } finally {
++            if(pass != null) {
++                pass.clear();
++            }
+         }
+ 
+         // update request
+@@ -637,6 +646,7 @@ public class RecoveryService implements IService {
+     public void createPFX(IRequest request, Hashtable<String, Object> params,
+             byte priData[]) throws EBaseException {
+         CMS.debug("RecoverService: createPFX() allowEncDecrypt_recovery=true");
++        org.mozilla.jss.util.Password pass = null;
+         try {
+             // create p12
+             X509Certificate x509cert =
+@@ -667,9 +677,13 @@ public class RecoveryService implements IService {
+ 
+             // add key
+             mKRA.log(ILogger.LL_INFO, "KRA adds key to P12");
+-            org.mozilla.jss.util.Password pass = new
+-                    org.mozilla.jss.util.Password(
+-                            pwd.toCharArray());
++            char[] pwdChars = pwd.toCharArray();
++            pass = new org.mozilla.jss.util.Password(
++                    pwdChars);
++
++            JssSubsystem jssSubsystem = (JssSubsystem) CMS.getSubsystem(JssSubsystem.ID);
++            jssSubsystem.obscureChars(pwdChars);
++
+ 
+             SEQUENCE safeContents = new SEQUENCE();
+             PrivateKeyInfo pki = (PrivateKeyInfo)
+@@ -735,13 +749,15 @@ public class RecoveryService implements IService {
+                     ByteArrayOutputStream();
+ 
+             pfx.encode(fos);
+-            pass.clear();
+ 
+             // put final PKCS12 into volatile request
+             params.put(ATTR_PKCS12, fos.toByteArray());
+         } catch (Exception e) {
+             mKRA.log(ILogger.LL_FAILURE, CMS.getLogMessage("CMSCORE_KRA_CONSTRUCT_P12", e.toString()));
+             throw new EKRAException(CMS.getUserMessage("CMS_KRA_PKCS12_FAILED_1", e.toString()));
++        } finally {
++            if(pass != null)
++                pass.clear();
+         }
+ 
+         // update request
+diff --git a/base/kra/src/com/netscape/kra/SecurityDataProcessor.java b/base/kra/src/com/netscape/kra/SecurityDataProcessor.java
+index 71d1233..8de1311 100644
+--- a/base/kra/src/com/netscape/kra/SecurityDataProcessor.java
++++ b/base/kra/src/com/netscape/kra/SecurityDataProcessor.java
+@@ -487,9 +487,11 @@ public class SecurityDataProcessor {
+                         unwrappedSess,
+                         wrapParams.getPayloadEncryptionAlgorithm());
+ 
+-                String passStr = new String(unwrappedPass, "UTF-8");
+-                pass = new Password(passStr.toCharArray());
+-                passStr = null;
++                char[] passChars = CryptoUtil.bytesToChars(unwrappedPass);
++                pass = new Password(passChars);
++                JssSubsystem jssSubsystem = (JssSubsystem) CMS.getSubsystem(JssSubsystem.ID);
++                jssSubsystem.obscureChars(passChars);
++
+ 
+                 if (dataType.equals(KeyRequestResource.SYMMETRIC_KEY_TYPE)) {
+ 
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+index cf69975..ee7a7d7 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+@@ -240,7 +240,7 @@ public class SharedSecret extends DirBasedAuthentication
+      * Note: caller should clear the memory for the returned token
+      *       after each use
+      */
+-    public String getSharedToken(String identification)
++    public char[] getSharedToken(String identification)
+             throws EBaseException {
+         String method = "SharedSecret.getSharedToken(String identification): ";
+         String msg = "";
+@@ -319,7 +319,7 @@ public class SharedSecret extends DirBasedAuthentication
+             }
+             CMS.debug(method + " got entryShrTok");
+ 
+-            String shrSecret = decryptShrTokData(new String(entryShrTok));
++            char[] shrSecret = decryptShrTokData(new String(entryShrTok));
+             CMS.debug(method + "returning");
+             return shrSecret;
+         } catch (Exception e) {
+@@ -338,11 +338,11 @@ public class SharedSecret extends DirBasedAuthentication
+      *     encryptedPrivate OCTET STRING
+      * }
+      * @param data_s
+-     * @return
++     * @return phrase in char array.
+      */
+-    private String decryptShrTokData(String data_s) {
++    private char[] decryptShrTokData(String data_s) {
+         String method = "SharedSecret.decryptShrTokData: ";
+-        String msg = "";
++        byte[] ver_passphrase = null;
+         try {
+             byte[] wrapped_secret_data = Utils.base64decode(data_s);
+             DerValue wrapped_val = new DerValue(wrapped_secret_data);
+@@ -357,22 +357,24 @@ public class SharedSecret extends DirBasedAuthentication
+ 
+             SymmetricKey ver_session = CryptoUtil.unwrap(tmpToken, SymmetricKey.AES, 128, SymmetricKey.Usage.UNWRAP,
+                     issuanceProtPrivKey, wrapped_session, wrapAlgorithm);
+-            byte[] ver_passphrase = CryptoUtil.decryptUsingSymmetricKey(tmpToken, new IVParameterSpec(iv),
++            ver_passphrase = CryptoUtil.decryptUsingSymmetricKey(tmpToken, new IVParameterSpec(iv),
+                     wrapped_passphrase,
+                     ver_session, EncryptionAlgorithm.AES_128_CBC_PAD);
+ 
+-            String ver_spassphrase = new String(ver_passphrase, "UTF-8");
+-            return ver_spassphrase;
++            char[] ver_spassphraseChars = CryptoUtil.bytesToChars(ver_passphrase);
++            return ver_spassphraseChars;
+         } catch (Exception e) {
+             CMS.debug(method + e.toString());
+             return null;
++        } finally {
++            CryptoUtil.obscureBytes(ver_passphrase, "random");
+         }
+     }
+ 
+     /**
+      * unsupported
+      */
+-    public String getSharedToken(PKIData cmcdata)
++    public char[] getSharedToken(PKIData cmcdata)
+             throws EBaseException {
+         String method = "SharedSecret.getSharedToken(PKIData cmcdata): ";
+         String msg = "";
+@@ -389,7 +391,7 @@ public class SharedSecret extends DirBasedAuthentication
+      * Note: caller should clear the memory for the returned token
+      *       after each use
+      */
+-    public String getSharedToken(BigInteger serial)
++    public char[] getSharedToken(BigInteger serial)
+             throws EBaseException {
+         String method = "SharedSecret.getSharedToken(BigInteger serial): ";
+         String msg = "";
+@@ -417,7 +419,7 @@ public class SharedSecret extends DirBasedAuthentication
+             throw new EBaseException(method + msg);
+         }
+ 
+-        String shrSecret = decryptShrTokData(shrTok_s);
++        char[] shrSecret = decryptShrTokData(shrTok_s);
+         CMS.debug(method + "returning");
+         return shrSecret;
+     }
+diff --git a/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java b/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
+index 5f34ec9..9051baf 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
++++ b/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
+@@ -21,6 +21,7 @@ import java.io.ByteArrayInputStream;
+ import java.io.ByteArrayOutputStream;
+ import java.io.IOException;
+ import java.math.BigInteger;
++import java.nio.ByteBuffer;
+ import java.security.InvalidKeyException;
+ import java.security.MessageDigest;
+ import java.security.NoSuchAlgorithmException;
+@@ -1300,7 +1301,7 @@ public abstract class EnrollProfile extends BasicProfile
+     protected boolean verifyPopLinkWitnessV2(
+             PopLinkWitnessV2 popLinkWitnessV2,
+             byte[] randomSeed,
+-            String sharedSecret,
++            byte[] sharedSecret,
+             String ident_string) {
+         String method = "EnrollProfile: verifyPopLinkWitnessV2: ";
+ 
+@@ -1326,6 +1327,7 @@ public abstract class EnrollProfile extends BasicProfile
+             return false;
+         }
+ 
++        byte[] verifyBytes = null;
+         try {
+             DigestAlgorithm keyGenAlgID = DigestAlgorithm.fromOID(keyGenAlg.getOID());
+             MessageDigest keyGenMDAlg = MessageDigest.getInstance(keyGenAlgID.toString());
+@@ -1335,17 +1337,41 @@ public abstract class EnrollProfile extends BasicProfile
+                     .getInstance(CryptoUtil.getHMACtoMessageDigestName(macAlgID.toString()));
+ 
+             byte[] witness_bytes = witness.toByteArray();
+-            return verifyDigest(
+-                    (ident_string != null) ? (sharedSecret + ident_string).getBytes() : sharedSecret.getBytes(),
++
++            ByteBuffer bb = null;
++
++            if(ident_string != null) {
++                bb = ByteBuffer.allocate(ident_string.getBytes().length + sharedSecret.length);
++                bb.put(sharedSecret);
++                bb.put(ident_string.getBytes());
++                verifyBytes = bb.array();
++            } else {
++                verifyBytes = sharedSecret;
++            }
++
++            boolean result = verifyDigest(
++                    verifyBytes,
+                     randomSeed,
+                     witness_bytes,
+                     keyGenMDAlg, macMDAlg);
++
++            //Check ident_string because, verifyBytes will be = sharedSecret otherwise.
++            //Let caller clear sharedSecret when the time comes.
++            if (ident_string != null) {
++                CryptoUtil.obscureBytes(verifyBytes, "random");
++            }
++
++            return result;
+         } catch (NoSuchAlgorithmException e) {
+             CMS.debug(method + e);
+             return false;
+         } catch (Exception e) {
+             CMS.debug(method + e);
+             return false;
++        } finally {
++            if (ident_string != null) {
++                CryptoUtil.obscureBytes(verifyBytes, "random");
++            }
+         }
+     }
+ 
+@@ -1365,162 +1391,175 @@ public abstract class EnrollProfile extends BasicProfile
+ 
+         boolean sharedSecretFound = true;
+         String configName = "SharedToken";
+-        String sharedSecret = null;
++        char[] sharedSecret = null;
++        byte[] sharedSecretBytes = null;
++
+         try {
+-            IAuthSubsystem authSS = (IAuthSubsystem) CMS.getSubsystem(CMS.SUBSYSTEM_AUTH);
+ 
+-            IAuthManager sharedTokenAuth = authSS.getAuthManager(configName);
+-            if (sharedTokenAuth == null) {
+-                CMS.debug(method + " Failed to retrieve shared secret authentication plugin class");
+-                sharedSecretFound = false;
+-            }
+-            ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
++            try {
++                IAuthSubsystem authSS = (IAuthSubsystem) CMS.getSubsystem(CMS.SUBSYSTEM_AUTH);
+ 
+-            if (ident_string != null) {
+-                sharedSecret = tokenClass.getSharedToken(ident_string);
+-            } else {
+-                sharedSecret = tokenClass.getSharedToken(mCMCData);
+-            }
+-            if (sharedSecret == null)
+-                sharedSecretFound = false;
++                IAuthManager sharedTokenAuth = authSS.getAuthManager(configName);
++                if (sharedTokenAuth == null) {
++                    CMS.debug(method + " Failed to retrieve shared secret authentication plugin class");
++                    sharedSecretFound = false;
++                }
++                ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
+ 
+-        } catch (Exception e) {
+-            CMS.debug(e);
+-            return false;
+-        }
++                if (ident_string != null) {
++                    sharedSecret = tokenClass.getSharedToken(ident_string);
++                } else {
++                    sharedSecret = tokenClass.getSharedToken(mCMCData);
++                }
++                if (sharedSecret == null) {
++                    sharedSecretFound = false;
++                } else {
++                    sharedSecretBytes = CryptoUtil.charsToBytes(sharedSecret);
++                }
+ 
+-        INTEGER reqId = null;
+-        byte[] bv = null;
++            } catch (Exception e) {
++                CMS.debug(e);
++                return false;
++            }
+ 
+-        if (req.getType().equals(TaggedRequest.PKCS10)) {
+-            String methodPos = method + "PKCS10: ";
+-            CMS.debug(methodPos + "begins");
++            INTEGER reqId = null;
++            byte[] bv = null;
+ 
+-            TaggedCertificationRequest tcr = req.getTcr();
+-            if (!sharedSecretFound) {
+-                bpids.addElement(tcr.getBodyPartID());
+-                context.put("POPLinkWitness", bpids);
+-                return false;
+-            } else {
+-                CertificationRequest creq = tcr.getCertificationRequest();
+-                CertificationRequestInfo cinfo = creq.getInfo();
+-                SET attrs = cinfo.getAttributes();
+-                for (int j = 0; j < attrs.size(); j++) {
+-                    Attribute pkcs10Attr = (Attribute) attrs.elementAt(j);
+-                    if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
+-                        CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
+-                        if (ident_string == null) {
+-                            bpids.addElement(reqId);
+-                            context.put("identification", bpids);
+-                            context.put("POPLinkWitnessV2", bpids);
+-                            String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
+-                            CMS.debug(methodPos + msg);
+-                            return false;
+-                        }
++            if (req.getType().equals(TaggedRequest.PKCS10)) {
++                String methodPos = method + "PKCS10: ";
++                CMS.debug(methodPos + "begins");
+ 
+-                        SET witnessVal = pkcs10Attr.getValues();
+-                        if (witnessVal.size() > 0) {
+-                            try {
+-                                PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(witnessVal.elementAt(0));
+-                                boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
+-                                        randomSeed,
+-                                        sharedSecret,
+-                                        ident_string);
+-                                if (!valid) {
+-                                    bpids.addElement(reqId);
+-                                    context.put("POPLinkWitnessV2", bpids);
+-                                    return valid;
+-                                }
+-                                return true;
+-                            } catch (Exception ex) {
+-                                CMS.debug(methodPos + ex);
++                TaggedCertificationRequest tcr = req.getTcr();
++                if (!sharedSecretFound) {
++                    bpids.addElement(tcr.getBodyPartID());
++                    context.put("POPLinkWitness", bpids);
++                    return false;
++                } else {
++                    CertificationRequest creq = tcr.getCertificationRequest();
++                    CertificationRequestInfo cinfo = creq.getInfo();
++                    SET attrs = cinfo.getAttributes();
++                    for (int j = 0; j < attrs.size(); j++) {
++                        Attribute pkcs10Attr = (Attribute) attrs.elementAt(j);
++                        if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
++                            CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
++                            if (ident_string == null) {
++                                bpids.addElement(reqId);
++                                context.put("identification", bpids);
++                                context.put("POPLinkWitnessV2", bpids);
++                                String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
++                                CMS.debug(methodPos + msg);
+                                 return false;
+                             }
+-                        }
+-                    } else if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
+-                        SET witnessVal = pkcs10Attr.getValues();
+-                        if (witnessVal.size() > 0) {
+-                            try {
+-                                OCTET_STRING str = (OCTET_STRING) (ASN1Util.decode(OCTET_STRING.getTemplate(),
+-                                        ASN1Util.encode(witnessVal.elementAt(0))));
+-                                bv = str.toByteArray();
+-                                return verifyDigest(sharedSecret.getBytes(),
+-                                        randomSeed, bv);
+-                            } catch (InvalidBERException ex) {
+-                                return false;
++
++                            SET witnessVal = pkcs10Attr.getValues();
++                            if (witnessVal.size() > 0) {
++                                try {
++                                    PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(
++                                            witnessVal.elementAt(0));
++                                    boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
++                                            randomSeed,
++                                            sharedSecretBytes,
++                                            ident_string);
++                                    if (!valid) {
++                                        bpids.addElement(reqId);
++                                        context.put("POPLinkWitnessV2", bpids);
++                                        return valid;
++                                    }
++                                    return true;
++                                } catch (Exception ex) {
++                                    CMS.debug(methodPos + ex);
++                                    return false;
++                                }
++                            }
++                        } else if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
++                            SET witnessVal = pkcs10Attr.getValues();
++                            if (witnessVal.size() > 0) {
++                                try {
++                                    OCTET_STRING str = (OCTET_STRING) (ASN1Util.decode(OCTET_STRING.getTemplate(),
++                                            ASN1Util.encode(witnessVal.elementAt(0))));
++                                    bv = str.toByteArray();
++                                    return verifyDigest(sharedSecretBytes,
++                                            randomSeed, bv);
++                                } catch (InvalidBERException ex) {
++                                    return false;
++                                }
+                             }
+                         }
+                     }
+-                }
+-
+-                return false;
+-            }
+-        } else if (req.getType().equals(TaggedRequest.CRMF)) {
+-            String methodPos = method + "CRMF: ";
+-            CMS.debug(methodPos + "begins");
+-
+-            CertReqMsg crm = req.getCrm();
+-            CertRequest certReq = crm.getCertReq();
+-            reqId = certReq.getCertReqId();
+-            if (!sharedSecretFound) {
+-                bpids.addElement(reqId);
+-                context.put("POPLinkWitness", bpids);
+-                return false;
+-            } else {
+-                for (int i = 0; i < certReq.numControls(); i++) {
+-                    AVA ava = certReq.controlAt(i);
+ 
+-                    if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
+-                        CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
+-                        if (ident_string == null) {
+-                            bpids.addElement(reqId);
+-                            context.put("identification", bpids);
+-                            context.put("POPLinkWitnessV2", bpids);
+-                            String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
+-                            CMS.debug(methodPos + msg);
+-                            return false;
+-                        }
++                    return false;
++                }
++            } else if (req.getType().equals(TaggedRequest.CRMF)) {
++                String methodPos = method + "CRMF: ";
++                CMS.debug(methodPos + "begins");
+ 
+-                        ASN1Value value = ava.getValue();
+-                        PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(value);
++                CertReqMsg crm = req.getCrm();
++                CertRequest certReq = crm.getCertReq();
++                reqId = certReq.getCertReqId();
++                if (!sharedSecretFound) {
++                    bpids.addElement(reqId);
++                    context.put("POPLinkWitness", bpids);
++                    return false;
++                } else {
++                    for (int i = 0; i < certReq.numControls(); i++) {
++                        AVA ava = certReq.controlAt(i);
++
++                        if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
++                            CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
++                            if (ident_string == null) {
++                                bpids.addElement(reqId);
++                                context.put("identification", bpids);
++                                context.put("POPLinkWitnessV2", bpids);
++                                String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
++                                CMS.debug(methodPos + msg);
++                                return false;
++                            }
+ 
+-                        boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
+-                                randomSeed,
+-                                sharedSecret,
+-                                ident_string);
+-                        if (!valid) {
+-                            bpids.addElement(reqId);
+-                            context.put("POPLinkWitnessV2", bpids);
+-                            return valid;
+-                        }
+-                    } else if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
+-                        CMS.debug(methodPos + "found id_cmc_idPOPLinkWitness");
+-                        ASN1Value value = ava.getValue();
+-                        ByteArrayInputStream bis = new ByteArrayInputStream(
+-                                ASN1Util.encode(value));
+-                        OCTET_STRING ostr = null;
+-                        try {
+-                            ostr = (OCTET_STRING) (new OCTET_STRING.Template()).decode(bis);
+-                            bv = ostr.toByteArray();
+-                        } catch (Exception e) {
+-                            bpids.addElement(reqId);
+-                            context.put("POPLinkWitness", bpids);
+-                            return false;
+-                        }
++                            ASN1Value value = ava.getValue();
++                            PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(value);
++
++                            boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
++                                    randomSeed,
++                                    sharedSecretBytes,
++                                    ident_string);
++                            if (!valid) {
++                                bpids.addElement(reqId);
++                                context.put("POPLinkWitnessV2", bpids);
++                                return valid;
++                            }
++                        } else if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
++                            CMS.debug(methodPos + "found id_cmc_idPOPLinkWitness");
++                            ASN1Value value = ava.getValue();
++                            ByteArrayInputStream bis = new ByteArrayInputStream(
++                                    ASN1Util.encode(value));
++                            OCTET_STRING ostr = null;
++                            try {
++                                ostr = (OCTET_STRING) (new OCTET_STRING.Template()).decode(bis);
++                                bv = ostr.toByteArray();
++                            } catch (Exception e) {
++                                bpids.addElement(reqId);
++                                context.put("POPLinkWitness", bpids);
++                                return false;
++                            }
+ 
+-                        boolean valid = verifyDigest(sharedSecret.getBytes(),
+-                                randomSeed, bv);
+-                        if (!valid) {
+-                            bpids.addElement(reqId);
+-                            context.put("POPLinkWitness", bpids);
+-                            return valid;
++                            boolean valid = verifyDigest(sharedSecretBytes,
++                                    randomSeed, bv);
++                            if (!valid) {
++                                bpids.addElement(reqId);
++                                context.put("POPLinkWitness", bpids);
++                                return valid;
++                            }
+                         }
+                     }
+                 }
+             }
+-        }
+ 
+-        return true;
++            return true;
++
++        } finally {
++            CryptoUtil.obscureBytes(sharedSecretBytes, "random");
++            CryptoUtil.obscureChars(sharedSecret);
++        }
+     }
+ 
+     private boolean verifyDigest(byte[] sharedSecret, byte[] text, byte[] bv) {
+@@ -1664,7 +1703,7 @@ public abstract class EnrollProfile extends BasicProfile
+             }
+             ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
+ 
+-            String token = null;
++            char[] token = null;
+             if (ident_string != null) {
+                 auditAttemptedCred = ident_string;
+                 token = tokenClass.getSharedToken(ident_string);
+@@ -1702,14 +1741,36 @@ public abstract class EnrollProfile extends BasicProfile
+ 
+             byte[] witness_bytes = witness.toByteArray();
+             byte[] request_bytes = ASN1Util.encode(reqSeq); // PKIData reqSequence field
++
++            byte[] verifyBytes = null;
++            ByteBuffer bb = null;
++
++            byte[] tokenBytes = CryptoUtil.charsToBytes(token);
++
++            if(ident_string != null) {
++                bb = ByteBuffer.allocate(ident_string.getBytes().length + token.length);
++                bb.put(tokenBytes);
++                bb.put(ident_string.getBytes());
++                verifyBytes = bb.array();
++            } else {
++                verifyBytes = tokenBytes;
++            }
++
++
+             verified = verifyDigest(
+-                    (ident_string != null) ? (token + ident_string).getBytes() : token.getBytes(),
++                    verifyBytes,
+                     request_bytes,
+                     witness_bytes,
+                     hashAlg, macAlg);
+ 
+             String auditSubjectID = null;
+ 
++            if(ident_string != null) {
++                CryptoUtil.obscureBytes(verifyBytes, "random");
++            }
++
++            CryptoUtil.obscureChars(token);
++
+             if (verified) {
+                 auditSubjectID = (String) sessionContext.get(SessionContext.USER_ID);
+                 CMS.debug(method + "current auditSubjectID was:" + auditSubjectID);
+@@ -1760,13 +1821,14 @@ public abstract class EnrollProfile extends BasicProfile
+         }
+ 
+         OCTET_STRING ostr = null;
+-        String token = null;
++        char[] token = null;
+         try {
+             token = tokenClass.getSharedToken(mCMCData);
+             ostr = (OCTET_STRING) (ASN1Util.decode(OCTET_STRING.getTemplate(),
+                     ASN1Util.encode(vals.elementAt(0))));
+         } catch (InvalidBERException e) {
+             CMS.debug(method + "Failed to decode the byte value.");
++            CryptoUtil.obscureChars(token);
+             return false;
+         } catch (Exception e) {
+             CMS.debug(method + "exception: " + e.toString());
+@@ -1775,10 +1837,15 @@ public abstract class EnrollProfile extends BasicProfile
+         byte[] b = ostr.toByteArray();
+         byte[] text = ASN1Util.encode(reqSeq);
+ 
+-        verified = verifyDigest(token.getBytes(), text, b);
++        byte[] verifyBytes = CryptoUtil.charsToBytes(token);
++        verified = verifyDigest(verifyBytes, text, b);
+         if (verified) {// update auditSubjectID
+             //placeholder. Should probably just disable this v1 method
+         }
++
++        CryptoUtil.obscureBytes(verifyBytes, "random");
++        CryptoUtil.obscureChars(token);
++
+         return verified;
+     }
+ 
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java b/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java
+index 1d70b36..6c40d2d 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java
+@@ -68,6 +68,7 @@ import org.mozilla.jss.pkix.cms.SignerIdentifier;
+ import org.mozilla.jss.pkix.cms.SignerInfo;
+ import org.mozilla.jss.pkix.primitive.AlgorithmIdentifier;
+ import org.mozilla.jss.pkix.primitive.Name;
++import org.mozilla.jss.util.Password;
+ 
+ import com.netscape.certsrv.apps.CMS;
+ import com.netscape.certsrv.authentication.IAuthManager;
+@@ -1093,7 +1094,7 @@ public class CMCOutputTemplate {
+                     }
+                     ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
+ 
+-                    String sharedSecret = tokenClass.getSharedToken(revokeSerial);
++                    char[] sharedSecret = tokenClass.getSharedToken(revokeSerial);
+ 
+                     if (sharedSecret == null) {
+                         CMS.debug("CMCOutputTemplate: shared secret not found.");
+@@ -1110,11 +1111,21 @@ public class CMCOutputTemplate {
+                     }
+ 
+                     byte[] reqSecretb = reqSecret.toByteArray();
+-                    String clientSC = new String(reqSecretb);
+-                    if (clientSC.equals(sharedSecret)) {
++                    char[] reqSecretbChars = CryptoUtil.bytesToChars(reqSecretb);
++
++                    Password secret1 = new Password(sharedSecret);
++                    Password secret2 = new Password(reqSecretbChars);
++
++                    CryptoUtil.obscureChars(sharedSecret);
++                    CryptoUtil.obscureChars(reqSecretbChars);
++                    CryptoUtil.obscureBytes(reqSecretb, "random");
++
++                    if(secret1.equals(secret2)) {
+                         CMS.debug(method
+                                 + " Client and server shared secret are the same, can go ahead and revoke certificate.");
+                         revoke = true;
++                        secret1.clear();
++                        secret2.clear();
+                     } else {
+                         CMS.debug(method
+                                 + " Client and server shared secret are not the same, cannot revoke certificate.");
+@@ -1137,6 +1148,8 @@ public class CMCOutputTemplate {
+                                 auditReasonNum,
+                                 auditApprovalStatus));
+ 
++                        secret1.clear();
++                        secret2.clear();
+                         return bpid;
+                     }
+                 }
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java b/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java
+index 0018841..1d37d73 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java
+@@ -217,18 +217,28 @@ public class ConfigurationUtils {
+         Password password = null;
+         password = new Password(tokPwd.toCharArray());
+ 
+-        if (token.passwordIsInitialized()) {
+-            CMS.debug("loginToken():token password is initialized");
+-            if (!token.isLoggedIn()) {
+-                CMS.debug("loginToken():Token is not logged in, try it");
+-                token.login(password);
++        try {
++            if (token.passwordIsInitialized()) {
++                CMS.debug("loginToken():token password is initialized");
++                if (!token.isLoggedIn()) {
++                    CMS.debug("loginToken():Token is not logged in, try it");
++                    token.login(password);
++                } else {
++                    CMS.debug("loginToken():Token has already logged on");
++                }
+             } else {
+-                CMS.debug("loginToken():Token has already logged on");
++                CMS.debug("loginToken():Token password not initialized");
++                rv = false;
++            }
++
++        } catch (TokenException | IncorrectPasswordException e) {
++            throw e;
++        } finally {
++            if (password != null) {
++                password.clear();
+             }
+-        } else {
+-            CMS.debug("loginToken():Token password not initialized");
+-            rv = false;
+         }
++
+         return rv;
+     }
+ 
+@@ -877,117 +887,126 @@ public class ConfigurationUtils {
+         StringBuffer reason = new StringBuffer();
+         Password password = new Password(p12Pass.toCharArray());
+ 
+-        PFX pfx = (PFX) (new PFX.Template()).decode(bis);
+-        boolean verifypfx = pfx.verifyAuthSafes(password, reason);
++        try {
+ 
+-        if (!verifypfx) {
+-            throw new IOException("PKCS #12 password is incorrect");
+-        }
++            PFX pfx = (PFX) (new PFX.Template()).decode(bis);
++            boolean verifypfx = pfx.verifyAuthSafes(password, reason);
+ 
+-        AuthenticatedSafes safes = pfx.getAuthSafes();
+-        Vector<Vector<Object>> pkeyinfo_collection = new Vector<Vector<Object>>();
+-        Vector<Vector<Object>> cert_collection = new Vector<Vector<Object>>();
++            if (!verifypfx) {
++                throw new IOException("PKCS #12 password is incorrect");
++            }
+ 
+-        CMS.debug("Importing PKCS #12 data");
++            AuthenticatedSafes safes = pfx.getAuthSafes();
++            Vector<Vector<Object>> pkeyinfo_collection = new Vector<Vector<Object>>();
++            Vector<Vector<Object>> cert_collection = new Vector<Vector<Object>>();
+ 
+-        for (int i = 0; i < safes.getSize(); i++) {
++            CMS.debug("Importing PKCS #12 data");
+ 
+-            CMS.debug("- Safe #" + i + ":");
+-            SEQUENCE scontent = safes.getSafeContentsAt(null, i);
++            for (int i = 0; i < safes.getSize(); i++) {
+ 
+-            for (int j = 0; j < scontent.size(); j++) {
++                CMS.debug("- Safe #" + i + ":");
++                SEQUENCE scontent = safes.getSafeContentsAt(null, i);
+ 
+-                SafeBag bag = (SafeBag) scontent.elementAt(j);
+-                OBJECT_IDENTIFIER oid = bag.getBagType();
++                for (int j = 0; j < scontent.size(); j++) {
+ 
+-                if (oid.equals(SafeBag.PKCS8_SHROUDED_KEY_BAG)) {
++                    SafeBag bag = (SafeBag) scontent.elementAt(j);
++                    OBJECT_IDENTIFIER oid = bag.getBagType();
+ 
+-                    CMS.debug("  - Bag #" + j + ": key");
+-                    byte[] epki = bag.getBagContent().getEncoded();
++                    if (oid.equals(SafeBag.PKCS8_SHROUDED_KEY_BAG)) {
+ 
+-                    SET bagAttrs = bag.getBagAttributes();
+-                    String subjectDN = null;
++                        CMS.debug("  - Bag #" + j + ": key");
++                        byte[] epki = bag.getBagContent().getEncoded();
+ 
+-                    for (int k = 0; k < bagAttrs.size(); k++) {
++                        SET bagAttrs = bag.getBagAttributes();
++                        String subjectDN = null;
+ 
+-                        Attribute attrs = (Attribute) bagAttrs.elementAt(k);
+-                        OBJECT_IDENTIFIER aoid = attrs.getType();
++                        for (int k = 0; k < bagAttrs.size(); k++) {
+ 
+-                        if (aoid.equals(SafeBag.FRIENDLY_NAME)) {
+-                            SET val = attrs.getValues();
+-                            ANY ss = (ANY) val.elementAt(0);
++                            Attribute attrs = (Attribute) bagAttrs.elementAt(k);
++                            OBJECT_IDENTIFIER aoid = attrs.getType();
+ 
+-                            ByteArrayInputStream bbis = new ByteArrayInputStream(ss.getEncoded());
+-                            BMPString sss = (BMPString) new BMPString.Template().decode(bbis);
+-                            subjectDN = sss.toString();
+-                            CMS.debug("    Subject DN: " + subjectDN);
+-                            break;
++                            if (aoid.equals(SafeBag.FRIENDLY_NAME)) {
++                                SET val = attrs.getValues();
++                                ANY ss = (ANY) val.elementAt(0);
++
++                                ByteArrayInputStream bbis = new ByteArrayInputStream(ss.getEncoded());
++                                BMPString sss = (BMPString) new BMPString.Template().decode(bbis);
++                                subjectDN = sss.toString();
++                                CMS.debug("    Subject DN: " + subjectDN);
++                                break;
++                            }
+                         }
+-                    }
+ 
+-                    // pkeyinfo_v stores EncryptedPrivateKeyInfo
+-                    // (byte[]) and subject DN (String)
+-                    Vector<Object> pkeyinfo_v = new Vector<Object>();
+-                    pkeyinfo_v.addElement(epki);
+-                    if (subjectDN != null)
+-                        pkeyinfo_v.addElement(subjectDN);
++                        // pkeyinfo_v stores EncryptedPrivateKeyInfo
++                        // (byte[]) and subject DN (String)
++                        Vector<Object> pkeyinfo_v = new Vector<Object>();
++                        pkeyinfo_v.addElement(epki);
++                        if (subjectDN != null)
++                            pkeyinfo_v.addElement(subjectDN);
+ 
+-                    pkeyinfo_collection.addElement(pkeyinfo_v);
++                        pkeyinfo_collection.addElement(pkeyinfo_v);
+ 
+-                } else if (oid.equals(SafeBag.CERT_BAG)) {
++                    } else if (oid.equals(SafeBag.CERT_BAG)) {
+ 
+-                    CMS.debug("  - Bag #" + j + ": certificate");
+-                    CertBag cbag = (CertBag) bag.getInterpretedBagContent();
+-                    OCTET_STRING str = (OCTET_STRING) cbag.getInterpretedCert();
+-                    byte[] x509cert = str.toByteArray();
++                        CMS.debug("  - Bag #" + j + ": certificate");
++                        CertBag cbag = (CertBag) bag.getInterpretedBagContent();
++                        OCTET_STRING str = (OCTET_STRING) cbag.getInterpretedCert();
++                        byte[] x509cert = str.toByteArray();
+ 
+-                    SET bagAttrs = bag.getBagAttributes();
+-                    String nickname = null;
++                        SET bagAttrs = bag.getBagAttributes();
++                        String nickname = null;
+ 
+-                    if (bagAttrs != null) {
++                        if (bagAttrs != null) {
+ 
+-                        for (int k = 0; k < bagAttrs.size(); k++) {
++                            for (int k = 0; k < bagAttrs.size(); k++) {
+ 
+-                            Attribute attrs = (Attribute) bagAttrs.elementAt(k);
+-                            OBJECT_IDENTIFIER aoid = attrs.getType();
++                                Attribute attrs = (Attribute) bagAttrs.elementAt(k);
++                                OBJECT_IDENTIFIER aoid = attrs.getType();
+ 
+-                            if (aoid.equals(SafeBag.FRIENDLY_NAME)) {
+-                                SET val = attrs.getValues();
+-                                ANY ss = (ANY) val.elementAt(0);
++                                if (aoid.equals(SafeBag.FRIENDLY_NAME)) {
++                                    SET val = attrs.getValues();
++                                    ANY ss = (ANY) val.elementAt(0);
+ 
+-                                ByteArrayInputStream bbis = new ByteArrayInputStream(ss.getEncoded());
+-                                BMPString sss = (BMPString) (new BMPString.Template()).decode(bbis);
+-                                nickname = sss.toString();
+-                                CMS.debug("    Nickname: " + nickname);
+-                                break;
++                                    ByteArrayInputStream bbis = new ByteArrayInputStream(ss.getEncoded());
++                                    BMPString sss = (BMPString) (new BMPString.Template()).decode(bbis);
++                                    nickname = sss.toString();
++                                    CMS.debug("    Nickname: " + nickname);
++                                    break;
++                                }
+                             }
+                         }
+-                    }
+ 
+-                    X509CertImpl certImpl = new X509CertImpl(x509cert);
+-                    CMS.debug("    Serial number: " + certImpl.getSerialNumber());
++                        X509CertImpl certImpl = new X509CertImpl(x509cert);
++                        CMS.debug("    Serial number: " + certImpl.getSerialNumber());
+ 
+-                    try {
+-                        certImpl.checkValidity();
+-                        CMS.debug("    Status: valid");
++                        try {
++                            certImpl.checkValidity();
++                            CMS.debug("    Status: valid");
+ 
+-                    } catch (CertificateExpiredException | CertificateNotYetValidException e) {
+-                        CMS.debug("    Status: " + e);
+-                        continue;
+-                    }
++                        } catch (CertificateExpiredException | CertificateNotYetValidException e) {
++                            CMS.debug("    Status: " + e);
++                            continue;
++                        }
+ 
+-                    // cert_v stores certificate (byte[]) and nickname (String)
+-                    Vector<Object> cert_v = new Vector<Object>();
+-                    cert_v.addElement(x509cert);
+-                    if (nickname != null)
+-                        cert_v.addElement(nickname);
++                        // cert_v stores certificate (byte[]) and nickname (String)
++                        Vector<Object> cert_v = new Vector<Object>();
++                        cert_v.addElement(x509cert);
++                        if (nickname != null)
++                            cert_v.addElement(nickname);
+ 
+-                    cert_collection.addElement(cert_v);
++                        cert_collection.addElement(cert_v);
++                    }
+                 }
+             }
+-        }
+ 
+-        importKeyCert(password, pkeyinfo_collection, cert_collection);
++            importKeyCert(password, pkeyinfo_collection, cert_collection);
++        } catch (Exception e) {
++            throw e;
++        } finally {
++            if (password != null) {
++                password.clear();
++            }
++        }
+     }
+ 
+     public static void verifySystemCertificates() throws Exception {
+@@ -3248,54 +3267,63 @@ public class ConfigurationUtils {
+ 
+         Password pass = new org.mozilla.jss.util.Password(pwd.toCharArray());
+ 
+-        PKCS12Util util = new PKCS12Util();
+-        PKCS12 pkcs12 = new PKCS12();
++        try {
+ 
+-        // load system certificate (with key but without chain)
+-        while (st.hasMoreTokens()) {
++            PKCS12Util util = new PKCS12Util();
++            PKCS12 pkcs12 = new PKCS12();
+ 
+-            String t = st.nextToken();
+-            if (t.equals("sslserver"))
+-                continue;
++            // load system certificate (with key but without chain)
++            while (st.hasMoreTokens()) {
+ 
+-            String nickname = cs.getString("preop.cert." + t + ".nickname");
+-            String modname = cs.getString("preop.module.token");
++                String t = st.nextToken();
++                if (t.equals("sslserver"))
++                    continue;
+ 
+-            if (!CryptoUtil.isInternalToken(modname))
+-                nickname = modname + ":" + nickname;
++                String nickname = cs.getString("preop.cert." + t + ".nickname");
++                String modname = cs.getString("preop.module.token");
+ 
+-            util.loadCertFromNSS(pkcs12, nickname, true, false);
+-        }
++                if (!CryptoUtil.isInternalToken(modname))
++                    nickname = modname + ":" + nickname;
+ 
+-        // load CA certificates (without keys or chains)
+-        for (X509Certificate caCert : cm.getCACerts()) {
+-            util.loadCertFromNSS(pkcs12, caCert, false, false);
+-        }
++                util.loadCertFromNSS(pkcs12, nickname, true, false);
++            }
+ 
+-        PFX pfx = util.generatePFX(pkcs12, pass);
++            // load CA certificates (without keys or chains)
++            for (X509Certificate caCert : cm.getCACerts()) {
++                util.loadCertFromNSS(pkcs12, caCert, false, false);
++            }
+ 
+-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+-        pfx.encode(bos);
+-        byte[] output = bos.toByteArray();
++            PFX pfx = util.generatePFX(pkcs12, pass);
+ 
+-        cs.putString("preop.pkcs12", CryptoUtil.byte2string(output));
+-        pass.clear();
+-        cs.commit(false);
++            ByteArrayOutputStream bos = new ByteArrayOutputStream();
++            pfx.encode(bos);
++            byte[] output = bos.toByteArray();
+ 
+-        if (fname != null) {
+-            FileOutputStream fout = null;
+-            try {
+-                fout = new FileOutputStream(fname);
+-                fout.write(output);
++            cs.putString("preop.pkcs12", CryptoUtil.byte2string(output));
++            cs.commit(false);
+ 
+-            } catch (Exception e) {
+-                throw new IOException("Failed to store keys in backup file " + e, e);
++            if (fname != null) {
++                FileOutputStream fout = null;
++                try {
++                    fout = new FileOutputStream(fname);
++                    fout.write(output);
+ 
+-            } finally {
+-                if (fout != null) {
+-                    fout.close();
++                } catch (Exception e) {
++                    throw new IOException("Failed to store keys in backup file " + e, e);
++
++                } finally {
++                    if (fout != null) {
++                        fout.close();
++                    }
+                 }
+             }
++
++        } catch (Exception e) {
++            throw e;
++        } finally {
++            if (pass != null) {
++                pass.clear();
++            }
+         }
+     }
+ 
+diff --git a/base/server/cmscore/src/com/netscape/cmscore/security/JssSubsystem.java b/base/server/cmscore/src/com/netscape/cmscore/security/JssSubsystem.java
+index be7edd5..a9bb003 100644
+--- a/base/server/cmscore/src/com/netscape/cmscore/security/JssSubsystem.java
++++ b/base/server/cmscore/src/com/netscape/cmscore/security/JssSubsystem.java
+@@ -409,6 +409,14 @@ public final class JssSubsystem implements ICryptoSubsystem {
+         }
+     }
+ 
++    public void obscureChars(char[] memory) {
++        String methodName = "JssSubsystem.obscureBytes: ";
++        if (memory == null || memory.length == 0)
++            return;
++        CMS.debug(methodName + " filling with zeroes, numChars: " + memory.length);
++        Arrays.fill(memory, (char) 0);
++    }
++
+     public String getCipherVersion() throws EBaseException {
+         return "cipherdomestic";
+     }
+diff --git a/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java b/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
+index 8a0ea08..7a68c9b 100644
+--- a/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
++++ b/base/util/src/com/netscape/cmsutil/crypto/CryptoUtil.java
+@@ -24,6 +24,9 @@ import java.io.IOException;
+ import java.io.PrintStream;
+ import java.math.BigInteger;
+ import java.net.SocketException;
++import java.nio.ByteBuffer;
++import java.nio.CharBuffer;
++import java.nio.charset.Charset;
+ import java.security.GeneralSecurityException;
+ import java.security.InvalidAlgorithmParameterException;
+ import java.security.InvalidKeyException;
+@@ -1950,6 +1953,52 @@ public class CryptoUtil {
+         return bytes;
+     }
+ 
++    public static char[] bytesToChars(byte[] bytes) {
++        if(bytes == null)
++            return null;
++
++        Charset charset = Charset.forName("UTF-8");
++        CharBuffer charBuffer = charset.decode(ByteBuffer.wrap(bytes));
++        char[] result = Arrays.copyOf(charBuffer.array(), charBuffer.limit());
++
++        //Clear up the CharBuffer we just created
++        if (charBuffer.hasArray()) {
++            char[] contentsToBeErased = charBuffer.array();
++            CryptoUtil.obscureChars(contentsToBeErased);
++        }
++        return result;
++    }
++
++    public static byte[] charsToBytes(char[] chars) {
++        if(chars == null)
++            return null;
++
++        Charset charset = Charset.forName("UTF-8");
++        ByteBuffer byteBuffer = charset.encode(CharBuffer.wrap(chars));
++        byte[] result = Arrays.copyOf(byteBuffer.array(), byteBuffer.limit());
++
++        if(byteBuffer.hasArray()) {
++            byte[] contentsToBeErased = byteBuffer.array();
++            CryptoUtil.obscureBytes(contentsToBeErased, "random");
++        }
++        return result;
++    }
++
++    /**
++     * Create a jss Password object from a provided byte array.
++     */
++    public static Password createPasswordFromBytes(byte[] bytes ) {
++
++        if(bytes == null)
++            return null;
++
++        char[] pwdChars = bytesToChars(bytes);
++        Password password = new Password(pwdChars);
++        obscureChars(pwdChars);
++
++        return password;
++    }
++
+     /**
+      * Retrieves a private key from a unique key ID.
+      */
+@@ -2176,6 +2225,14 @@ public class CryptoUtil {
+ 
+     }
+ 
++    public static void obscureChars(char[] memory) {
++        if (memory == null || memory.length == 0) {
++            //in case we want to log
++            return;
++        }
++        Arrays.fill(memory, (char) 0);
++    }
++
+     public static void obscureBytes(byte[] memory, String method) {
+         if (memory == null || memory.length == 0) {
+             //in case we want to log
+@@ -2279,7 +2336,7 @@ public class CryptoUtil {
+     public static PKIArchiveOptions createPKIArchiveOptions(
+             CryptoToken token,
+             PublicKey wrappingKey,
+-            String data,
++            char[] data,
+             WrappingParams params,
+             AlgorithmIdentifier aid) throws Exception {
+         return createPKIArchiveOptionsInternal(
+@@ -2289,7 +2346,7 @@ public class CryptoUtil {
+     public static byte[] createEncodedPKIArchiveOptions(
+             CryptoToken token,
+             PublicKey wrappingKey,
+-            String data,
++            char []data,
+             WrappingParams params,
+             AlgorithmIdentifier aid) throws Exception {
+         PKIArchiveOptions opts = createPKIArchiveOptionsInternal(
+@@ -2300,7 +2357,7 @@ public class CryptoUtil {
+     private static PKIArchiveOptions createPKIArchiveOptionsInternal(
+             CryptoToken token,
+             PublicKey wrappingKey,
+-            String passphraseData,
++            char[] passphraseData,
+             PrivateKey privKeyData,
+             SymmetricKey symKeyData,
+             WrappingParams params,
+@@ -2315,7 +2372,7 @@ public class CryptoUtil {
+ 
+         if (passphraseData != null) {
+ 
+-            byte[] secret = passphraseData.getBytes("UTF-8");
++            byte[] secret =  CryptoUtil.charsToBytes(passphraseData);
+             key_data = encryptSecret(
+                     token,
+                     secret,
+-- 
+1.8.3.1
+
+
+From 45a098dfbe3bbb951a7cb22d50e13e8e093d03cc Mon Sep 17 00:00:00 2001
+From: Geetika Kapoor <gkapoor@redhat.com>
+Date: Mon, 20 Nov 2017 12:13:41 +0530
+Subject: Added ansible playbooks code and documentation for setup
+
+Change-Id: I0e597ec86661d2ccf72e8a04279981471b0590b1
+Signed-off-by: Geetika Kapoor <gkapoor@redhat.com>
+(cherry picked from commit 48fbe1e75de5d91699aaa418fd8e34ab3745e25c)
+---
+ tests/dogtag/pytest-ansible/README.md              |  27 ++
+ tests/dogtag/pytest-ansible/common-modules/pki.py  | 127 +++++++++
+ tests/dogtag/pytest-ansible/installation/README.md |  99 +++++++
+ tests/dogtag/pytest-ansible/installation/host      |   2 +
+ tests/dogtag/pytest-ansible/installation/main.yml  |  11 +
+ .../files/config_templates/ansible_constants.py    |  52 ++++
+ .../roles/Test_Execution/files/test/script         |  79 ++++++
+ .../roles/Test_Execution/handlers/main.yml         |   3 +
+ .../roles/Test_Execution/handlers/pki-core.yml     |  54 ++++
+ .../roles/Test_Execution/tasks/configure_ca.yml    |  18 ++
+ .../Test_Execution/tasks/configure_common.yml      |  77 +++++
+ .../roles/Test_Execution/tasks/configure_kra.yml   |  24 ++
+ .../roles/Test_Execution/tasks/configure_ldap.yml  |  20 ++
+ .../roles/Test_Execution/tasks/configure_ocsp.yml  |  17 ++
+ .../Test_Execution/tasks/configure_shared.yml      |  14 +
+ .../tasks/configure_sharedsecret.yml               |   4 +
+ .../roles/Test_Execution/tasks/configure_tks.yml   |  30 ++
+ .../roles/Test_Execution/tasks/configure_tps.yml   |  24 ++
+ .../roles/Test_Execution/tasks/main.yml            |  19 ++
+ .../files/config_templates/ansible_constants.py    |  52 ++++
+ .../roles/Test_Trigger/files/test/ca.cfg           |  38 +++
+ .../roles/Test_Trigger/files/test/constants.py     |  67 +++++
+ .../roles/Test_Trigger/files/test/kra.cfg          |  42 +++
+ .../roles/Test_Trigger/files/test/ldap.cfg         |  12 +
+ .../roles/Test_Trigger/files/test/ocsp.cfg         |  36 +++
+ .../roles/Test_Trigger/files/test/script           |  79 ++++++
+ .../roles/Test_Trigger/files/test/tks.cfg          |  26 ++
+ .../roles/Test_Trigger/files/test/tps.cfg          |  34 +++
+ .../roles/Test_Trigger/tasks/configure_ca.yml      |  25 ++
+ .../roles/Test_Trigger/tasks/configure_common.yml  | 146 ++++++++++
+ .../roles/Test_Trigger/tasks/configure_kra.yml     |  27 ++
+ .../roles/Test_Trigger/tasks/configure_ldap.yml    |  47 ++++
+ .../roles/Test_Trigger/tasks/configure_ocsp.yml    |  27 ++
+ .../roles/Test_Trigger/tasks/configure_tks.yml     |  27 ++
+ .../roles/Test_Trigger/tasks/configure_tps.yml     |  39 +++
+ .../installation/roles/Test_Trigger/tasks/main.yml |  15 +
+ .../dogtag/pytest-ansible/installation/vars/ca.yml |   4 +
+ .../pytest-ansible/installation/vars/ca_shared.yml |  24 ++
+ .../pytest-ansible/installation/vars/kra.yml       |   4 +
+ .../pytest-ansible/installation/vars/ldap.yml      |   8 +
+ .../installation/vars/ldap_shared.yml              |   3 +
+ .../pytest-ansible/installation/vars/ocsp.yml      |   4 +
+ .../pytest-ansible/installation/vars/tks.yml       |   4 +
+ .../pytest-ansible/installation/vars/tps.yml       |   4 +
+ tests/dogtag/pytest-ansible/provision/readme.txt   |   0
+ tests/dogtag/pytest-ansible/pytest/README.md       | 313 +++++++++++++++++++++
+ .../pytest/tps-token/ldapUserAdd.yml               |  35 +++
+ .../pytest/tps-token/test_tps_token_show.py        | 106 +++++++
+ .../pytest/tps-token/tokenEnroll.yml               |  35 +++
+ tests/dogtag/pytest-ansible/requirements.txt       |   5 +
+ 50 files changed, 1989 insertions(+)
+ create mode 100644 tests/dogtag/pytest-ansible/README.md
+ create mode 100644 tests/dogtag/pytest-ansible/common-modules/pki.py
+ create mode 100644 tests/dogtag/pytest-ansible/installation/README.md
+ create mode 100644 tests/dogtag/pytest-ansible/installation/host
+ create mode 100644 tests/dogtag/pytest-ansible/installation/main.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/config_templates/ansible_constants.py
+ create mode 100755 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/test/script
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/main.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/pki-core.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ca.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_common.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_kra.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ldap.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ocsp.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_shared.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_sharedsecret.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tks.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tps.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/main.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/config_templates/ansible_constants.py
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ca.cfg
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/constants.py
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/kra.cfg
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ldap.cfg
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ocsp.cfg
+ create mode 100755 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/script
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tks.cfg
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tps.cfg
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ca.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_common.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_kra.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ldap.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ocsp.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tks.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tps.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/main.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/ca.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/ca_shared.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/kra.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/ldap.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/ldap_shared.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/ocsp.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/tks.yml
+ create mode 100644 tests/dogtag/pytest-ansible/installation/vars/tps.yml
+ create mode 100644 tests/dogtag/pytest-ansible/provision/readme.txt
+ create mode 100644 tests/dogtag/pytest-ansible/pytest/README.md
+ create mode 100644 tests/dogtag/pytest-ansible/pytest/tps-token/ldapUserAdd.yml
+ create mode 100644 tests/dogtag/pytest-ansible/pytest/tps-token/test_tps_token_show.py
+ create mode 100644 tests/dogtag/pytest-ansible/pytest/tps-token/tokenEnroll.yml
+ create mode 100644 tests/dogtag/pytest-ansible/requirements.txt
+
+diff --git a/tests/dogtag/pytest-ansible/README.md b/tests/dogtag/pytest-ansible/README.md
+new file mode 100644
+index 0000000..8142f39
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/README.md
+@@ -0,0 +1,27 @@
++# Environment-Setup Instructions
++
++## Installing pip
++
++[pip] (https://pip.pypa.io/en/stable/installing/)  is needed for ansible & pytest installation.
++
++## Installing Supporting Packages
++
++Install the pip and run requirements.txt file 
++
++```
++pip install -r requirements.txt
++```
++
++## Installing CA, KRA, OCSP, TKS & TPS Subsystems
++
++Refer [README.md] (installation/README.md)
++
++
++
++## Running Pytest-Ansible test cases.
++
++### Pre-requisite
++
++1. Run Role user setup for setting up different users for different subsystem for setting up Admin, Agent, Revoked and Expired certificates.
++    -- To-do
++2. Refer [README.md] (pytest/README.md)
+\ No newline at end of file
+diff --git a/tests/dogtag/pytest-ansible/common-modules/pki.py b/tests/dogtag/pytest-ansible/common-modules/pki.py
+new file mode 100644
+index 0000000..4d489e9
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/common-modules/pki.py
+@@ -0,0 +1,127 @@
++#!/usr/bin/python
++# -*- coding: utf-8 -*-
++# (c) 2016, Geetika Kapoor <gkapoor@redhat.com>
++#
++# This file is part of Ansible
++#
++# Ansible is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# Ansible is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
++
++ANSIBLE_METADATA = {'metadata_version': '1.0',
++                    'status': ['stableinterface'],
++                    'supported_by': 'core'}
++
++DOCUMENTATION = '''
++---
++module: pki
++short_description: Execute dogtag "pki" commands remotely on any machine.
++Point it to the host where you want them to run.
++This utility supports all the authentication modes as mentioned in 
++man pages of pki. Refer 'man pki' for supported options.
++
++Usage: This can be added as mentioned in the example.
++Authentication types supported:
++1. Connection - Plain URI connection
++2. Basic Authentication: username/password support
++3. Client Authentication: certificate authentication support
++conn_args: Name assigned to variable that has common arguments
++needed for all types of connection.
++auth_args: Name assigned to authentication commands that are run using pki.
++cli_args: Name assigned to sub-cli-commands that are run underneath 
++pki command.
++
++Example:
++- name: Call pki command
++  pki: cli='ca-cert-find' authType='connection'
++
++'''
++
++import datetime
++import glob
++import shlex
++import os
++
++if os.path.isfile('/tmp/test_dir/constants.py'):
++    import sys
++    sys.path.append('/tmp/test_dir')
++    import constants
++else:
++    from pki.testlib.common import constants
++from ansible.module_utils.basic import AnsibleModule
++from ansible.module_utils.six import b
++
++
++def main():
++
++    # the command module is the one ansible module that does not take key=value args
++    # hence don't copy this one if you are looking to build others!
++    module = AnsibleModule(
++        argument_spec=dict(
++            raw_params = dict(default='pki'),
++	    port = dict(default=''),
++	    cli = dict(default='--help'),
++	    extra_args = dict(default=''),
++	    certnick = dict(default="'PKI CA Administrator for Example.Org'"),
++	    username = dict(default='caadmin'),
++	    userpassword = dict(default='Secret123'),
++	    userpwdfile = dict(default='Secret123'),
++	    dbpassword = dict(default='Secret123'),
++	    nssdb = dict(default='/opt/pkitest/certdb'),
++	    protocol = dict(default='http'),
++	    hostname = dict(default='localhost'),
++	    authType = dict(default='clientAuth', choices=['connection', 'basicAuth', 'clientAuth'])
++        )
++    )
++    if module.params['port']:
++	port = module.params['port']
++    else:
++    	Subsystem=map(lambda x: {"True" if x in module.params['cli'] else False: x } ,["ca", "kra", "ocsp", "tks", "tps"])
++    	for idx, val in enumerate(Subsystem):
++		for key, value in val.iteritems():
++			if key == 'True':
++				sub = value
++    	port = '_'.join([sub.upper(), module.params['protocol'].upper(), "PORT"])
++        port = getattr(constants, port)
++    conn_args = [module.params['raw_params'], '-d', module.params['nssdb'], '-P', module.params['protocol'], '-p', '%s' %(port), '-h', module.params['hostname'], '-c', module.params['dbpassword']]
++    cli_args = [module.params['cli'], module.params['extra_args']]
++
++    if module.params['authType'] == 'clientAuth':
++        auth_args = ['-n', module.params['certnick']]
++        args = ' '.join(conn_args + auth_args + cli_args)
++
++    if module.params['authType'] == 'basicAuth':
++	auth_args = ['-u', module.params['username'], '-w', module.params['userpassword']]
++        args = ' '.join(conn_args + auth_args + cli_args)
++
++    if module.params['authType'] == 'connection':
++         args = ' '.join(conn_args)
++
++    rc, out, err = module.run_command(args)
++
++    result = dict(
++        cmd      = args,
++        stdout   = out.rstrip(b("\r\n")),
++        stderr   = err.rstrip(b("\r\n")),
++        rc       = rc,
++        changed  = True,
++    )
++
++    if rc != 0:
++        module.fail_json(msg='non-zero return code', **result)
++
++    module.exit_json(**result)
++
++
++if __name__ == '__main__':
++    main()
++
+diff --git a/tests/dogtag/pytest-ansible/installation/README.md b/tests/dogtag/pytest-ansible/installation/README.md
+new file mode 100644
+index 0000000..6b18ee0
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/README.md
+@@ -0,0 +1,99 @@
++# Project Name - Dogtagpki
++
++## Subsystem Installation using Ansible
++
++### About
++
++This ansible playbook is written to setup all the subsystems(CA, KRA, OCSP, TKS and TPS).
++These playbooks can setup the environment based on the topology specified in the runtime.
++
++### Requirements:
++
++1. Pip should be installed.
++2. Pip [requiremets.txt](../Installation/requirements.txt) should be installed 
++3. Make sure to check ansible version after installation.This can be quickly done using
++ansible --version.
++If this commands works, Your ansible is installed properly.
++
++4. Before running the playbooks make sure machines that are going to communicate with each other they have passwordless communication working.
++This can be easily done using:
++                                  `ssh-copy-id root@<remote machine>`
++
++This will ask you for one time password after which it will copy keys between machines.
++
++### Verification Step
++```
++     ssh root@<remote host>
++```
++This should not prompt for password any more.
++
++### Packages to Install `Only for RHEL users`
++
++Configure repo that have below listed packages.It is mandatory to setup repo's 
++correctly  before triggering ansible playbooks for system installation.
++
++```
++Required Packages:
++
++    - redhat-pki
++    - redhat-pki-console-theme
++    - redhat-pki-server-theme
++    - pki-console
++    - 389-ds-base
++    - pki-ca
++    - pki-kra
++    - pki-ocsp
++    - pki-tks
++    - pki-tps
++    - policycoreutils-python
++    - expect
++    - libselinux-python
++```
++
++### Usage:
++
++For Setting up Subsystems on different port, use `topology-02 `
++```
++ansible-playbook -i /tmp/test/pki-tests/ci/ansible/host main.yml --extra-vars "topology=topology-02" -v
++```
++
++For Setting up Subsystems on default and same port, use `topology-01`
++```
++ansible-playbook -i /tmp/test/pki-tests/ci/ansible/host main.yml --extra-vars "topology=topology-01" -v
++```
++
++where,
++
++  -i INVENTORY, --inventory-file=INVENTORY
++                        specify inventory host path
++                        (default=/etc/ansible/hosts) or comma separated host
++                        list.
++                        
++## Examples of ansible-inventory
++
++Inventory file consist of the roles and the ip-address.Tests will run for the roles and ip's that are mentioned.
++
++```
++[master]
++10.1.2.3
++10.2.3.4
++```
++                        
++### Sanity tests
++
++Once playbook installation is complete, use below command and make certificates are returned.
++```
++        pki -p 20080 ca-cert-find
++```
++Incase, you are required to run any other topology let us say "topology-01" for shared instance, replace topology-02 with topology-01.
++
++
++### Gathering Subsystems Facts
++
++Gather configuration files, ports and other environment data from `/tmp/test_dir` on the system under test.
++
++
++## References:
++
++1. http://docs.ansible.com/ansible/intro.html
++2. http://docs.ansible.com/ansible/intro_installation.html
+\ No newline at end of file
+diff --git a/tests/dogtag/pytest-ansible/installation/host b/tests/dogtag/pytest-ansible/installation/host
+new file mode 100644
+index 0000000..056033d
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/host
+@@ -0,0 +1,2 @@
++[master]
++10.8.52.99
+diff --git a/tests/dogtag/pytest-ansible/installation/main.yml b/tests/dogtag/pytest-ansible/installation/main.yml
+new file mode 100644
+index 0000000..41d4b66
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/main.yml
+@@ -0,0 +1,11 @@
++# Configure cosmos repo and install all pre-requisites on Jenkins slave.
++# Git clone and install ipa-pytests on Jenkins slave.
++- hosts: localhost
++  gather_facts: true
++  roles:
++  - Test_Trigger
++
++# Git clone and install ipa-pytests on all SUT
++- hosts: master
++  roles:
++  - Test_Execution
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/config_templates/ansible_constants.py b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/config_templates/ansible_constants.py
+new file mode 100644
+index 0000000..ccb19b6
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/config_templates/ansible_constants.py
+@@ -0,0 +1,52 @@
++#common to all subsystems
++CLIENT_PKCS12_PASSWORD = 'Secret123'
++CLIENT_DIR_PASSWORD = 'Secret123'
++BACKUP_PASSWORD = 'Secret123'
++CLIENT_DATABASE_PASSWORD = 'Secret123'
++#CA Instance
++CA_HTTPS_PORT = '20443'
++CA_HTTP_PORT = '20080'
++CA_AJP_PORT = '20009'
++CA_TOMCAT_PORT = '20005'
++CA_CLIENT_DIR = '/opt/topology-CA'
++CA_INSTANCE_NAME = 'topology-CA'
++SECURITY_DOMAIN_PASSWORD = 'Secret123'
++CA_PASSWORD = 'Secret123'
++CA_SECURITY_DOMAIN_NAME = 'topology_Foobarmaster.org'
++CA_ADMIN_USERNAME = 'caadmin'
++CA_ADMIN_NICK = 'PKI CA Administrator for Example.Org'
++#KRA Instance
++KRA_INSTANCE_NAME = 'topology-KRA'
++KRA_HTTPS_PORT = 21443
++KRA_HTTP_PORT = 21080
++KRA_AJP_PORT = 21009
++KRA_TOMCAT_PORT = 21005
++KRA_PASSWORD = 'Secret123'
++KRA_CLIENT_DIR = '/opt/topology-KRA'
++KRA_ADMIN_NICK = 'PKI KRA Administrator for Example.Org'
++#OCSP Instance
++OCSP_INSTANCE_NAME = 'topology-OCSP'
++OCSP_HTTPS_PORT = 22443
++OCSP_HTTP_PORT = 22080
++OCSP_AJP_PORT = 22009
++OCSP_TOMCAT_PORT = 22005
++OCSP_PASSWORD = 'Secret123'
++OCSP_CLIENT_DIR = '/opt/topology-OCSP'
++OCSP_ADMIN_NICK = 'PKI OCSP Administrator for Example.Org'
++#TKS Instance
++TKS_INSTANCE_NAME = 'topology-TKS'
++TKS_HTTPS_PORT = 23443
++TKS_HTTP_PORT = 23080
++TKS_AJP_PORT = 23009
++TKS_TOMCAT_PORT = 23005
++TKS_PASSWORD = 'Secret123'
++TKS_CLIENT_DIR = '/opt/topology-TKS'
++#TPS instance
++TPS_INSTANCE_NAME = 'topology-TPS'
++TPS_HTTPS_PORT = '25443'
++TPS_HTTP_PORT = '25080'
++TPS_AJP_PORT = '25009'
++TPS_TOMCAT_PORT = '25005'
++TPS_PASSWORD = 'Secret123'
++TPS_CLIENT_DIR = '/opt/topology-TPS'
++TPS_ADMIN_NICK = 'PKI TPS Administrator for Example.Org'
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/test/script b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/test/script
+new file mode 100755
+index 0000000..c98e4ae
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/files/test/script
+@@ -0,0 +1,79 @@
++#!/bin/sh
++#Generate Noise using Openssl
++echo "Defining variables "
++tks_password="/tmp/tkspassword.txt"
++tps_password="/tmp/tpspassword.txt"
++tks_alias="/var/lib/pki/$1-TKS/alias"
++tps_alias="/var/lib/pki/$1-TPS/alias"
++tks_noise="/tmp/tks_noise"
++tks_shared_secret="sharedSecret"
++tks_conf="/var/lib/pki/$1-TKS/tks/conf/CS.cfg"
++tps_conf="/var/lib/pki/$1-TPS/tps/conf/CS.cfg"
++tps_input_file="/tmp/tps-input.txt"
++tks_secret_output="/tmp/secret"
++tks_input_file="/tmp/tks-input.txt"
++tks_input="proceed\r\n"
++tks_secret_output="/tmp/sharedSecret.out"
++tps_key_import_status="/tmp/sharedSecretImport.out"
++echo "proceed\r\n" > $tks_input_file
++echo "Generate Noise using OpenSSL"
++openssl rand -hex 2048 |  perl -p -e 's/\n//' > $tks_noise
++cat /var/lib/pki/$1-TKS/conf/password.conf | sed 's/^internal=//' > $tks_password
++cat /var/lib/pki/$1-TPS/conf/password.conf | sed 's/^internal=//' > $tps_password
++
++echo "Stopping TKS  & TPS instance"
++systemctl stop pki-tomcatd@$1-TKS.service
++systemctl stop pki-tomcatd@$1-TPS.service
++echo "Generating shared secret"
++/usr/bin/tkstool -D -d $tks_alias -n "TPS-`hostname`-25443 sharedSecret" -f $tks_password
++/usr/bin/tkstool -T -d $tks_alias -n $tks_shared_secret -f $tks_password -z $tks_noise > $tks_secret_output < $tks_input_file
++/usr/bin/tkstool -L -d $tks_alias -n $tks_shared_secret -f $tks_password > /tmp/sharedSecretList1.out
++grep "$tks_shared_secret" /tmp/sharedSecretList1.out
++first_session_tmp1=$(cat $tks_secret_output | grep -A1 "first\ssession\skey\sshare:")
++first_session_tmp2=$(echo $first_session_tmp1 | sed 's/^first session key share://')
++first_session_key=$(echo ${first_session_tmp2%% })
++first_session_KCV_tmp1=$(cat $tks_secret_output | grep "first\ssession\skey\sshare\sKCV:")
++first_session_KCV_tmp2=$(echo $first_session_KCV_tmp1 | sed 's/^first session key share KCV://')
++first_session_KCV_key=$(echo ${first_session_KCV_tmp2%% })
++
++second_session_tmp1=$(cat $tks_secret_output | grep -A1 "second\ssession\skey\sshare:")
++second_session_tmp2=$(echo $second_session_tmp1 | sed 's/^second session key share://')
++second_session_key=$(echo ${second_session_tmp2%% })
++second_session_KCV_tmp1=$(cat $tks_secret_output | grep "second\ssession\skey\sshare\sKCV:")
++second_session_KCV_tmp2=$(echo $second_session_KCV_tmp1 | sed 's/^second session key share KCV://')
++second_session_KCV_key=$(echo ${second_session_KCV_tmp2%% })
++
++third_session_tmp1=$(cat $tks_secret_output | grep -A1 "third\ssession\skey\sshare:")
++third_session_tmp2=$(echo $third_session_tmp1 | sed 's/^third session key share://')
++third_session_key=$(echo ${third_session_tmp2%% })
++third_session_KCV_tmp1=$(cat $tks_secret_output | grep "third\ssession\skey\sshare\sKCV:")
++third_session_KCV_tmp2=$(echo $third_session_KCV_tmp1 | sed 's/^third session key share KCV://')
++third_session_KCV_key=$(echo ${third_session_KCV_tmp2%% })
++
++sed -i -e "/tps.0.nickname=/s/=.*/=$tks_shared_secret/g" $tks_conf
++sed -i -e "/tks.tksSharedSymKeyName=/s/=.*/=$tks_shared_secret/g" $tks_conf
++echo "Restart $1-TKS instance"
++systemctl restart pki-tomcatd@$1-TKS.service
++echo "proceed\r\n" > $tps_input_file
++echo "$first_session_key\r\n" >> $tps_input_file
++echo "\r\n" >> $tps_input_file
++echo "$first_session_KCV_key\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "$second_session_key\r\n" >> $tps_input_file
++echo "\r\n" >> $tps_input_file
++echo "$second_session_KCV_key\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "$third_session_key\r\n" >> $tps_input_file
++echo "\r\n" >> $tps_input_file
++echo "$third_session_KCV_key\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++
++/usr/bin/tkstool -I -d $tps_alias -n $tks_shared_secret -f $tps_password < $tps_input_file > $tps_key_import_status
++/usr/bin/tkstool -L -d $tps_alias -n $tks_shared_secret -f $tps_password > /tmp/sharedSecretList2.out
++grep "$tks_shared_secret" /tmp/sharedSecretList2.out
++sed -i -e "/tps.connector.tks1.tksSharedSymKeyName=/s/=.*/=$tks_shared_secret/g" $tps_conf
++sed -i -e "/conn.tks1.tksSharedSymKeyName=/s/=.*/=$tks_shared_secret/g" $tps_conf
++echo "Restart $1-TPS instance"
++systemctl restart pki-tomcatd@$1-TPS.service
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/main.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/main.yml
+new file mode 100644
+index 0000000..3342a9a
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/main.yml
+@@ -0,0 +1,3 @@
++- name: Inclue pki-core handlers
++  include: pki-core.yml
++  tags: pki-core
+\ No newline at end of file
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/pki-core.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/pki-core.yml
+new file mode 100644
+index 0000000..ed22477
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/handlers/pki-core.yml
+@@ -0,0 +1,54 @@
++- name: STOPCA
++  service:
++    name: pki-tomcatd@{{ topology }}-CA
++    state: stopped
++
++- name: STARTCA
++  service:
++    name: pki-tomcatd@{{ topology }}-CA
++    state: started
++
++- name: STOPKRA
++  service:
++    name: pki-tomcatd@{{ topology }}-KRA
++    state: stopped
++
++- name: STARTKRA
++  service:
++    name: pki-tomcatd@{{ topology }}-KRA
++    state: started
++
++- name: STOPOCSP
++  service:
++    name: pki-tomcatd@{{ topology }}-OCSP
++    state: stopped
++
++- name: STARTOCSP
++  service:
++    name: pki-tomcatd@{{ topology }}-OCSP
++    state: started
++
++- name: STOPTKS
++  service:
++    name: pki-tomcatd@{{ topology }}-TKS
++    state: stopped
++
++- name: STARTTKS
++  service:
++    name: pki-tomcatd@{{ topology }}-TKS
++    state: started
++
++- name: STOPTPS
++  service:
++    name: pki-tomcatd@{{ topology }}-TPS
++    state: stopped
++
++- name: STARTTPS
++  service:
++    name: pki-tomcatd@{{ topology }}-TPS
++    state: started
++
++- name: INC_CONSTANTS
++  include_vars:
++    file: /tmp/test_dir/constants.yml
++    name: variable
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ca.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ca.yml
+new file mode 100644
+index 0000000..a1de87d
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ca.yml
+@@ -0,0 +1,18 @@
++- name: Install CA master
++  shell: pkispawn -s CA -f /tmp/test_dir/ca.cfg
++
++- name : Stopping CA Subsystem
++  shell: systemctl stop pki-tomcatd@{{ topology }}-CA.service
++
++- name: Enable SignedAudit for Subsystem
++  replace: dest=/etc/pki/{{ topology }}-CA/ca/CS.cfg regexp="log.instance.SignedAudit.logSigning=false" replace="log.instance.SignedAudit.logSigning=true"
++
++- name: Getting certificate nickname for CA CS.cfg
++  shell: grep "ca.ocsp_signing.nickname" /etc/pki/{{ topology }}-CA/ca/CS.cfg |awk -F"=" ' { print $2 } '
++  register: nickname_ocsp
++
++- name: Importing client certificate for OCSP
++  shell: certutil -L -d /var/lib/pki/{{ topology }}-CA/alias -n "{{ nickname_ocsp.stdout }}" -a > /tmp/test_dir/ocsp_signing.crt
++
++- name : Starting CA Subsystem
++  shell: systemctl start pki-tomcatd@{{ topology }}-CA.service
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_common.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_common.yml
+new file mode 100644
+index 0000000..ac44bc5
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_common.yml
+@@ -0,0 +1,77 @@
++- name: Disable firewalld before LDAP and Subsystem installation
++  systemd: state=stopped name=firewalld
++
++- name : Set hostname for machines Bydefault we choose pki1 for master and pki2 for clones.
++  hostname: name=pki1.example.com
++  tags: platform-ci
++
++- name: Install a required package for modify hostname task below
++  dnf: pkg={{item}} state=latest
++  with_items:
++    - libselinux-python
++  when: ansible_distribution == "Fedora"
++
++- name : Modify hostname for master in  /etc/hosts
++  lineinfile: dest=/etc/hosts regexp='.*{{ inventory_hostname }}$' create=yes insertafter=EOF line="{{ inventory_hostname }} {{ansible_fqdn}}" state=present
++  tags: platform-ci
++
++
++- name : fetch file in  master in  /etc/hosts
++  fetch: src=/etc/hosts dest=/etc/ flat=yes validate_checksum=no
++  tags: platform-ci
++  
++- name: Install list of packages for CS Master for Redhat
++  yum : pkg={{item}} state=latest
++  with_items:
++    - redhat-pki
++    - redhat-pki-console-theme
++    - redhat-pki-server-theme
++    - pki-console
++    - 389-ds-base
++    - pki-ca
++    - pki-kra
++    - pki-ocsp
++    - pki-tks
++    - pki-tps
++    - policycoreutils-python
++    - expect
++    - libselinux-python
++  when: ansible_distribution == "RedHat"
++  tags: platform-ci
++
++- name: Install list of packages for CS Master for Fedora
++  dnf : pkg={{item}} state=latest
++  with_items:
++    - 389-ds-base
++    - dogtag-pki
++    - dogtag-pki-console-theme
++    - dogtag-pki-server-theme
++    - policycoreutils-python
++    - expect
++  when: ansible_distribution == "Fedora"
++  tags: platform-ci
++
++- name: Check for Removed dependency from mod_revocator and mod_nss.If failes refer BZ 1295276 
++  command: rpm -q {{item}}
++  with_items:
++    - mod_revocator
++    - mod_nss
++  register: rpm_check
++  failed_when: "rpm_check.rc == 0"
++
++- name: Check for Removed dependency of perl from pki-server.If fails, refer BZ 1305769
++  command: rpm -qR pki-server | grep perl
++  register: rpm_check
++  failed_when: "rpm_check.rc == 0"
++
++- name: Copying templates to /tmp folder
++  copy : src=/tmp/test_dir  dest=/tmp/
++  tags: platform-ci
++
++- name: Making constants.py file compatable for including as vars.
++  shell: sed -e "s/ =/:/g;s/'//g" /tmp/test_dir/constants.py > /tmp/test_dir/constants.yml
++
++- name: Fetch the file
++  fetch: src=/tmp/test_dir/constants.yml dest=/tmp/test_dir/ flat=yes validate_checksum=no
++
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_kra.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_kra.yml
+new file mode 100644
+index 0000000..670fa5e
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_kra.yml
+@@ -0,0 +1,24 @@
++- name: Install KRA master
++  shell: pkispawn -s KRA -f /tmp/test_dir/kra.cfg
++
++- name : Stopping KRA Subsystem
++  shell: echo "Stopping Subsystem for enabling Audit logging"
++  notify:
++    - STOPKRA
++    - INC_CONSTANTS
++
++- meta: flush_handlers
++
++- name: Enable SignedAudit
++  replace: dest=/etc/pki/{{ topology }}-KRA/kra/CS.cfg regexp="log.instance.SignedAudit.logSigning=false" replace="log.instance.SignedAudit.logSigning=true"
++
++- name: Enable OCSP for KRA
++  replace: dest=/etc/pki/{{ topology }}-KRA/server.xml regexp='enableOCSP="false"' replace='enableOCSP="true"'
++
++- name: Pointing KRA to correct OCSP port
++  replace: dest=/etc/pki/{{ topology }}-KRA/server.xml regexp='([0-9]+)/ca/ocsp' replace={{ variable.CA_HTTP_PORT }}/ca/ocsp
++
++- name: Importing OCSP certificate in kra nssdb
++  shell: certutil -A -d /etc/pki/{{ topology }}-KRA/alias -n "ocspSigningCert cert-pki-ca" -t "C,," -i  /tmp/test_dir/ocsp_signing.crt
++  notify:
++    - STARTKRA
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ldap.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ldap.yml
+new file mode 100644
+index 0000000..01d867b
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ldap.yml
+@@ -0,0 +1,20 @@
++
++- name: Setup DS Service
++  shell: setup-ds.pl --silent --file=/tmp/test_dir/ldap.cfg
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology  == "topology-05" or topology == "topology-ecc"
++
++- name: Setup DS Service
++  shell: setup-ds.pl --silent --file=/tmp/test_dir/ldap_kra.cfg
++  when: topology  == "topology-05"
++
++- name: Setup DS Service
++  shell: setup-ds.pl --silent --file=/tmp/test_dir/ldap_ocsp.cfg
++  when: topology  == "topology-05"
++
++- name: Setup DS Service
++  shell: setup-ds.pl --silent --file=/tmp/test_dir/ldap_tks.cfg
++  when: topology  == "topology-05"
++
++- name: Setup DS Service
++  shell: setup-ds.pl --silent --file=/tmp/test_dir/ldap_tps.cfg
++  when: topology  == "topology-05"
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ocsp.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ocsp.yml
+new file mode 100644
+index 0000000..373a16c
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_ocsp.yml
+@@ -0,0 +1,17 @@
++- name: sleep
++  shell: sleep 5s
++  
++- name: Install OCSP master
++  shell: pkispawn -s OCSP -f /tmp/test_dir/ocsp.cfg
++
++- name : Stopping OCSP Subsystem
++  shell: echo "Stopping Subsystem for enabling Audit logging"
++  notify:
++    - STOPOCSP
++
++- name: Enable SignedAudit
++  replace: dest=/etc/pki/{{ topology }}-OCSP/ocsp/CS.cfg regexp="log.instance.SignedAudit.logSigning=false" replace="log.instance.SignedAudit.logSigning=true"
++  notify:
++    - STARTOCSP
++
++- meta: flush_handlers
+\ No newline at end of file
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_shared.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_shared.yml
+new file mode 100644
+index 0000000..dee083c
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_shared.yml
+@@ -0,0 +1,14 @@
++- name: Install CA master
++  shell: pkispawn -s CA -f /tmp/test_dir/ca.cfg
++
++- name: Install KRA master
++  shell: pkispawn -s KRA -f /tmp/test_dir/kra.cfg
++
++- name: Install OCSP master
++  shell: pkispawn -s OCSP -f /tmp/test_dir/ocsp.cfg
++
++- name: Install TKS master
++  shell: pkispawn -s TKS -f /tmp/test_dir/tks.cfg
++
++- name: Install TPS master
++  shell: pkispawn -s TPS -f /tmp/test_dir/tps.cfg
+\ No newline at end of file
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_sharedsecret.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_sharedsecret.yml
+new file mode 100644
+index 0000000..f2e4de4
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_sharedsecret.yml
+@@ -0,0 +1,4 @@
++- name: Shared Secret sharing between TPS and TKS
++  script: test/script {{ topology }}
++  when: topology  == "topology-02" or topology  == "topology-05"
++  tags: platform-ci
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tks.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tks.yml
+new file mode 100644
+index 0000000..78295d1
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tks.yml
+@@ -0,0 +1,30 @@
++- name: Install TKS master
++  shell: pkispawn -s TKS -f /tmp/test_dir/tks.cfg
++
++- name : Stopping TKS Subsystem
++  shell: echo "Stopping Subsystem for enabling Audit logging"
++  notify:
++    - STOPTKS
++    - INC_CONSTANTS
++
++- meta: flush_handlers
++
++- name: Enable SignedAudit
++  replace: dest=/etc/pki/{{ topology }}-TKS/tks/CS.cfg regexp="log.instance.SignedAudit.logSigning=false" replace="log.instance.SignedAudit.logSigning=true"
++
++- name: Enable OCSP for TKS
++  replace: dest=/etc/pki/{{ topology }}-TKS/server.xml regexp='enableOCSP="false"' replace='enableOCSP="true"'
++
++- name: Pointing TKS to correct OCSP port
++  replace: dest=/etc/pki/{{ topology }}-TKS/server.xml regexp='([0-9]+)/ca/ocsp' replace={{ variable.CA_HTTP_PORT }}/ca/ocsp
++
++- name: Importing OCSP certificate in TKS nssdb
++  shell: certutil -A -d /etc/pki/{{ topology }}-TKS/alias -n "ocspSigningCert cert-pki-ca" -t "C,," -i  /tmp/test_dir/ocsp_signing.crt
++  notify:
++    - STARTTKS
++
++- meta: flush_handlers
++
++- name: Sleep for a while to start TKS
++  shell: sleep 3s
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tps.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tps.yml
+new file mode 100644
+index 0000000..5aa1021
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/configure_tps.yml
+@@ -0,0 +1,24 @@
++- name: Install TPS master
++  shell: pkispawn -s TPS -f /tmp/test_dir/tps.cfg
++
++- name : Stopping TPS Subsystem
++  shell: echo "Stopping Subsystem for enabling Audit logging"
++  notify:
++    - STOPTPS
++    - INC_CONSTANTS
++
++- meta: flush_handlers
++
++- name: Enable SignedAudit
++  replace: dest=/etc/pki/{{ topology }}-TPS/tps/CS.cfg regexp="log.instance.SignedAudit.logSigning=false" replace="log.instance.SignedAudit.logSigning=true"
++
++- name: Enable OCSP for TPS
++  replace: dest=/etc/pki/{{ topology }}-TPS/server.xml regexp='enableOCSP="false"' replace='enableOCSP="true"'
++
++- name: Pointing TPS to correct OCSP port
++  replace: dest=/etc/pki/{{ topology }}-TPS/server.xml regexp='([0-9]+)/ca/ocsp' replace={{ variable.CA_HTTP_PORT }}/ca/ocsp
++
++- name: Importing OCSP certificate in tps nssdb
++  shell: certutil -A -d /etc/pki/{{ topology }}-TPS/alias -n "ocspSigningCert cert-pki-ca" -t "C,," -i  /tmp/test_dir/ocsp_signing.crt
++  notify:
++    - STARTTPS
+\ No newline at end of file
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/main.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/main.yml
+new file mode 100644
+index 0000000..2aa432b
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Execution/tasks/main.yml
+@@ -0,0 +1,19 @@
++---
++- include: configure_common.yml
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology == "topology-05" or topology == "topology-ecc"
++- include: configure_ldap.yml
++  when:  topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology == "topology-05" or topology == "topology-ecc"
++- include: configure_shared.yml
++  when: topology  == "topology-01"
++- include: configure_ca.yml
++  when: topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology == "topology-05" or topology == "topology-ecc"
++- include: configure_ocsp.yml
++  when: topology == "topology-02" or topology == "topology-03" or topology == "topology-05" or topology == "topology-ecc"
++- include: configure_kra.yml
++  when: topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology == "topology-05" or topology == "topology-ecc"
++- include: configure_tks.yml
++  when: topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology == "topology-05"
++- include: configure_tps.yml
++  when: topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology == "topology-05"
++- include: configure_sharedsecret.yml
++  when: topology  == "topology-02" or topology == "topology-04" or topology == "topology-05"
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/config_templates/ansible_constants.py b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/config_templates/ansible_constants.py
+new file mode 100644
+index 0000000..ccb19b6
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/config_templates/ansible_constants.py
+@@ -0,0 +1,52 @@
++#common to all subsystems
++CLIENT_PKCS12_PASSWORD = 'Secret123'
++CLIENT_DIR_PASSWORD = 'Secret123'
++BACKUP_PASSWORD = 'Secret123'
++CLIENT_DATABASE_PASSWORD = 'Secret123'
++#CA Instance
++CA_HTTPS_PORT = '20443'
++CA_HTTP_PORT = '20080'
++CA_AJP_PORT = '20009'
++CA_TOMCAT_PORT = '20005'
++CA_CLIENT_DIR = '/opt/topology-CA'
++CA_INSTANCE_NAME = 'topology-CA'
++SECURITY_DOMAIN_PASSWORD = 'Secret123'
++CA_PASSWORD = 'Secret123'
++CA_SECURITY_DOMAIN_NAME = 'topology_Foobarmaster.org'
++CA_ADMIN_USERNAME = 'caadmin'
++CA_ADMIN_NICK = 'PKI CA Administrator for Example.Org'
++#KRA Instance
++KRA_INSTANCE_NAME = 'topology-KRA'
++KRA_HTTPS_PORT = 21443
++KRA_HTTP_PORT = 21080
++KRA_AJP_PORT = 21009
++KRA_TOMCAT_PORT = 21005
++KRA_PASSWORD = 'Secret123'
++KRA_CLIENT_DIR = '/opt/topology-KRA'
++KRA_ADMIN_NICK = 'PKI KRA Administrator for Example.Org'
++#OCSP Instance
++OCSP_INSTANCE_NAME = 'topology-OCSP'
++OCSP_HTTPS_PORT = 22443
++OCSP_HTTP_PORT = 22080
++OCSP_AJP_PORT = 22009
++OCSP_TOMCAT_PORT = 22005
++OCSP_PASSWORD = 'Secret123'
++OCSP_CLIENT_DIR = '/opt/topology-OCSP'
++OCSP_ADMIN_NICK = 'PKI OCSP Administrator for Example.Org'
++#TKS Instance
++TKS_INSTANCE_NAME = 'topology-TKS'
++TKS_HTTPS_PORT = 23443
++TKS_HTTP_PORT = 23080
++TKS_AJP_PORT = 23009
++TKS_TOMCAT_PORT = 23005
++TKS_PASSWORD = 'Secret123'
++TKS_CLIENT_DIR = '/opt/topology-TKS'
++#TPS instance
++TPS_INSTANCE_NAME = 'topology-TPS'
++TPS_HTTPS_PORT = '25443'
++TPS_HTTP_PORT = '25080'
++TPS_AJP_PORT = '25009'
++TPS_TOMCAT_PORT = '25005'
++TPS_PASSWORD = 'Secret123'
++TPS_CLIENT_DIR = '/opt/topology-TPS'
++TPS_ADMIN_NICK = 'PKI TPS Administrator for Example.Org'
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ca.cfg b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ca.cfg
+new file mode 100644
+index 0000000..e286927
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ca.cfg
+@@ -0,0 +1,38 @@
++[DEFAULT]
++pki_instance_name = topology-CA
++pki_https_port = capki_https_port
++pki_http_port = capki_http_port
++pki_token_password = Secret123
++pki_admin_password = Secret123
++pki_hostname = SERVERNAME
++pki_security_domain_name = topology_Foobarmaster.org
++pki_security_domain_password = Secret123
++pki_client_dir = /opt/topology-CA
++pki_client_pkcs12_password = Secret123
++pki_backup_keys = True
++pki_backup_password = Secret123
++pki_ds_password = Secret123
++pki_ds_ldap_port = ldapServerPort
++pki_ssl_server_key_algorithm=SHA512withRSA
++pki_ssl_server_key_size=2048
++pki_ssl_server_key_type=rsa
++pki_subsystem_key_algorithm=SHA512withRSA
++pki_subsystem_key_size=2048
++pki_subsystem_key_type=rsa
++
++[Tomcat]
++pki_ajp_port = capki_ajp_port
++pki_tomcat_server_port = capki_tomcat_port
++
++[CA]
++pki_import_admin_cert = False
++pki_ds_hostname = SERVERNAME
++pki_admin_nickname = PKI CA Administrator for Example.Org
++pki_ca_signing_key_algorithm=SHA512withRSA
++pki_ca_signing_key_size=2048
++pki_ca_signing_key_type=rsa
++pki_ca_signing_signing_algorithm=SHA512withRSA
++pki_ocsp_signing_key_algorithm=SHA512withRSA
++pki_ocsp_signing_key_size=2048
++pki_ocsp_signing_key_type=rsa
++pki_ocsp_signing_signing_algorithm=SHA512withRSA
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/constants.py b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/constants.py
+new file mode 100644
+index 0000000..8df625c
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/constants.py
+@@ -0,0 +1,67 @@
++#common to all subsystems
++CLIENT_PKCS12_PASSWORD = 'Secret123'
++CLIENT_DIR_PASSWORD = 'Secret123'
++BACKUP_PASSWORD = 'Secret123'
++CLIENT_DATABASE_PASSWORD = 'Secret123'
++#CA Instance
++CA_HTTPS_PORT = 'capki_https_port'
++CA_HTTP_PORT = 'capki_http_port'
++CA_AJP_PORT = 'capki_ajp_port'
++CA_TOMCAT_PORT = 'capki_tomcat_port'
++CA_CLIENT_DIR = '/opt/topology-CA'
++CA_INSTANCE_NAME = 'topology-CA'
++SECURITY_DOMAIN_PASSWORD = 'Secret123'
++CA_PASSWORD = 'Secret123'
++CA_SECURITY_DOMAIN_NAME = 'topology_Foobarmaster.org'
++CA_ADMIN_USERNAME = 'caadmin'
++CA_ADMIN_NICK = 'PKI CA Administrator for Example.Org'
++#KRA Instance
++KRA_INSTANCE_NAME = 'topology-KRA'
++KRA_HTTPS_PORT = 'krapki_https_port'
++KRA_HTTP_PORT = 'krapki_http_port'
++KRA_AJP_PORT = 'krapki_ajp_port'
++KRA_TOMCAT_PORT = 'krapki_tomcat_server_port'
++KRA_PASSWORD = 'Secret123'
++KRA_CLIENT_DIR = '/opt/topology-KRA'
++KRA_ADMIN_NICK = 'PKI KRA Administrator for Example.Org'
++#OCSP Instance
++OCSP_INSTANCE_NAME = 'topology-OCSP'
++OCSP_HTTPS_PORT = 'ocsppki_https_port'
++OCSP_HTTP_PORT = 'ocsppki_http_port'
++OCSP_AJP_PORT = 'ocsppki_ajp_port'
++OCSP_TOMCAT_PORT = 'ocsppki_tomcat_server_port'
++OCSP_PASSWORD = 'Secret123'
++OCSP_CLIENT_DIR = '/opt/topology-OCSP'
++OCSP_ADMIN_NICK = 'PKI OCSP Administrator for Example.Org'
++#TKS Instance
++TKS_INSTANCE_NAME = 'topology-TKS'
++TKS_HTTPS_PORT = 'tkspki_https_port'
++TKS_HTTP_PORT = 'tkspki_http_port'
++TKS_AJP_PORT = 'tkspki_ajp_port'
++TKS_TOMCAT_PORT = 'tkspki_tomcat_server_port'
++TKS_PASSWORD = 'Secret123'
++TKS_CLIENT_DIR = '/opt/topology-TKS'
++TKS_ADMIN_NICK = 'PKI TKS Administrator for Example.Org'
++#TPS instance
++TPS_INSTANCE_NAME = 'topology-TPS'
++TPS_HTTPS_PORT = 'tpspki_https_port'
++TPS_HTTP_PORT = 'tpspki_http_port'
++TPS_AJP_PORT = 'tpspki_ajp_port'
++TPS_TOMCAT_PORT = 'tpspki_tomcat_server_port'
++TPS_PASSWORD = 'Secret123'
++TPS_CLIENT_DIR = '/opt/topology-TPS'
++TPS_ADMIN_NICK = 'PKI TPS Administrator for Example.Org'
++#LDAP Details
++LDAP_PORT = 'ldapServerPort'
++LDAP_BIND_DN = 'cn=Directory Manager'
++LDAP_PASSWD = 'Secret123'
++LDAP_BASE_DN = 'dc=example,dc=org'
++LDAP_KRA_PORT = 'ldapkraServerPort'
++LDAP_OCSP_PORT = 'ldapocspServerPort'
++LDAP_TKS_PORT = 'ldaptksServerPort'
++LDAP_TPS_PORT = 'ldaptpsServerPort'
++LDAP_USER = 'foobar'
++LDAP_USER_ENROLL = 'testuser'
++CUID = '40906145C76224192D2B'
++CUID_01 = '40906145C76224192D11'
++TPS_OPERATION = 'ra_enroll'
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/kra.cfg b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/kra.cfg
+new file mode 100644
+index 0000000..fd46b09
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/kra.cfg
+@@ -0,0 +1,42 @@
++[DEFAULT]
++pki_instance_name = topology-KRA
++pki_https_port = krapki_https_port
++pki_http_port = krapki_http_port
++pki_token_password = Secret123
++pki_admin_password = Secret123
++pki_hostname = SERVERNAME
++pki_security_domain_hostname = SERVERNAME
++pki_security_domain_https_port = secure_domain_port
++pki_security_domain_name = topology_Foobarmaster.org
++pki_security_domain_password = Secret123
++pki_client_dir = /opt/topology-KRA
++pki_client_pkcs12_password = Secret123
++pki_backup_keys = True
++pki_backup_password = Secret123
++pki_ds_password = Secret123
++pki_ds_ldap_port = ldapServerPort
++pki_client_database_password = Secret123
++pki_ssl_server_key_algorithm=SHA512withRSA
++pki_ssl_server_key_size=2048
++pki_ssl_server_key_type=rsa
++pki_subsystem_key_algorithm=SHA512withRSA
++pki_subsystem_key_size=2048
++pki_subsystem_key_type=rsa
++
++[Tomcat]
++pki_ajp_port = krapki_ajp_port
++pki_tomcat_server_port = krapki_tomcat_server_port
++
++[KRA]
++pki_import_admin_cert = False
++pki_ds_hostname = SERVERNAME
++pki_admin_nickname = PKI KRA Administrator for Example.Org
++pki_storage_key_algorithm=SHA512withRSA
++pki_storage_key_size=2048
++pki_storage_key_type=rsa
++pki_storage_signing_algorithm=SHA512withRSA
++pki_transport_key_algorithm=SHA512withRSA
++pki_transport_key_size=2048
++pki_transport_key_type=rsa
++pki_transport_signing_algorithm=SHA512withRSA
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ldap.cfg b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ldap.cfg
+new file mode 100644
+index 0000000..820efec
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ldap.cfg
+@@ -0,0 +1,12 @@
++[General]
++FullMachineName = SERVERNAME 
++SuiteSpotUserID = nobody
++SuiteSpotGroup = nobody
++ConfigDirectoryAdminID = admin
++
++[slapd]
++ServerIdentifier = topology-testingmaster
++ServerPort = ldapServerPort 
++Suffix = dc=example,dc=org
++RootDN = CN=Directory Manager
++RootDNPwd = Secret123
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ocsp.cfg b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ocsp.cfg
+new file mode 100644
+index 0000000..e553c32
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/ocsp.cfg
+@@ -0,0 +1,36 @@
++[DEFAULT]
++pki_instance_name = topology-OCSP
++pki_https_port = ocsppki_https_port
++pki_http_port = ocsppki_http_port
++pki_token_password = Secret123
++pki_admin_password = Secret123
++pki_hostname = SERVERNAME
++pki_security_domain_name = topology_Foobarmaster.org
++pki_security_domain_password = Secret123
++pki_security_domain_https_port = secure_domain_port
++pki_client_dir = /opt/topology-OCSP
++pki_client_pkcs12_password = Secret123
++pki_backup_keys = True
++pki_backup_password = Secret123
++pki_ds_password = Secret123
++pki_ds_ldap_port = ldapServerPort
++pki_client_database_password = Secret123
++pki_ssl_server_key_algorithm=SHA512withRSA
++pki_ssl_server_key_size=2048
++pki_ssl_server_key_type=rsa
++pki_subsystem_key_algorithm=SHA512withRSA
++pki_subsystem_key_size=2048
++pki_subsystem_key_type=rsa
++
++[Tomcat]
++pki_ajp_port = ocsppki_ajp_port
++pki_tomcat_server_port = ocsppki_tomcat_server_port
++
++[OCSP]
++pki_import_admin_cert = False
++pki_ds_hostname = SERVERNAME
++pki_admin_nickname= PKI OCSP Administrator for Example.Org
++pki_ocsp_signing_key_algorithm=SHA512withRSA
++pki_ocsp_signing_key_size=2048
++pki_ocsp_signing_key_type=rsa
++pki_ocsp_signing_signing_algorithm=SHA512withRSA
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/script b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/script
+new file mode 100755
+index 0000000..c98e4ae
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/script
+@@ -0,0 +1,79 @@
++#!/bin/sh
++#Generate Noise using Openssl
++echo "Defining variables "
++tks_password="/tmp/tkspassword.txt"
++tps_password="/tmp/tpspassword.txt"
++tks_alias="/var/lib/pki/$1-TKS/alias"
++tps_alias="/var/lib/pki/$1-TPS/alias"
++tks_noise="/tmp/tks_noise"
++tks_shared_secret="sharedSecret"
++tks_conf="/var/lib/pki/$1-TKS/tks/conf/CS.cfg"
++tps_conf="/var/lib/pki/$1-TPS/tps/conf/CS.cfg"
++tps_input_file="/tmp/tps-input.txt"
++tks_secret_output="/tmp/secret"
++tks_input_file="/tmp/tks-input.txt"
++tks_input="proceed\r\n"
++tks_secret_output="/tmp/sharedSecret.out"
++tps_key_import_status="/tmp/sharedSecretImport.out"
++echo "proceed\r\n" > $tks_input_file
++echo "Generate Noise using OpenSSL"
++openssl rand -hex 2048 |  perl -p -e 's/\n//' > $tks_noise
++cat /var/lib/pki/$1-TKS/conf/password.conf | sed 's/^internal=//' > $tks_password
++cat /var/lib/pki/$1-TPS/conf/password.conf | sed 's/^internal=//' > $tps_password
++
++echo "Stopping TKS  & TPS instance"
++systemctl stop pki-tomcatd@$1-TKS.service
++systemctl stop pki-tomcatd@$1-TPS.service
++echo "Generating shared secret"
++/usr/bin/tkstool -D -d $tks_alias -n "TPS-`hostname`-25443 sharedSecret" -f $tks_password
++/usr/bin/tkstool -T -d $tks_alias -n $tks_shared_secret -f $tks_password -z $tks_noise > $tks_secret_output < $tks_input_file
++/usr/bin/tkstool -L -d $tks_alias -n $tks_shared_secret -f $tks_password > /tmp/sharedSecretList1.out
++grep "$tks_shared_secret" /tmp/sharedSecretList1.out
++first_session_tmp1=$(cat $tks_secret_output | grep -A1 "first\ssession\skey\sshare:")
++first_session_tmp2=$(echo $first_session_tmp1 | sed 's/^first session key share://')
++first_session_key=$(echo ${first_session_tmp2%% })
++first_session_KCV_tmp1=$(cat $tks_secret_output | grep "first\ssession\skey\sshare\sKCV:")
++first_session_KCV_tmp2=$(echo $first_session_KCV_tmp1 | sed 's/^first session key share KCV://')
++first_session_KCV_key=$(echo ${first_session_KCV_tmp2%% })
++
++second_session_tmp1=$(cat $tks_secret_output | grep -A1 "second\ssession\skey\sshare:")
++second_session_tmp2=$(echo $second_session_tmp1 | sed 's/^second session key share://')
++second_session_key=$(echo ${second_session_tmp2%% })
++second_session_KCV_tmp1=$(cat $tks_secret_output | grep "second\ssession\skey\sshare\sKCV:")
++second_session_KCV_tmp2=$(echo $second_session_KCV_tmp1 | sed 's/^second session key share KCV://')
++second_session_KCV_key=$(echo ${second_session_KCV_tmp2%% })
++
++third_session_tmp1=$(cat $tks_secret_output | grep -A1 "third\ssession\skey\sshare:")
++third_session_tmp2=$(echo $third_session_tmp1 | sed 's/^third session key share://')
++third_session_key=$(echo ${third_session_tmp2%% })
++third_session_KCV_tmp1=$(cat $tks_secret_output | grep "third\ssession\skey\sshare\sKCV:")
++third_session_KCV_tmp2=$(echo $third_session_KCV_tmp1 | sed 's/^third session key share KCV://')
++third_session_KCV_key=$(echo ${third_session_KCV_tmp2%% })
++
++sed -i -e "/tps.0.nickname=/s/=.*/=$tks_shared_secret/g" $tks_conf
++sed -i -e "/tks.tksSharedSymKeyName=/s/=.*/=$tks_shared_secret/g" $tks_conf
++echo "Restart $1-TKS instance"
++systemctl restart pki-tomcatd@$1-TKS.service
++echo "proceed\r\n" > $tps_input_file
++echo "$first_session_key\r\n" >> $tps_input_file
++echo "\r\n" >> $tps_input_file
++echo "$first_session_KCV_key\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "$second_session_key\r\n" >> $tps_input_file
++echo "\r\n" >> $tps_input_file
++echo "$second_session_KCV_key\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++echo "$third_session_key\r\n" >> $tps_input_file
++echo "\r\n" >> $tps_input_file
++echo "$third_session_KCV_key\r\n" >> $tps_input_file
++echo "proceed\r\n" >> $tps_input_file
++
++/usr/bin/tkstool -I -d $tps_alias -n $tks_shared_secret -f $tps_password < $tps_input_file > $tps_key_import_status
++/usr/bin/tkstool -L -d $tps_alias -n $tks_shared_secret -f $tps_password > /tmp/sharedSecretList2.out
++grep "$tks_shared_secret" /tmp/sharedSecretList2.out
++sed -i -e "/tps.connector.tks1.tksSharedSymKeyName=/s/=.*/=$tks_shared_secret/g" $tps_conf
++sed -i -e "/conn.tks1.tksSharedSymKeyName=/s/=.*/=$tks_shared_secret/g" $tps_conf
++echo "Restart $1-TPS instance"
++systemctl restart pki-tomcatd@$1-TPS.service
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tks.cfg b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tks.cfg
+new file mode 100644
+index 0000000..479bbbf
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tks.cfg
+@@ -0,0 +1,26 @@
++[DEFAULT]
++pki_instance_name = topology-TKS
++pki_https_port = tkspki_https_port
++pki_http_port = tkspki_http_port
++pki_token_password = Secret123
++pki_admin_password = Secret123
++pki_hostname = SERVERNAME
++pki_security_domain_name = topology_Foobarmaster.org
++pki_security_domain_password = Secret123
++pki_security_domain_https_port = secure_domain_port
++pki_client_dir = /opt/topology-TKS
++pki_client_pkcs12_password = Secret123
++pki_backup_keys = True
++pki_backup_password = Secret123
++pki_ds_password = Secret123
++pki_ds_ldap_port = ldapServerPort
++pki_client_database_password = Secret123
++
++[Tomcat]
++pki_ajp_port = tkspki_ajp_port
++pki_tomcat_server_port = tkspki_tomcat_server_port
++
++[TKS]
++pki_import_admin_cert = False
++pki_ds_hostname = SERVERNAME
++pki_admin_nickname= PKI TKS Administrator for Example.Org
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tps.cfg b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tps.cfg
+new file mode 100644
+index 0000000..b878abc
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/files/test/tps.cfg
+@@ -0,0 +1,34 @@
++[DEFAULT]
++pki_instance_name = topology-TPS
++pki_https_port = tpspki_https_port
++pki_http_port = tpspki_http_port
++pki_token_password = Secret123
++pki_admin_password = Secret123
++pki_hostname = SERVERNAME
++pki_security_domain_hostname = SERVERNAME
++pki_security_domain_https_port = secure_domain_port
++pki_security_domain_name = topology_Foobarmaster.org
++pki_security_domain_password = Secret123
++pki_client_dir = /opt/topology-TPS
++pki_client_pkcs12_password = Secret123
++pki_backup_keys = True
++pki_backup_password = Secret123
++pki_ds_password = Secret123
++pki_ds_ldap_port = ldapServerPort
++pki_client_database_password = Secret123
++
++[Tomcat]
++pki_ajp_port = tpspki_ajp_port
++pki_tomcat_server_port = tpspki_tomcat_server_port
++
++[TPS]
++pki_import_admin_cert = False
++pki_ds_hostname = SERVERNAME
++pki_authdb_basedn = ou=People,dc=example,dc=org
++pki_authdb_hostname=SERVERNAME
++pki_authdb_port=3389
++pki_ca_uri=https://SERVERNAME:capki_https_port
++pki_tks_uri=https://SERVERNAME:tkspki_https_port
++pki_kra_uri=https://SERVERNAME:krapki_https_port
++pki_admin_nickname=PKI TPS Administrator for Example.Org
++pki_enable_server_side_keygen=True
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ca.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ca.yml
+new file mode 100644
+index 0000000..67c112b
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ca.yml
+@@ -0,0 +1,25 @@
++
++- name: Replace CA specific changes 
++  replace: dest={{item}} regexp="capki_https_port" replace={{capki_https_port}}
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace http port for CA.
++  replace: dest={{item}} regexp="capki_http_port" replace={{capki_http_port}}
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace ajp port for CA
++  replace: dest={{item}} regexp="capki_ajp_port" replace={{capki_ajp_port}}
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for CA
++  replace: dest={{item}} regexp="capki_tomcat_port" replace={{capki_tomcat_port}}
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/constants.py
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_common.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_common.yml
+new file mode 100644
+index 0000000..4bb8bc4
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_common.yml
+@@ -0,0 +1,146 @@
++- name: Pick constants based on {{topology}}
++  include_vars: "{{ item }}"
++  with_items:
++  - "{{ playbook_dir }}/vars/ldap_shared.yml"
++  - "{{ playbook_dir }}/vars/ca_shared.yml"
++  when: topology  == "topology-01"
++
++- name: Pick constants based on {{topology}}
++  include_vars: "{{ item }}"
++  with_items:
++  - "{{ playbook_dir }}/vars/ldap.yml"
++  - "{{ playbook_dir }}/vars/ca.yml"
++  - "{{ playbook_dir }}/vars/kra.yml"
++  - "{{ playbook_dir }}/vars/ocsp.yml"
++  - "{{ playbook_dir }}/vars/tks.yml"
++  - "{{ playbook_dir }}/vars/tps.yml"
++  when: topology  == "topology-02"
++
++- name: Pick constants based on {{topology}}
++  include_vars: "{{ item }}"
++  with_items:
++  - "{{ playbook_dir }}/vars/ldap.yml"
++  - "{{ playbook_dir }}/vars/ca.yml"
++  - "{{ playbook_dir }}/vars/kra.yml"
++  - "{{ playbook_dir }}/vars/ocsp.yml"
++  when: topology  == "topology-03"
++
++- name: Pick constants based on {{topology}}
++  include_vars: "{{ item }}"
++  with_items:
++  - "{{ playbook_dir }}/vars/ldap.yml"
++  - "{{ playbook_dir }}/vars/ca.yml"
++  - "{{ playbook_dir }}/vars/kra.yml"
++  - "{{ playbook_dir }}/vars/tks.yml"
++  - "{{ playbook_dir }}/vars/tps.yml"
++  when: topology  == "topology-04"
++
++- name: Pick constants based on {{topology}}
++  include_vars: "{{ item }}"
++  with_items:
++  - "{{ playbook_dir }}/vars/ldap.yml"
++  - "{{ playbook_dir }}/vars/ca.yml"
++  - "{{ playbook_dir }}/vars/kra.yml"
++  - "{{ playbook_dir }}/vars/ocsp.yml"
++  - "{{ playbook_dir }}/vars/tks.yml"
++  - "{{ playbook_dir }}/vars/tps.yml"
++  when: topology  == "topology-05"
++
++- name: Pick constants based on {{topology}}
++  include_vars: "{{ item }}"
++  with_items:
++  - "{{ playbook_dir }}/vars/ldap.yml"
++  - "{{ playbook_dir }}/vars/ca.yml"
++  - "{{ playbook_dir }}/vars/kra.yml"
++  - "{{ playbook_dir }}/vars/ocsp.yml"
++  - "{{ playbook_dir }}/vars/tks.yml"
++  - "{{ playbook_dir }}/vars/tps.yml"
++  when: topology  == "topology-ecc"
++
++- name: Creates directory
++  file: path=/tmp/test_files state=directory
++
++- name: Copying templates to /tmp folder
++  copy : src=test/  dest=/tmp/test_dir
++  tags: platform-ci
++
++- name: Replace  Ldap server port in all configuration files
++  replace: dest={{item}} regexp="ldapServerPort" replace={{ldapServerPort}}
++  with_items:
++  - /tmp/test_dir/ldap.cfg
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/tps.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace topology in use in all configuration files
++  replace: dest={{item}} regexp="topology" replace={{topology}}
++  with_items:
++  - /tmp/test_dir/ldap.cfg
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/tps.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Substitute ecc with rsa when topology=topology-ecc
++  replace: dest={{item}} regexp="SHA512withRSA" replace="SHA384withEC"
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/ocsp.cfg
++  when:
++    - topology == "topology-ecc"
++
++- name : Substitute ecc with rsa when topology=topology-ecc
++  replace: dest={{item}} regexp="rsa" replace="ecc"
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/ocsp.cfg
++  when:
++    - topology == "topology-ecc"
++
++- name : Substitute ecc with rsa when topology=topology-ecc
++  replace: dest={{item}} regexp="2048" replace="nistp384"
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/ocsp.cfg
++  when:
++    - topology == "topology-ecc"
++    
++- name : For topology-01
++  replace: dest={{item}} regexp="pki_instance_name" replace="#pki_instance_name"
++  with_items:
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/tps.cfg
++  when:
++    - topology == "topology-01"
++
++
++- name: Replace ServerName in all configuration files.
++  replace: dest={{item}} regexp="SERVERNAME" replace=pki1.example.com
++  with_items:
++  - /tmp/test_dir/ldap.cfg
++  - /tmp/test_dir/ca.cfg
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/tps.cfg
++
++- name: Replace ServerName in all configuration files.
++  replace: dest={{item}} regexp="SERVERNAME" replace=pki1.example.com
++  with_items:
++  - /tmp/test_dir/ldap_kra.cfg
++  - /tmp/test_dir/ldap_ocsp.cfg
++  - /tmp/test_dir/ldap_tks.cfg
++  - /tmp/test_dir/ldap_tps.cfg
++  when: topology  == "topology-05"
++    
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_kra.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_kra.yml
+new file mode 100644
+index 0000000..e0edeea
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_kra.yml
+@@ -0,0 +1,27 @@
++- name: Replace KRA specific changes 
++  replace: dest={{item}} regexp="krapki_https_port" replace={{krapki_https_port}}
++  with_items:
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace http port for KRA.
++  replace: dest={{item}} regexp="krapki_http_port" replace={{krapki_http_port}}
++  with_items:
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace ajp port for KRA
++  replace: dest={{item}} regexp="krapki_ajp_port" replace={{krapki_ajp_port}}
++  with_items:
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for KRA
++  replace: dest={{item}} regexp="krapki_tomcat_server_port" replace={{krapki_tomcat_server_port}}
++  with_items:
++  - /tmp/test_dir/kra.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for KRA
++  replace: dest=/tmp/test_dir/kra.cfg regexp="secure_domain_port" replace={{capki_https_port}}
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ldap.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ldap.yml
+new file mode 100644
+index 0000000..f9af68c
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ldap.yml
+@@ -0,0 +1,47 @@
++- name : Create different ldap files for ca,kra,ocsp,tks and tps.
++  shell : for i in kra ocsp tks tps ;do cp /tmp/test_dir/ldap.cfg /tmp/test_dir/ldap_$i.cfg ; sed -i "s/testingmaster/$i-testingmaster/" /tmp/test_dir/ldap_$i.cfg; done
++  when: topology  == "topology-05"
++
++- name : Conditional check before replacing values in ldap.cfg file.
++  replace: dest={{item}} regexp="3389" replace={{ldapkraServerPort}}
++  with_items:
++  - /tmp/test_dir/ldap_kra.cfg
++  - /tmp/test_dir/kra.cfg
++  when: topology  == "topology-05"
++
++- name : Conditional check before replacing values in ldap.cfg file.
++  replace: dest={{item}} regexp="3389" replace={{ldapocspServerPort}}
++  with_items:
++  - /tmp/test_dir/ldap_ocsp.cfg
++  - /tmp/test_dir/ocsp.cfg
++  when: topology  == "topology-05"
++
++- name : Conditional check before replacing values in ldap.cfg file.
++  replace: dest={{item}} regexp="3389" replace={{ldaptksServerPort}}
++  with_items:
++  - /tmp/test_dir/ldap_tks.cfg
++  - /tmp/test_dir/tks.cfg
++  when: topology  == "topology-05"
++
++- name : Conditional check before replacing values in ldap.cfg file.
++  replace: dest={{item}} regexp="3389" replace={{ldaptpsServerPort}}
++  with_items:
++  - /tmp/test_dir/ldap_tps.cfg
++  - /tmp/test_dir/tps.cfg
++  when: topology  == "topology-05"
++
++- name: Replace  Ldap server port in all configuration files
++  replace: dest=/tmp/test_dir/constants.py regexp="ldapkraServerPort" replace={{ldapkraServerPort}}
++  when: topology  == "topology-05"
++
++- name: Replace  Ldap server port in all configuration files
++  replace: dest=/tmp/test_dir/constants.py regexp="ldapocspServerPort" replace={{ldapocspServerPort}}
++  when: topology  == "topology-05"
++
++- name: Replace  Ldap server port in all configuration files
++  replace: dest=/tmp/test_dir/constants.py regexp="ldaptksServerPort" replace={{ldaptksServerPort}}
++  when: topology  == "topology-05"
++
++- name: Replace  Ldap server port in all configuration files
++  replace: dest=/tmp/test_dir/constants.py regexp="ldaptpsServerPort" replace={{ldaptpsServerPort}}
++  when: topology  == "topology-05"
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ocsp.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ocsp.yml
+new file mode 100644
+index 0000000..dea8645
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_ocsp.yml
+@@ -0,0 +1,27 @@
++- name: Replace OCSP specific changes 
++  replace: dest={{item}} regexp="ocsppki_https_port" replace={{ocsppki_https_port}}
++  with_items:
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace http port for OCSP.
++  replace: dest={{item}} regexp="ocsppki_http_port" replace={{ocsppki_http_port}}
++  with_items:
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace ajp port for OCSP
++  replace: dest={{item}} regexp="ocsppki_ajp_port" replace={{ocsppki_ajp_port}}
++  with_items:
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for OCSP
++  replace: dest={{item}} regexp="ocsppki_tomcat_server_port" replace={{ocsppki_tomcat_server_port}}
++  with_items:
++  - /tmp/test_dir/ocsp.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for OCSP
++  replace: dest=/tmp/test_dir/ocsp.cfg regexp="secure_domain_port" replace={{capki_https_port}}
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tks.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tks.yml
+new file mode 100644
+index 0000000..9cd2bc7
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tks.yml
+@@ -0,0 +1,27 @@
++- name: Replace TKS specific changes 
++  replace: dest={{item}} regexp="tkspki_https_port" replace={{tkspki_https_port}}
++  with_items:
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace http port for TKS.
++  replace: dest={{item}} regexp="tkspki_http_port" replace={{tkspki_http_port}}
++  with_items:
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace ajp port for TKS
++  replace: dest={{item}} regexp="tkspki_ajp_port" replace={{tkspki_ajp_port}}
++  with_items:
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for TKS
++  replace: dest={{item}} regexp="tkspki_tomcat_server_port" replace={{tkspki_tomcat_server_port}}
++  with_items:
++  - /tmp/test_dir/tks.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for TKS
++  replace: dest=/tmp/test_dir/tks.cfg regexp="secure_domain_port" replace={{capki_https_port}}
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tps.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tps.yml
+new file mode 100644
+index 0000000..69fe4c5
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/configure_tps.yml
+@@ -0,0 +1,39 @@
++- name: Replace TPS specific changes 
++  replace: dest={{item}} regexp="tpspki_https_port" replace={{tpspki_https_port}}
++  with_items:
++  - /tmp/test_dir/tps.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace http port for TPS.
++  replace: dest={{item}} regexp="tpspki_http_port" replace={{tpspki_http_port}}
++  with_items:
++  - /tmp/test_dir/tps.cfg
++  - /tmp/test_dir/constants.py
++
++- name: Replace ajp port for TPS
++  replace: dest={{item}} regexp="tpspki_ajp_port" replace={{tpspki_ajp_port}}
++  with_items:
++  - /tmp/test_dir/tps.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for TPS
++  replace: dest={{item}} regexp="tpspki_tomcat_server_port" replace={{tpspki_tomcat_server_port}}
++  with_items:
++  - /tmp/test_dir/tps.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace tomcat port for TPS
++  replace: dest={{item}} regexp="secure_domain_port" replace={{capki_https_port}}
++  with_items:
++  - /tmp/test_dir/tps.cfg
++  - /tmp/test_dir/constants.py
++
++- name : Replace ca uri for TPS
++  replace: dest=/tmp/test_dir/tps.cfg regexp="capki_https_port" replace={{capki_https_port}}
++
++- name : Replace kra uri for TPS
++  replace: dest=/tmp/test_dir/tps.cfg regexp="krapki_https_port" replace={{krapki_https_port}}
++
++- name : Replace tks uri for TPS
++  replace: dest=/tmp/test_dir/tps.cfg regexp="tkspki_https_port" replace={{tkspki_https_port}}
++
+diff --git a/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/main.yml b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/main.yml
+new file mode 100644
+index 0000000..17e0ecc
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/roles/Test_Trigger/tasks/main.yml
+@@ -0,0 +1,15 @@
++---
++- include: configure_common.yml
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology == "topology-05" or topology == "topology-ecc"
++- include: configure_ca.yml
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology  == "topology-05" or topology == "topology-ecc"
++- include: configure_ldap.yml
++  when: topology  == "topology-05"
++- include: configure_kra.yml
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology  == "topology-05" or topology == "topology-ecc"
++- include: configure_ocsp.yml
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology  == "topology-05" or topology == "topology-ecc"
++- include: configure_tks.yml 
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology  == "topology-05"
++- include: configure_tps.yml
++  when: topology  == "topology-01" or topology == "topology-02" or topology == "topology-03" or topology == "topology-04" or topology  == "topology-05"
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/ca.yml b/tests/dogtag/pytest-ansible/installation/vars/ca.yml
+new file mode 100644
+index 0000000..6768f66
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/ca.yml
+@@ -0,0 +1,4 @@
++capki_https_port: '20443'
++capki_http_port: '20080'
++capki_ajp_port: '20009'
++capki_tomcat_port: '20005'
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/ca_shared.yml b/tests/dogtag/pytest-ansible/installation/vars/ca_shared.yml
+new file mode 100644
+index 0000000..83aa43e
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/ca_shared.yml
+@@ -0,0 +1,24 @@
++capki_https_port: '8443'
++capki_http_port: '8080'
++capki_ajp_port: '8009'
++capki_tomcat_port: '8005'
++capki_https_port: '8443'
++capki_http_port: '8080'
++capki_ajp_port: '8009'
++capki_tomcat_port: '8005'
++krapki_https_port: '8443'
++krapki_http_port: '8080'
++krapki_ajp_port: '8009'
++krapki_tomcat_server_port: '8005'
++ocsppki_https_port: '8443'
++ocsppki_http_port: '8080'
++ocsppki_ajp_port: '8009'
++ocsppki_tomcat_server_port: '8005'
++tkspki_https_port: '8443'
++tkspki_http_port: '8080'
++tkspki_ajp_port: '8009'
++tkspki_tomcat_server_port: '8005'
++tpspki_https_port: '8443'
++tpspki_http_port: '8080'
++tpspki_ajp_port: '8009'
++tpspki_tomcat_server_port: '8005'
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/kra.yml b/tests/dogtag/pytest-ansible/installation/vars/kra.yml
+new file mode 100644
+index 0000000..2d45fab
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/kra.yml
+@@ -0,0 +1,4 @@
++krapki_https_port: '21443'
++krapki_http_port: '21080'
++krapki_ajp_port: '21009'
++krapki_tomcat_server_port: '21005'
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/ldap.yml b/tests/dogtag/pytest-ansible/installation/vars/ldap.yml
+new file mode 100644
+index 0000000..401c4a7
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/ldap.yml
+@@ -0,0 +1,8 @@
++ldapServerPort: '3389'
++ldapRootDN: CN=Directory Manager
++ldapRootDNPwd: Secret123
++ldapcaServerPort: '4389'
++ldapkraServerPort: '5389'
++ldapocspServerPort: '6389'
++ldaptksServerPort: '7389'
++ldaptpsServerPort: '8389'
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/ldap_shared.yml b/tests/dogtag/pytest-ansible/installation/vars/ldap_shared.yml
+new file mode 100644
+index 0000000..0e1d7e6
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/ldap_shared.yml
+@@ -0,0 +1,3 @@
++ldapServerPort: '2389'
++ldapRootDN: CN=Directory Manager
++ldapRootDNPwd: Secret123
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/ocsp.yml b/tests/dogtag/pytest-ansible/installation/vars/ocsp.yml
+new file mode 100644
+index 0000000..497ebb8
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/ocsp.yml
+@@ -0,0 +1,4 @@
++ocsppki_https_port: '22443'
++ocsppki_http_port: '22080'
++ocsppki_ajp_port: '22009'
++ocsppki_tomcat_server_port: '22005'
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/tks.yml b/tests/dogtag/pytest-ansible/installation/vars/tks.yml
+new file mode 100644
+index 0000000..3f402a4
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/tks.yml
+@@ -0,0 +1,4 @@
++tkspki_https_port: '23443'
++tkspki_http_port: '23080'
++tkspki_ajp_port: '23009'
++tkspki_tomcat_server_port: '23005'
+diff --git a/tests/dogtag/pytest-ansible/installation/vars/tps.yml b/tests/dogtag/pytest-ansible/installation/vars/tps.yml
+new file mode 100644
+index 0000000..92534c2
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/installation/vars/tps.yml
+@@ -0,0 +1,4 @@
++tpspki_https_port: '25443'
++tpspki_http_port: '25080'
++tpspki_ajp_port: '25009'
++tpspki_tomcat_server_port: '25005'
+diff --git a/tests/dogtag/pytest-ansible/provision/readme.txt b/tests/dogtag/pytest-ansible/provision/readme.txt
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/dogtag/pytest-ansible/pytest/README.md b/tests/dogtag/pytest-ansible/pytest/README.md
+new file mode 100644
+index 0000000..24c3f66
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/pytest/README.md
+@@ -0,0 +1,313 @@
++# Pytest-ansible for Dogtag Tests
++
++## Note
++Recommended version to install ansible version 2.3.x. 
++Integration testing with other versions like pytest-ansible 2.4.0  are still in-progress.
++
++## Installing pip
++
++[pip] (https://pip.pypa.io/en/stable/installing/)  is needed for ansible & pytest installation.
++
++## Description about pytest-ansible & pytest-ansible-playbook
++
++This repository contains a plugin for py.test which adds several fixtures for running ansible modules, or inspecting ansible_facts. While one can simply call out to ansible using the subprocess module, having to parse stdout to determine the outcome of the operation is unpleasant and prone to error. With pytest-ansible, modules return JSON data which you can inspect and act on, much like with an ansible playbook.
++See [pytest-ansible] (https://pypi.python.org/pypi/pytest-ansible)
++
++### Installation
++
++#### Installing ansible
++#### Installing pytest-ansible
++#### Installing pytest-ansible-playbook
++
++Covered under [README] (../README.md#installing-supporting-packages)
++### Usage
++
++Once installed, the following py.test command-line parameters are available:
++
++```
++     py.test \
++    [--ansible-inventory <path_to_inventory>] \
++    [--ansible-host-pattern <host-pattern>] \
++    [--ansible-playbook-directory <path_to_directory_with_playbooks>] \
++    [--ansible-playbook-inventory <path_to_inventory_file>]
++    [--ansible-connection <plugin>] \
++    [--ansible-user <username>] \
++    [--ansible-sudo] \
++    [--ansible-sudo-user <username>]
++
++```
++
++#### Mandatory command-line parameters:
++
++```
++    py.test \
++    [--ansible-inventory <path_to_inventory>] \
++    [--ansible-playbook-directory <path_to_directory_with_playbooks>] \
++    [--ansible-playbook-inventory <path_to_inventory_file>] \
++    [--ansible-host-pattern <host-pattern>]
++```
++
++### Available Fixtures with pytest-ansible
++
++1. Fixture ansible_module
++
++    The ansible_module fixture allows tests and fixtures to call ansible modules. See [ansible_module] (http://docs.ansible.com/ansible/2.3/modules.html)
++
++2. Fixture ansible_facts
++
++    The ansible_facts fixture returns a JSON structure representing the system facts for the associated inventory. Sample fact data is available in the [ansible documentation](http://docs.ansible.com/ansible/latest/playbooks_variables.html#information-discovered-from-systems-facts)
++
++### Available Fixtures with pytest-ansible-playbook
++
++1. Fixture ansible playbook
++
++    The plugin provides a single pytest fixture called ansible_playbook. To specify playbooks to be executed by the fixture, use the following pytest markers:
++
++```
++
++    @pytest.mark.ansible_playbook_setup('playbook.yml')
++    @pytest.mark.ansible_playbook_teardown('playbook.yml')
++
++    @pytest.mark.ansible_playbook_setup('playbook.01.yml', 'playbook.02.yml')
++
++```
++
++### Install pytest-autochecklog
++
++In case you have plans to use logging that we get from `pytest-autochecklog`, get it using
++
++```
++pip install pytest-autochecklog
++```
++
++###  Parameterizing with pytest.mark.ansible
++
++Perhaps the --ansible-inventory=<inventory> includes many systems, but you only wish to interact with a subset. The pytest.mark.ansible marker can be used to modify the pytest-ansible command-line parameters for a single test.
++
++For example, to interact with the local system, you would adjust the host_pattern and connection parameters.
++
++
++```
++@pytest.mark.ansible(host_pattern='local,', connection='local')
++class Test_Local(object):
++    def test_install(self, ansible_module):
++        '''do some testing'''
++    def test_template(self, ansible_module):
++        '''do some testing'''
++    def test_service(self, ansible_module):
++        '''do some testing'''
++```
++It works with both class and function.
++
++More on [Paramaterizing](https://docs.pytest.org/en/latest/example/parametrize.html)
++
++### Exception Handling
++
++Below is the example of exception handling.During runtime, if we wanted to change inventory file it can be done using `@pytest.mark.ansible(inventory='abc')`.
++Here , if host mentioned in file "abc" is not reachable using ping it should raise exception `AnsibleHostUnreachable`
++
++```
++@pytest.mark.ansible(inventory='abc')
++def test_shutdown(ansible_module):
++         pytest.raises(pytest_ansible.plugin.AnsibleHostUnreachable, ansible_module.ping)
++```
++
++## About PKI Module
++
++PKI module is an ansible module that can be called either from python code or from ansible-playbooks to run any pki client commands
++See [PKI Module](https://copr.fedorainfracloud.org/coprs/g/pki/10.5/package/test-pki-modules/) for latest modules and common packages.
++
++PKI Module has few default values and those can be over-written by defining them during tests creation.This is same as any standard ansible modules.
++
++### Getting PKI Module
++
++PKI module can be installed with below procedure. Install latest rpm from [copr site] (https://copr.fedorainfracloud.org/coprs/g/pki/10.5/package/test-pki-modules/)
++
++```
++Example: 
++
++1. wget https://copr.fedorainfracloud.org/coprs/g/pki/10.5/package/test-pki-modules/
++2. rpm -qlp idm-modules
++    - Make sure above command lists pki.py module
++3. rpm -ivh idm-modules
++
++Make sure pki.py exist under PYTHONPATH/ansible/modules/identity/pki/pki.py
++```
++
++In case, it is difficult with above procedure, this can be done manually using
++
++```
++cp pki-pytest-ansible/raw/pytest-task/common-modules/pki.py PYTHONPATH/ansible/modules/identity/pki/pki.py
++```
++
++All the common modules are part of common-modules code.
++
++### Usage
++
++`with python`
++
++```
++def test_pki(ansible_facts,ansible_module):
++    for (host, facts) in ansible_facts.items():
++    	contacted = ansible_module.pki(
++        cli='ca-cert-find',
++		hostname = host,
++		nssdb = '/root/nssdb',
++		certnick = "'PKI Administrator for example.com'"
++    	)
++    item=contacted.items()
++    print dict(item)
++
++For Positive test case:
++----------------------
++
++@pytest.mark.positive
++def test_tpsToken_show_01(ansible_module, certnick, expected):
++    contacted = ansible_module.pki(
++                cli='ca-cert-find',
++                protocol='http',
++                certnick = certnick
++        )
++    for  result in contacted.values():
++        for iter in expected:
++                assert iter in result['stdout']
++
++For Negative test case:
++-----------------------
++
++@pytest.mark.negative
++def test_tpsToken_show_01(ansible_module, certnick, expected):
++    contacted = ansible_module.pki(
++                cli='ca-cert-find',
++                protocol='http',
++                certnick = certnick
++        )
++    for  result in contacted.values():
++        for iter in expected:
++                assert iter in result['stderr']
++
++
++```
++
++`with ansible-playbook`
++
++```
++  tasks:
++
++    - name: Run pki module from ansible-playbook
++      pki: cli='ca-cert-show' port='9443'
++
++Output
++
++"cmd": "pki -d <path to nssdb> -P http -p 9443 -h localhost -c Secret123 -n 'PKI CA Administrator for Example.Org' ca-cert-show "
++
++```
++### Examples
++
++See [Examples](tps-token/test_tps_token_show.py)
++
++### Parametrizing your tests
++
++This involves clubbing of tests which are similar in nature.
++
++Example: All Positive tests whose output comes under stdout can be clubbed together.
++
++Negative tests where output goes in stderr can be put together.
++
++See [Parametrizing your tests](tps-token/test_tps_token_show.py)
++
++### Advantages of parametrizing tests
++
++1. Test cases are much shorter.
++2. Easy to run smoke, positive, negative cases using markers.
++3. Similar kind of test are clubbed together and avoid code duplication.
++4. Multiple asserts are implemented.
++5. Code is never touched.Just input and output is changed.
++
++## Pre-requisite before running a pytest-ansible using pki module
++
++Py.test assumes that your Subsystem installation is done using [ansible-playbooks](../installation/README.md)
++Tests look for ansible environment constants file for fetching port if not provided in pytest code.
++
++
++## Importing the CA cert to nssdb. Please run this command on the machine on which RHCS is setup
++
++```
++1. Create nssdb in <path to nssdb>.
++2. Import CA Admin Certificate into nssdb.
++pki -d <path to nssdb>-c Secret123 -h <hostname> -p <CA HTTP PORT> client-cert-import "RootCA" --ca-server
++pk12util -i <Subsystem admin p12 file> -d <path to nssdb> -K Secret123 -W Secret123
++```
++
++## Running a pytest-ansible test
++
++```
++py.test --ansible-inventory host --ansible-host-pattern master <python file>  -q -s  -vvv
++```
++
++where,
++
++    --ansible-inventory,   the inventory file from where hosts ip are picked.
++    --ansible-host-pattern,  the host pattern on which tests needs to be run like master or clone
++
++
++## Running a combination of pytest-ansible and pytest-ansible-playbook
++
++```
++py.test --ansible-inventory host --ansible-host-pattern master --ansible-playbook-inventory host <python file>  -q -s  -vvv
++```
++
++
++where,
++
++    --ansible-inventory,  the inventory file from where hosts ip are picked.
++    --ansible-host-pattern,  the host pattern on which tests needs to be run.
++    --ansible-playbook-inventory,  the inventory file used for running playbooks which are defined in form of fixtures to run.
++
++Refer [Available Fixtures with pytest-ansible-playbook](README.md#available-fixtures-with-pytest-ansible-playbook)
++
++## Examples of ansible-inventory and ansible-playbook-inventory
++
++Inventory file consist of the roles and the ip-address.Tests will run for the roles and ip's that are mentioned.
++
++```
++[master]
++10.1.2.3
++10.2.3.4
++```
++
++## Troubleshooting Errors
++
++To Debug any error, `Run py.test command with reporting option.`
++
++```
++reporting:
++  -v, --verbose         increase verbosity.
++  -q, --quiet           decrease verbosity.
++  -r chars              show extra test summary info as specified by chars
++                        (f)ailed, (E)error, (s)skipped, (x)failed, (X)passed,
++                        (p)passed, (P)passed with output, (a)all except pP.
++                        The pytest warnings are displayed at all times except
++                        when --disable-pytest-warnings is set
++  --disable-pytest-warnings
++                        disable warnings summary, overrides -r w flag
++  -l, --showlocals      show locals in tracebacks (disabled by default).
++  --tb=style            traceback print mode (auto/long/short/line/native/no).
++  --full-trace          don't cut any tracebacks (default is to cut).
++  --color=color         color terminal output (yes/no/auto).
++  --durations=N         show N slowest setup/test durations (N=0 for all).
++  --pastebin=mode       send failed|all info to bpaste.net pastebin service.
++  --junit-xml=path      create junit-xml style report file at given path.
++  --junit-prefix=str    prepend prefix to classnames in junit-xml output
++  --result-log=path     DEPRECATED path for machine-readable result log.
++  --excel-report=path   create excel report file at given path.
++```
++
++## Additional Packages
++
++These are additional logging packages that could be used in future if logging improvement is needed.
++
++- [Logging-1](https://pypi.python.org/pypi/pytest-logger).
++- [Logging-2](ttps://pypi.python.org/pypi/pytest-autochecklog).
++
++
+diff --git a/tests/dogtag/pytest-ansible/pytest/tps-token/ldapUserAdd.yml b/tests/dogtag/pytest-ansible/pytest/tps-token/ldapUserAdd.yml
+new file mode 100644
+index 0000000..1648266
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/pytest/tps-token/ldapUserAdd.yml
+@@ -0,0 +1,35 @@
++- hosts: master
++  gather_facts: true
++
++  tasks:
++    - name: Making constants.py file compatable for including as vars.
++      shell: sed -e "s/ =/:/g;s/'//g" /tmp/test_dir/constants.py > /tmp/test_dir/constants.yml
++
++    - name: Fetch the file
++      fetch: src=/tmp/test_dir/constants.yml dest=/tmp/test_dir flat=yes validate_checksum=no
++
++    - name: Including variables from Environment
++      include_vars:
++         file: /tmp/test_dir/constants.yml
++         name: variable
++
++    - name: Gather facts
++      set_fact: 
++         var: "{{ inventory_hostname }}"
++         userPasswd: "{{ variable.LDAP_PASSWD }}"
++
++    - name: Get rid of an old entry
++      ldap_entry:
++        dn: uid={{ variable.LDAP_USER }},ou=People,dc=example,dc=org
++        objectClass:
++           - top
++           - person
++           - inetOrgPerson
++           - organizationalRole
++        params:
++           cn: "{{ variable.LDAP_USER }}"
++           sn: "{{ variable.LDAP_USER }}"
++           userPassword: "{{ variable.LDAP_PASSWD }}"
++        server_uri: ldap://{{ inventory_hostname }}:{{ variable.LDAP_PORT }}
++        bind_dn: cn=Directory Manager
++        bind_pw: "{{ variable.LDAP_PASSWD }}"
+diff --git a/tests/dogtag/pytest-ansible/pytest/tps-token/test_tps_token_show.py b/tests/dogtag/pytest-ansible/pytest/tps-token/test_tps_token_show.py
+new file mode 100644
+index 0000000..9c30b19
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/pytest/tps-token/test_tps_token_show.py
+@@ -0,0 +1,106 @@
++"""
++# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++#
++#   Description: PKI TPS-TOKEN-SHOW tests
++# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++#   The following pki tps commands needs to be tested:
++#   pki tps-token-show
++# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++#
++#   Author: Geetika Kapoor <gkapoor@redhat.com>
++#
++# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++#
++#   Copyright (c) 2016 Red Hat, Inc. All rights reserved.
++#
++#   This copyrighted material is made available to anyone wishing
++#   to use, modify, copy, or redistribute it subject to the terms
++#   and conditions of the GNU General Public License version 2.
++#
++#   This program is distributed in the hope that it will be
++#   useful, but WITHOUT ANY WARRANTY; without even the implied
++#   warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
++#   PURPOSE. See the GNU General Public License for more details.
++#
++#   You should have received a copy of the GNU General Public
++#   License along with this program; if not, write to the Free
++#   Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
++#   Boston, MA 02110-1301, USA.
++"""
++
++
++import pytest
++import ansible
++import logging
++from ansible.inventory import Inventory
++from pytest_ansible import plugin
++import ansible.constants
++import os
++
++from test_steps import *
++import random
++
++@pytest.mark.ansible_playbook_setup('ldapUserAdd.yml', 'tokenEnroll.yml')
++@pytest.mark.setup
++def test_setup(ansible_playbook):
++    pass
++
++@pytest.mark.parametrize("certnick,expected", [
++    ('"PKI TPS Administrator for Example.Org"', ['Token ID: 40906145C76224192D2B', 'User ID: foobar', 'Type: userKey', 'Status: ACTIVE']),
++])
++
++@pytest.mark.positive
++def test_tpstoken_show_validgroup(ansible_module, certnick, expected):
++    """
++    :Description: Command should successfully show tokens.
++    """
++    contacted = ansible_module.pki(
++        cli='tps-token-show',
++        extra_args='40906145C76224192D2B',
++        protocol='http',
++        certnick=certnick
++        )
++    for (host, result) in contacted.items():
++        for iter in expected:
++            ok("Certificate: %s, Expected Output: %s , Actual Output : %s" %(certnick, iter, result['stdout']))
++            assert iter in result['stdout']
++@pytest.mark.parametrize("certnick,expected", [
++    ('"PKI TPS Administrator for Example.Org"', ["PKIException: Record not found"]),
++])
++
++@pytest.mark.negative
++def test_tpstoken_show_exception(ansible_module, certnick, expected):
++    """
++    :Description: Command should give "Records" not found.
++    """
++    contacted = ansible_module.pki(
++        cli='tps-token-show',
++        extra_args='40906145C76224192D2BRR',
++        certnick=certnick
++        )
++    for (host, result) in  contacted.items():
++        for iter in expected:
++            ok("Certificate: %s, Expected Output: %s , Actual Output : %s" %(certnick, iter, result['stderr']))
++            assert iter in result['stderr']
++
++@pytest.mark.positive
++@pytest.mark.parametrize("extra_args, certnick, expected", [
++    ('40906145C76224192D2B', '"PKI TPS Administrator for Example.Org"', ['Token ID: 40906145C76224192D2B', 'User ID: foobar', 'Type: userKey', 'Status: ACTIVE']),
++    ('--help', '"PKI TPS Administrator for Example.Org"', ['usage: tps-token-show', '<Token ID>', '--help   Show help options']),
++])
++
++@pytest.mark.positive
++def test_tpstoken_show_help(ansible_module, extra_args, certnick, expected):
++    """
++    :Description: Command should successfully show tokens.
++    """
++    contacted = ansible_module.pki(
++        cli='tps-token-show',
++        extra_args=extra_args,
++        protocol='https',
++        certnick=certnick
++        )
++    for (host, result) in  contacted.items():
++        for iter in expected:
++            ok("Certificate: %s, Expected Output: %s , Actual Output : %s" %(certnick, iter, result['stdout']))
++            assert iter in result['stdout']
+diff --git a/tests/dogtag/pytest-ansible/pytest/tps-token/tokenEnroll.yml b/tests/dogtag/pytest-ansible/pytest/tps-token/tokenEnroll.yml
+new file mode 100644
+index 0000000..872ee51
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/pytest/tps-token/tokenEnroll.yml
+@@ -0,0 +1,35 @@
++- hosts: master
++  gather_facts: true
++  tasks:
++    - name: Going to TPSClient
++      shell: echo -e "op=var_set name=ra_host value=hostname\nop=var_set name=ra_port value=TPS_HTTP_PORT\nop=var_set name=ra_uri value=/tps/tps\nop=token_set cuid=TOKEN_CUID msn=0120304 app_ver=6FBBC105 key_info=0101 major_ver=0 minor_ver=0\nop=token_set auth_key=404142434445464748494a4b4c4d4e4f\nop=token_set mac_key=404142434445464748494a4b4c4d4e4f\nop=token_set kek_key=404142434445464748494a4b4c4d4e4f\nop=TPS_OPERATION uid=LDAP_USER pwd=LDAP_PASSWD new_pin=LDAP_NEW_PIN num_threads=1 extensions=tokenType=userKey\nop=exit" > /tmp/tpsclient.txt
++
++    - name: Including variables from Environment
++      include_vars:
++         file: /tmp/test_dir/constants.yml
++         name: variable
++
++    - name: Replacing correct hostname
++      replace: dest=/tmp/tpsclient.txt regexp=hostname  replace={{ inventory_hostname }}
++
++    - name: Replacing correct Port
++      replace: dest=/tmp/tpsclient.txt regexp=TPS_HTTP_PORT  replace={{ variable.TPS_HTTP_PORT }}
++
++    - name: Replacing correct Password
++      replace: dest=/tmp/tpsclient.txt regexp=LDAP_PASSWD  replace={{ variable.LDAP_PASSWD }}
++ 
++    - name: Replacing correct pin
++      replace: dest=/tmp/tpsclient.txt regexp=LDAP_NEW_PIN  replace={{ variable.LDAP_PASSWD }}
++
++    - name: Replacing correct Cuid
++      replace: dest=/tmp/tpsclient.txt regexp=TOKEN_CUID  replace={{ variable.CUID }}
++
++    - name: Replacing correct TPS Operation
++      replace: dest=/tmp/tpsclient.txt regexp=TPS_OPERATION  replace={{ variable.TPS_OPERATION }}
++
++    - name: Adding LDAP user in tpsclient configuration
++      replace: dest=/tmp/tpsclient.txt regexp=LDAP_USER  replace={{ variable.LDAP_USER }}
++
++    - name: Performing token enrollment
++      shell: tpsclient < /tmp/tpsclient.txt
++      ignore_errors: yes 
+diff --git a/tests/dogtag/pytest-ansible/requirements.txt b/tests/dogtag/pytest-ansible/requirements.txt
+new file mode 100644
+index 0000000..160b10e
+--- /dev/null
++++ b/tests/dogtag/pytest-ansible/requirements.txt
+@@ -0,0 +1,5 @@
++ansible==2.3.2
++pytest-ansible==1.3.1
++pytest-ansible-playbook==0.3.0
++pytest-logger
++pytest-autochecklog==0.2.0
+-- 
+1.8.3.1
+
+
+From 53ad8042f1145aa33990298a4d7dc4d6e4fe646b Mon Sep 17 00:00:00 2001
+From: Ade Lee <alee@redhat.com>
+Date: Mon, 27 Nov 2017 13:43:33 -0500
+Subject: Add pkispawn option for ephemeral requests
+
+Ticket 2820
+
+Change-Id: I8865d74dd221b69b7fd53f1dbc941c7686bbd858
+(cherry picked from commit 44c732c5ebb1fc6ef7ca851f4118bf58311588bc)
+---
+ base/server/etc/default.cfg                                      | 1 +
+ base/server/man/man5/pki_default.cfg.5                           | 7 +++++++
+ .../python/pki/server/deployment/scriptlets/configuration.py     | 9 +++++++++
+ 3 files changed, 17 insertions(+)
+
+diff --git a/base/server/etc/default.cfg b/base/server/etc/default.cfg
+index ce10d7f..ad19105 100644
+--- a/base/server/etc/default.cfg
++++ b/base/server/etc/default.cfg
+@@ -436,6 +436,7 @@ pki_replica_number_range_end=100
+ [KRA]
+ pki_import_admin_cert=True
+ pki_standalone=False
++pki_kra_ephemeral_requests=False
+ 
+ # DEPRECATED
+ # Use 'pki_*_csr_path' instead.
+diff --git a/base/server/man/man5/pki_default.cfg.5 b/base/server/man/man5/pki_default.cfg.5
+index ab3e617..a505c4b 100644
+--- a/base/server/man/man5/pki_default.cfg.5
++++ b/base/server/man/man5/pki_default.cfg.5
+@@ -439,6 +439,13 @@ Required for the second step of a stand-alone PKI process.  This is the location
+ .IP
+ [KRA ONLY] Required for the second step of a stand-alone KRA process.  This is the location of the file containing the transport certificate (as issued by the external CA).  Defaults to '%(pki_instance_configuration_path)s/kra_transport.cert'.
+ 
++.SS KRA PARAMETERS
++.BR
++.TP
++.B pki_kra_ephemeral_requests
++.IP
++Specifies to use ephemeral requests for archivals and retrievals.  Defaults to False.
++
+ .SS TPS PARAMETERS
+ .BR
+ .TP
+diff --git a/base/server/python/pki/server/deployment/scriptlets/configuration.py b/base/server/python/pki/server/deployment/scriptlets/configuration.py
+index b21adb6..1870505 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/configuration.py
++++ b/base/server/python/pki/server/deployment/scriptlets/configuration.py
+@@ -968,6 +968,15 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+             subsystem.config['ca.defaultOcspUri'] = ocsp_uri
+             subsystem.save()
+ 
++        # set ephemeral requests if needed
++        if subsystem.name == 'kra':
++            if config.str2bool(deployer.mdict['pki_kra_ephemeral_requests']):
++                config.pki_log.info(
++                    "setting ephemeral requests to true",
++                    extra=config.PKI_INDENTATION_LEVEL_1)
++                subsystem.config['kra.ephemeralRequests'] = 'true'
++                subsystem.save()
++
+         token = deployer.mdict['pki_token_name']
+         nssdb = instance.open_nssdb(token)
+ 
+-- 
+1.8.3.1
+

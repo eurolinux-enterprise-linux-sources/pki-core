@@ -1,0 +1,61 @@
+= Overview =
+
+This document describes the process to setup and run KRA
+test.
+
+To reflect the real-world deployment the test should be
+run by a regular user, not the root user. However, to
+simplify the process, the test can also be run by the
+root user.
+
+
+= Running KRA test as a regular user =
+
+1. Install a CA and KRA as described in the following page:
+   http://pki.fedoraproject.org/wiki/Quick_Start
+
+2. Setup CA admin as described in the following page:
+   http://pki.fedoraproject.org/wiki/CA_Admin_Setup
+
+3. Setup KRA agent as described in the following page:
+   http://pki.fedoraproject.org/wiki/KRA_Agent_Setup
+
+4. As root, copy the KRA test into KRA agent home directory:
+
+   cd <Dogtag source tree>/base/kra/functional
+   cp drmtest.py <KRA agent home directory>
+   chown kraagent.kraagent <KRA agent home directory>/drmtest.py
+
+5. As KRA agent, export the KRA agent client certificate:
+
+   pki -c <password> client-cert-show <nickname> --client-cert kraagent.pem
+
+6. As KRA agent, execute the KRA test:
+
+   python drmtest.py
+
+
+= Running KRA test as root =
+
+1. Install a CA and KRA with the deployment configuration
+   as described in the following page:
+   http://pki.fedoraproject.org/wiki/Quick_Start
+
+   Make sure it contains pki_client_database_purge=False
+   so root can authenticate as CA admin certificate directly
+   with the certificate in ~/.dogtag/pki-tomcat/ca/alias.
+
+   Also, make sure the CA admin certificate is imported
+   during KRA installation so root can authenticate as
+   KRA admin with the same certificate.
+
+   By default the KRA admin is already in the KRA agents group
+   so root can act as a KRA agent.
+
+2. As root, export the CA admin client certificate:
+
+   pki -d ~/.dogtag/pki-tomcat/ca/alias -c <password> client-cert-show caadmin --client-cert kraagent.pem
+
+3. As root, execute the KRA test:
+
+   python <Dogtag source tree>/base/kra/functional/drmtest.py

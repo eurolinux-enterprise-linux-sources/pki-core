@@ -1,0 +1,77 @@
+<!-- --- BEGIN COPYRIGHT BLOCK ---
+     This program is free software; you can redistribute it and/or modify
+     it under the terms of the GNU General Public License as published by
+     the Free Software Foundation; version 2 of the License.
+
+     This program is distributed in the hope that it will be useful,
+     but WITHOUT ANY WARRANTY; without even the implied warranty of
+     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+     GNU General Public License for more details.
+
+     You should have received a copy of the GNU General Public License along
+     with this program; if not, write to the Free Software Foundation, Inc.,
+     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+     Copyright (C) 2014 Red Hat, Inc.
+     All rights reserved.
+     --- END COPYRIGHT BLOCK --- -->
+<div class="pki-header">
+<ol class="breadcrumb">
+    <li><a href="#">Home</a></li>
+    <li><a href="#selftests">Self Tests</a></li>
+    <li class="active"><strong><span name="title">Self Test ${id}</span></strong></li>
+</ol>
+
+<span name="title" class="pki-title">Self Test ${id}</span>
+
+<span class="pki-actions">
+
+<ul name="view" class="pki-actions-menu">
+<li name="run"><a href="#">Run</a></li>
+</ul>
+
+</span>
+
+</div>
+
+<div name="user" class="pki-fields">
+<fieldset>
+    <label>Self Test ID</label>
+    <input name="id" readonly="readonly"><br>
+    <label>Enabled at Startup</label>
+    <input name="enabledAtStartup" readonly="readonly"><br>
+    <label>Critical at Startup</label>
+    <input name="criticalAtStartup" readonly="readonly"><br>
+    <label>Enabled on Demand</label>
+    <input name="enabledOnDemand" readonly="readonly"><br>
+    <label>Critical on Demand</label>
+    <input name="criticalOnDemand" readonly="readonly"><br>
+</fieldset>
+</div>
+
+<div id="selftest-result-dialog" class="modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">
+                    <span class="pficon pficon-close"></span>
+                </button>
+                <h4 class="modal-title">Self Test Result</h4>
+            </div>
+            <div class="modal-body">
+                <fieldset>
+                <label>Self Test ID</label>
+                <input name="id" readonly="readonly"><br>
+                <label>Status</label>
+                <input name="status" readonly="readonly"><br>
+                <label>Output</label>
+                <textarea name="output" rows="20" style="width: 100%; white-space: pre;">
+                </textarea>
+                </fieldset>
+            </div>
+            <div class="modal-footer">
+                <button name="close" class="btn btn-default" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>

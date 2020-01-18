@@ -1,0 +1,1535 @@
+From 2d40c57887f7801f2ab0a8065b3b471bb7eafe80 Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Tue, 19 Jun 2018 15:21:54 -0700
+Subject: [PATCH 1/7] Ticket 3037 CMC SharedToken SubjectDN default
+
+This patch adds proper subjectDN to CMC requests authenticated via ShardToken.
+Specifically, the AuthTokenSubjectNameDefault profile default is added to
+the default CMC profiles that authenticates via SharedToken.
+Code were added to ensure that the proper subjectDN retrieved from the
+mapped user entry is added to the AuthToken for such utilization.
+
+Fixes https://pagure.io/dogtagpki/issue/3037
+
+Change-Id: Id92d9496ab5b41ea7b5dcffb8d73d3ffe8b29fbc
+---
+ .../ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg |  4 ++--
+ base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg  |  4 ++--
+ .../netscape/certsrv/authentication/ISharedToken.java   |  2 +-
+ .../com/netscape/cms/authentication/SharedSecret.java   | 17 ++++++++++++++---
+ .../com/netscape/cms/profile/common/EnrollProfile.java  | 12 ++++++++++--
+ .../cms/servlet/profile/ProfileSubmitCMCServlet.java    |  1 +
+ 6 files changed, 30 insertions(+), 10 deletions(-)
+
+diff --git a/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg b/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg
+index d0a3c25..144c05c 100644
+--- a/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg
++++ b/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg
+@@ -13,8 +13,8 @@ policyset.cmcUserCertSet.list=1,2,3,4,5,6,7,8
+ policyset.cmcUserCertSet.1.constraint.class_id=subjectNameConstraintImpl
+ policyset.cmcUserCertSet.1.constraint.name=Subject Name Constraint
+ policyset.cmcUserCertSet.1.constraint.params.accept=true
+-policyset.cmcUserCertSet.1.constraint.params.pattern=.*
+-policyset.cmcUserCertSet.1.default.class_id=userSubjectNameDefaultImpl
++policyset.cmcUserCertSet.1.constraint.params.pattern=(UID|CN)=.*
++policyset.cmcUserCertSet.1.default.class_id=authTokenSubjectNameDefaultImpl
+ policyset.cmcUserCertSet.1.default.name=Subject Name Default
+ policyset.cmcUserCertSet.1.default.params.name=
+ policyset.cmcUserCertSet.2.constraint.class_id=validityConstraintImpl
+diff --git a/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg b/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg
+index 6b2da33..bdcdc24 100644
+--- a/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg
++++ b/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg
+@@ -12,9 +12,9 @@ policyset.list=cmcUserCertSet
+ policyset.cmcUserCertSet.list=1,2,3,4,5,6,7,8
+ policyset.cmcUserCertSet.1.constraint.class_id=subjectNameConstraintImpl
+ policyset.cmcUserCertSet.1.constraint.name=Subject Name Constraint
++policyset.cmcUserCertSet.1.constraint.params.pattern=(UID|CN)=.*
+ policyset.cmcUserCertSet.1.constraint.params.accept=true
+-policyset.cmcUserCertSet.1.constraint.params.pattern=.*
+-policyset.cmcUserCertSet.1.default.class_id=userSubjectNameDefaultImpl
++policyset.cmcUserCertSet.1.default.class_id=authTokenSubjectNameDefaultImpl
+ policyset.cmcUserCertSet.1.default.name=Subject Name Default
+ policyset.cmcUserCertSet.1.default.params.name=
+ policyset.cmcUserCertSet.2.constraint.class_id=validityConstraintImpl
+diff --git a/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java b/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java
+index 761c344..13f2286 100644
+--- a/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java
++++ b/base/common/src/com/netscape/certsrv/authentication/ISharedToken.java
+@@ -28,7 +28,7 @@ import com.netscape.certsrv.base.EBaseException;
+ public interface ISharedToken {
+ 
+     // support for id_cmc_identification
+-    public char[] getSharedToken(String identification)
++    public char[] getSharedToken(String identification, IAuthToken authToken)
+             throws EBaseException;
+ 
+     public char[] getSharedToken(PKIData cmcData)
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+index 1a3d877..e304b74 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+@@ -33,6 +33,7 @@ import com.netscape.certsrv.apps.CMS;
+ import com.netscape.certsrv.authentication.AuthToken;
+ import com.netscape.certsrv.authentication.EInvalidCredentials;
+ import com.netscape.certsrv.authentication.IAuthCredentials;
++import com.netscape.certsrv.authentication.IAuthToken;
+ import com.netscape.certsrv.authentication.ISharedToken;
+ import com.netscape.certsrv.base.EBaseException;
+ import com.netscape.certsrv.base.IConfigStore;
+@@ -233,18 +234,25 @@ public class SharedSecret extends DirBasedAuthentication
+     }
+ 
+     /**
+-     * getSharedToken(String identification) provides
++     * getSharedToken(String identification, IAuthToken authToken) provides
+      *  support for id_cmc_identification shared secret based enrollment
+      *
++     * @param identification maps to the uid in user's ldap record
++     * @param authToken the IAuthToken that will be filled with the DN
++     *        in user's ldap record
++     *
+      * Note: caller should clear the memory for the returned token
+      *       after each use
+      */
+-    public char[] getSharedToken(String identification)
++    public char[] getSharedToken(String identification, IAuthToken authToken)
+             throws EBaseException {
+-        String method = "SharedSecret.getSharedToken(String identification): ";
++        String method = "SharedSecret.getSharedToken(String identification, IAuthToken authToken): ";
+         String msg = "";
+         CMS.debug(method + "begins.");
+ 
++        if ((identification == null) || (authToken == null)) {
++            throw new EBaseException(method + "paramsters identification or authToken cannot be null");
++        }
+         LDAPConnection shrTokLdapConnection = null;
+         LDAPSearchResults res = null;
+         LDAPEntry entry = null;
+@@ -287,6 +295,9 @@ public class SharedSecret extends DirBasedAuthentication
+                 throw new EBaseException(msg);
+             }
+ 
++            CMS.debug(method + "found user ldap entry: userdn = " + userdn);
++            authToken.set(AuthToken.TOKEN_CERT_SUBJECT, userdn);
++
+             res = shrTokLdapConnection.search(userdn, LDAPv2.SCOPE_BASE,
+                     "(objectclass=*)", new String[] { mShrTokAttr }, false);
+             if (res != null && res.hasMoreElements()) {
+diff --git a/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java b/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
+index caa466c..929e629 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
++++ b/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
+@@ -1412,10 +1412,14 @@ public abstract class EnrollProfile extends BasicProfile
+                     CMS.debug(method + " Failed to retrieve shared secret authentication plugin class");
+                     sharedSecretFound = false;
+                 }
++
++                IAuthToken authToken = (IAuthToken)
++                    context.get(SessionContext.AUTH_TOKEN);
++
+                 ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
+ 
+                 if (ident_string != null) {
+-                    sharedSecret = tokenClass.getSharedToken(ident_string);
++                    sharedSecret = tokenClass.getSharedToken(ident_string, authToken);
+                 } else {
+                     sharedSecret = tokenClass.getSharedToken(mCMCData);
+                 }
+@@ -1709,12 +1713,16 @@ public abstract class EnrollProfile extends BasicProfile
+                 signedAuditLogger.log(auditMessage);
+                 return false;
+             }
++
++            IAuthToken authToken = (IAuthToken)
++                sessionContext.get(SessionContext.AUTH_TOKEN);
++
+             ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
+ 
+             char[] token = null;
+             if (ident_string != null) {
+                 auditAttemptedCred = ident_string;
+-                token = tokenClass.getSharedToken(ident_string);
++                token = tokenClass.getSharedToken(ident_string, authToken);
+             } else
+                 token = tokenClass.getSharedToken(mCMCData);
+ 
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java b/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
+index 7d75e31..f469a66 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
+@@ -446,6 +446,7 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+                 // authentication success
+                 if (authToken != null) {
+                     auditSubjectID = authToken.getInString(IAuthToken.USER_ID);
++                    context.put(SessionContext.AUTH_TOKEN, authToken);
+                 }
+             } catch (EBaseException e) {
+                 CMCOutputTemplate template = new CMCOutputTemplate();
+-- 
+1.8.3.1
+
+
+From 2a228b4a8e1af920e577d007be87291831c635d5 Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Wed, 20 Jun 2018 18:59:28 -0700
+Subject: [PATCH 2/7] Ticket 2920 Part2 of SharedToken Audit
+
+This patch addresses the issue that the original audit message for failure
+got overwritten for SharedToken.
+
+fixes https://pagure.io/dogtagpki/issue/2920
+
+Change-Id: I0c09fbcc39135dc9aeee8a49a40772565af996c4
+---
+ .../netscape/cms/authentication/SharedSecret.java  |  5 ++
+ .../def/CMCUserSignedSubjectNameDefault.java       |  7 ++-
+ .../cms/servlet/common/CMCOutputTemplate.java      |  9 ++--
+ .../servlet/profile/ProfileSubmitCMCServlet.java   | 63 ++++++++++++++--------
+ 4 files changed, 57 insertions(+), 27 deletions(-)
+
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+index e304b74..5ebc213 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+@@ -406,6 +406,11 @@ public class SharedSecret extends DirBasedAuthentication
+         String method = "SharedSecret.getSharedToken(BigInteger serial): ";
+         String msg = "";
+ 
++        if (serial == null) {
++            throw new EBaseException(method + "paramster serial cannot be null");
++        }
++        CMS.debug(method + serial.toString());
++
+         ICertRecord record = null;
+         try {
+             record = certRepository.readCertificateRecord(serial);
+diff --git a/base/server/cms/src/com/netscape/cms/profile/def/CMCUserSignedSubjectNameDefault.java b/base/server/cms/src/com/netscape/cms/profile/def/CMCUserSignedSubjectNameDefault.java
+index a0816ea..f1810b0 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/def/CMCUserSignedSubjectNameDefault.java
++++ b/base/server/cms/src/com/netscape/cms/profile/def/CMCUserSignedSubjectNameDefault.java
+@@ -137,12 +137,17 @@ public class CMCUserSignedSubjectNameDefault extends EnrollDefault {
+         String msg = "";
+         CMS.debug(method + "begins");
+ 
+-        String signingUserSerial = request.getExtDataInString(IAuthManager.CRED_CMC_SIGNING_CERT);
+         if (info == null) {
+             msg = method + "info null";
+             CMS.debug(msg);
+             throw new EProfileException(msg);
+         }
++        String signingUserSerial = request.getExtDataInString(IAuthManager.CRED_CMC_SIGNING_CERT);
++        if (signingUserSerial == null) {
++            msg = method + "signing user serial not found; request was unsigned?";
++            CMS.debug(msg);
++            throw new EProfileException(msg);
++        }
+ 
+         CertificateSubjectName certSN = null;
+         try {
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java b/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java
+index a0a946d..154cd33 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/common/CMCOutputTemplate.java
+@@ -1103,14 +1103,15 @@ public class CMCOutputTemplate {
+ 
+                     char[] sharedSecret = null;
+                     try {
+-                       sharedSecret = tokenClass.getSharedToken(revokeSerial);
++                        sharedSecret = tokenClass.getSharedToken(revokeSerial);
+                     } catch (Exception eShrTok) {
+-                        CMS.debug("CMCOutputTemplate: " + eShrTok.toString());
++                        msg = "CMCOutputTemplate: " + eShrTok.toString();
+                     }
+ 
+                     if (sharedSecret == null) {
+-                        msg = " shared secret not found";
+-                        CMS.debug(method + msg);
++                        if (msg.equals("")) // don't overwrite the msg
++                            msg = " shared secret not found";
++                        CMS.debug(msg);
+                         audit(new CertStatusChangeRequestProcessedEvent(
+                                 auditSubjectID,
+                                 ILogger.FAILURE,
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java b/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
+index f469a66..12fd294 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
+@@ -533,10 +533,16 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             CMS.debug("ProfileSubmitCMCServlet: setting CRED_CMC_SIGNING_CERT in ctx for CMCUserSignedAuth");
+             ctx.set(IAuthManager.CRED_CMC_SIGNING_CERT, signingCertSerialS);
+         }
++
++        String errorCode = null;
++        String errorReason = null;
++        String auditRequesterID = ILogger.UNIDENTIFIED;
++
+         try {
+             reqs = profile.createRequests(ctx, locale);
+         } catch (ECMCBadMessageCheckException e) {
+-            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + e.toString());
++            errorReason = e.toString();
++            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + errorReason);
+             CMCOutputTemplate template = new CMCOutputTemplate();
+             SEQUENCE seq = new SEQUENCE();
+             seq.addElement(new INTEGER(0));
+@@ -547,9 +553,9 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             }
+             template.createFullResponseWithFailedStatus(response, seq,
+                     OtherInfo.BAD_MESSAGE_CHECK, s);
+-            return;
+         } catch (ECMCBadIdentityException e) {
+-            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + e.toString());
++            errorReason = e.toString();
++            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + errorReason);
+             CMCOutputTemplate template = new CMCOutputTemplate();
+             SEQUENCE seq = new SEQUENCE();
+             seq.addElement(new INTEGER(0));
+@@ -560,9 +566,9 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             }
+             template.createFullResponseWithFailedStatus(response, seq,
+                     OtherInfo.BAD_IDENTITY, s);
+-            return;
+         } catch (ECMCPopFailedException e) {
+-            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + e.toString());
++            errorReason = e.toString();
++            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + errorReason);
+             CMCOutputTemplate template = new CMCOutputTemplate();
+             SEQUENCE seq = new SEQUENCE();
+             seq.addElement(new INTEGER(0));
+@@ -573,9 +579,9 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             }
+             template.createFullResponseWithFailedStatus(response, seq,
+                     OtherInfo.POP_FAILED, s);
+-            return;
+         } catch (ECMCBadRequestException e) {
+-            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + e.toString());
++            errorReason = e.toString();
++            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + errorReason);
+             CMCOutputTemplate template = new CMCOutputTemplate();
+             SEQUENCE seq = new SEQUENCE();
+             seq.addElement(new INTEGER(0));
+@@ -586,9 +592,9 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             }
+             template.createFullResponseWithFailedStatus(response, seq,
+                     OtherInfo.BAD_REQUEST, s);
+-            return;
+         } catch (EProfileException e) {
+-            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + e.toString());
++            errorReason = e.toString();
++            CMS.debug("ProfileSubmitCMCServlet: after createRequests - " + errorReason);
+             CMCOutputTemplate template = new CMCOutputTemplate();
+             SEQUENCE seq = new SEQUENCE();
+             seq.addElement(new INTEGER(0));
+@@ -599,9 +605,9 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             }
+             template.createFullResponseWithFailedStatus(response, seq,
+                     OtherInfo.INTERNAL_CA_ERROR, s);
+-            return;
+         } catch (Throwable e) {
+-            CMS.debug("ProfileSubmitCMCServlet: createRequests - " + e.toString());
++            errorReason = e.toString();
++            CMS.debug("ProfileSubmitCMCServlet: createRequests - " + errorReason);
+             CMCOutputTemplate template = new CMCOutputTemplate();
+             SEQUENCE seq = new SEQUENCE();
+             seq.addElement(new INTEGER(0));
+@@ -612,7 +618,15 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             }
+             template.createFullResponseWithFailedStatus(response, seq,
+                     OtherInfo.INTERNAL_CA_ERROR, s);
+-            return;
++        }
++
++        if (errorReason != null) {
++            audit(CertRequestProcessedEvent.createFailureEvent(
++                        auditSubjectID,
++                        auditRequesterID,
++                        ILogger.SIGNED_AUDIT_REJECTION,
++                        errorReason));
++                return;
+         }
+ 
+         TaggedAttribute attr =
+@@ -684,13 +698,11 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             }
+         }
+ 
+-        String errorCode = null;
+-        String errorReason = null;
+-
+         ///////////////////////////////////////////////
+         // populate request
+         ///////////////////////////////////////////////
+         for (int k = 0; (!isRevoke) && (provedReq == null) &&(k < reqs.length); k++) {
++            auditRequesterID = auditRequesterID(reqs[k]);
+             // adding parameters to request
+             setInputsIntoRequest(request, profile, reqs[k]);
+ 
+@@ -769,7 +781,8 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+                 profile.populateInput(ctx, reqs[k]);
+                 profile.populate(reqs[k]);
+             } catch (ECMCPopFailedException e) {
+-                CMS.debug("ProfileSubmitCMCServlet: after populate - " + e.toString());
++                errorReason = e.toString();
++                CMS.debug("ProfileSubmitCMCServlet: after populate - " + errorReason);
+                 CMCOutputTemplate template = new CMCOutputTemplate();
+                 SEQUENCE seq = new SEQUENCE();
+                 seq.addElement(new INTEGER(0));
+@@ -780,9 +793,9 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+                 }
+                 template.createFullResponseWithFailedStatus(response, seq,
+                         OtherInfo.POP_FAILED, s);
+-                return;
+             } catch (EProfileException e) {
+-                CMS.debug("ProfileSubmitCMCServlet: after populate - " + e.toString());
++                errorReason = e.toString();
++                CMS.debug("ProfileSubmitCMCServlet: after populate - " + errorReason);
+                 CMCOutputTemplate template = new CMCOutputTemplate();
+                 SEQUENCE seq = new SEQUENCE();
+                 seq.addElement(new INTEGER(0));
+@@ -793,9 +806,9 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+                 }
+                 template.createFullResponseWithFailedStatus(response, seq,
+                         OtherInfo.BAD_REQUEST, s);
+-                return;
+             } catch (Throwable e) {
+-                CMS.debug("ProfileSubmitCMCServlet: after populate - " + e.toString());
++                errorReason = e.toString();
++                CMS.debug("ProfileSubmitCMCServlet: after populate - " + errorReason);
+                 //  throw new IOException("Profile " + profileId +
+                 //          " cannot populate");
+                 CMCOutputTemplate template = new CMCOutputTemplate();
+@@ -808,12 +821,18 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+                 }
+                 template.createFullResponseWithFailedStatus(response, seq,
+                         OtherInfo.INTERNAL_CA_ERROR, s);
++            }
++
++            if (errorReason != null) {
++                audit(CertRequestProcessedEvent.createFailureEvent(
++                        auditSubjectID,
++                        auditRequesterID,
++                        ILogger.SIGNED_AUDIT_REJECTION,
++                        errorReason));
+                 return;
+             }
+         } //for
+ 
+-        String auditRequesterID = ILogger.UNIDENTIFIED;
+-
+         try {
+             ///////////////////////////////////////////////
+             // submit request
+-- 
+1.8.3.1
+
+
+From a85486cfc7644b6a1caac6f5a2b34c4516ea1288 Mon Sep 17 00:00:00 2001
+From: Fraser Tweedale <ftweedal@redhat.com>
+Date: Fri, 15 Jun 2018 00:28:43 +1000
+Subject: [PATCH 3/7] IPAddressName: fix construction from String
+
+The IPAddressName(String) constructor (the non-netmask case) was
+broken by commit 628ace0c90073a8a1d90e96fae0aab9e43903fd6.  Fix it,
+and rename one of the helper methods to clarify its behaviour.
+
+Fixes: https://pagure.io/dogtagpki/issue/2922
+Change-Id: I711cf6845496f54c86b10d2d01368912084f96ea
+---
+ base/util/src/netscape/security/x509/IPAddressName.java | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/base/util/src/netscape/security/x509/IPAddressName.java b/base/util/src/netscape/security/x509/IPAddressName.java
+index a343a5f..b227af0 100644
+--- a/base/util/src/netscape/security/x509/IPAddressName.java
++++ b/base/util/src/netscape/security/x509/IPAddressName.java
+@@ -76,7 +76,7 @@ public class IPAddressName implements GeneralNameInterface {
+      * @param netmask the netmask address in the format: n.n.n.n or x:x:x:x:x:x:x:x (RFC 1884)
+      */
+     public IPAddressName(String s, String netmask) {
+-        address = initAddress(true, s);
++        address = parseAddress(true, s);
+         if (address.length == IPv4_LEN * 2)
+             fillIPv4Address(netmask, address, address.length / 2);
+         else
+@@ -90,7 +90,7 @@ public class IPAddressName implements GeneralNameInterface {
+      * @param mask a CIDR netmask
+      */
+     public IPAddressName(String s, CIDRNetmask mask) {
+-        address = initAddress(true, s);
++        address = parseAddress(true, s);
+         mask.write(ByteBuffer.wrap(
+                     address, address.length / 2, address.length / 2));
+     }
+@@ -102,7 +102,7 @@ public class IPAddressName implements GeneralNameInterface {
+      * @param s the ip address in the format: n.n.n.n or x:x:x:x:x:x:x:x
+      */
+     public IPAddressName(String s) {
+-        initAddress(false, s);
++        address = parseAddress(false, s);
+     }
+ 
+     /**
+@@ -113,7 +113,7 @@ public class IPAddressName implements GeneralNameInterface {
+      * @return byte[] of length 4 or 16 if withNetmask == false,
+      *         or length 8 or 32 if withNetmask == true.
+      */
+-    private static byte[] initAddress(boolean withNetmask, String s) {
++    private static byte[] parseAddress(boolean withNetmask, String s) {
+         if (s.indexOf(':') != -1) {
+             byte[] address = new byte[IPv6_LEN * (withNetmask ? 2 : 1)];
+             fillIPv6Address(s, address, 0);
+-- 
+1.8.3.1
+
+
+From 1f5e857759cb822093cdc20125fa4d0990432356 Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Mon, 25 Jun 2018 16:46:36 -0700
+Subject: [PATCH 4/7] Ticket 3003 AuditVerify failure due to line breaks
+
+This patch normalizes the CONFIG_ROLE audit event params to eliminate line breaks
+in audit entry from running pki ca-user-cert-add which would cause AuditVerify
+to fail. (note: adding user cert via the java console does not have such issue)
+
+fixes https://pagure.io/dogtagpki/issue/3003
+
+Change-Id: I52814714acebd29774abf0eb66aef3655ef2adb9
+---
+ .../com/netscape/certsrv/logging/event/ConfigRoleEvent.java  |  3 ++-
+ base/util/src/com/netscape/cmsutil/util/Utils.java           | 12 +++++++++++-
+ 2 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/base/common/src/com/netscape/certsrv/logging/event/ConfigRoleEvent.java b/base/common/src/com/netscape/certsrv/logging/event/ConfigRoleEvent.java
+index cc5f0b7..0ac71a8 100644
+--- a/base/common/src/com/netscape/certsrv/logging/event/ConfigRoleEvent.java
++++ b/base/common/src/com/netscape/certsrv/logging/event/ConfigRoleEvent.java
+@@ -18,6 +18,7 @@
+ package com.netscape.certsrv.logging.event;
+ 
+ import com.netscape.certsrv.logging.SignedAuditEvent;
++import com.netscape.cmsutil.util.Utils;
+ 
+ public class ConfigRoleEvent extends SignedAuditEvent {
+ 
+@@ -35,6 +36,6 @@ public class ConfigRoleEvent extends SignedAuditEvent {
+ 
+         setAttribute("SubjectID", subjectID);
+         setAttribute("Outcome", outcome);
+-        setAttribute("ParamNameValPairs", params);
++        setAttribute("ParamNameValPairs", Utils.normalizeString(params, true /*keep space*/));
+     }
+ }
+diff --git a/base/util/src/com/netscape/cmsutil/util/Utils.java b/base/util/src/com/netscape/cmsutil/util/Utils.java
+index 5ff78ad..9d0f9eb 100644
+--- a/base/util/src/com/netscape/cmsutil/util/Utils.java
++++ b/base/util/src/com/netscape/cmsutil/util/Utils.java
+@@ -336,15 +336,24 @@ public class Utils {
+      * Normalize B64 input String
+      *
+      * @pram string base-64 string
++     * @param keepspace a boolean variable to control whether to keep spaces or not
+      * @return normalized string
+      */
+     public static String normalizeString(String string) {
++        return normalizeString(string, false /*keepSpace*/);
++    }
++
++    public static String normalizeString(String string, Boolean keepSpace) {
+         if (string == null) {
+             return string;
+         }
+ 
+         StringBuffer sb = new StringBuffer();
+-        StringTokenizer st = new StringTokenizer(string, "\r\n ");
++        StringTokenizer st = null;
++        if (keepSpace)
++            st = new StringTokenizer(string, "\r\n");
++        else
++            st = new StringTokenizer(string, "\r\n ");
+ 
+         while (st.hasMoreTokens()) {
+             String nextLine = st.nextToken();
+@@ -353,4 +362,5 @@ public class Utils {
+         }
+         return sb.toString();
+     }
++
+ }
+-- 
+1.8.3.1
+
+
+From cf1b83ed6e7be07636c3deac770d586433d80f9e Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Tue, 26 Jun 2018 15:16:53 -0700
+Subject: [PATCH 5/7] Ticket 2992 CMC Simple request profiles and CMCResponse
+ to support simple response
+
+This patch fixes the broken profiles resulted from https://pagure.io/dogtagpki/issue/3018.
+
+In addition, CMCResponse has been improved to handle CMC simple response.
+
+fixes https://pagure.io/dogtagpki/issue/2992
+
+Change-Id: If72aa08f044c96e4e5bd5ed98512d2936fe0d50a
+---
+ .../shared/profiles/ca/caECSimpleCMCUserCert.cfg   |  6 +--
+ base/ca/shared/profiles/ca/caSimpleCMCUserCert.cfg |  6 +--
+ .../src/com/netscape/cmstools/CMCResponse.java     | 46 +++++++++++++---------
+ 3 files changed, 34 insertions(+), 24 deletions(-)
+
+diff --git a/base/ca/shared/profiles/ca/caECSimpleCMCUserCert.cfg b/base/ca/shared/profiles/ca/caECSimpleCMCUserCert.cfg
+index 64a6ad9..8df3576 100644
+--- a/base/ca/shared/profiles/ca/caECSimpleCMCUserCert.cfg
++++ b/base/ca/shared/profiles/ca/caECSimpleCMCUserCert.cfg
+@@ -1,11 +1,11 @@
+-desc=This certificate profile is for enrolling user certificates by using the CMC certificate request with CMC Signature authentication.
++desc=This certificate profile is for enrolling user certificates by using the CMC simple certificate request with agent authentication.
+ enable=true
+ enableBy=admin
+ name=Simple CMC Enrollment Request for User Certificate
+ visible=false
+-auth.instance_id=
++auth.instance_id=AgentCertAuth
+ input.list=i1
+-input.i1.class_id=cmcCertReqInputImpl
++input.i1.class_id=certReqInputImpl
+ output.list=o1
+ output.o1.class_id=certOutputImpl
+ policyset.list=cmcUserCertSet
+diff --git a/base/ca/shared/profiles/ca/caSimpleCMCUserCert.cfg b/base/ca/shared/profiles/ca/caSimpleCMCUserCert.cfg
+index 0628a36..a55873f 100644
+--- a/base/ca/shared/profiles/ca/caSimpleCMCUserCert.cfg
++++ b/base/ca/shared/profiles/ca/caSimpleCMCUserCert.cfg
+@@ -1,11 +1,11 @@
+-desc=This certificate profile is for enrolling user certificates by using the CMC certificate request with CMC Signature authentication.
++desc=This certificate profile is for enrolling user certificates by using the CMC Simple certificate request with agent authentication.
+ enable=true
+ enableBy=admin
+ name=Simple CMC Enrollment Request for User Certificate
+ visible=false
+-auth.instance_id=
++auth.instance_id=AgentCertAuth
+ input.list=i1
+-input.i1.class_id=cmcCertReqInputImpl
++input.i1.class_id=certReqInputImpl
+ output.list=o1
+ output.o1.class_id=certOutputImpl
+ policyset.list=cmcUserCertSet
+diff --git a/base/java-tools/src/com/netscape/cmstools/CMCResponse.java b/base/java-tools/src/com/netscape/cmstools/CMCResponse.java
+index 945f09f..5d4f6c6 100644
+--- a/base/java-tools/src/com/netscape/cmstools/CMCResponse.java
++++ b/base/java-tools/src/com/netscape/cmstools/CMCResponse.java
+@@ -82,14 +82,20 @@ public class CMCResponse {
+ 
+     public Collection<CMCStatusInfoV2> getStatusInfos() throws IOException, InvalidBERException {
+ 
+-        Collection<CMCStatusInfoV2> list = new ArrayList<>();
+-
+-        // assume full CMC response
+-
+         SignedData signedData = (SignedData) contentInfo.getInterpretedContent();
+         EncapsulatedContentInfo eci = signedData.getContentInfo();
+ 
++        Collection<CMCStatusInfoV2> list = new ArrayList<>();
++
+         OCTET_STRING content = eci.getContent();
++        if (content == null) {
++            System.out.println("CMC Simple Response.");
++            // No EncapsulatedContentInfo content; Assume simple response;
++            return null;
++        }
++        // assume full CMC response
++        System.out.println("CMC Full Response.");
++
+         ByteArrayInputStream is = new ByteArrayInputStream(content.toByteArray());
+         ResponseBody responseBody = (ResponseBody) (new ResponseBody.Template()).decode(is);
+ 
+@@ -166,8 +172,10 @@ public class CMCResponse {
+                 System.out.println("Invalid CMC Response Format");
+             }
+ 
+-            if (!ci.hasContent())
++            if (!ci.hasContent()) {
++                // No EncapsulatedContentInfo content; Assume simple response
+                 return;
++            }
+ 
+             OCTET_STRING content1 = ci.getContent();
+             ByteArrayInputStream bbis = new ByteArrayInputStream(content1.toByteArray());
+@@ -371,23 +379,25 @@ public class CMCResponse {
+ 
+         // terminate if any of the statuses is not a SUCCESS
+         Collection<CMCStatusInfoV2> statusInfos = response.getStatusInfos();
+-        for (CMCStatusInfoV2 statusInfo : statusInfos) {
++        if (statusInfos != null) { // full response
++            for (CMCStatusInfoV2 statusInfo : statusInfos) {
+ 
+-            int status = statusInfo.getStatus();
+-            if (status == CMCStatusInfoV2.SUCCESS) {
+-                continue;
+-            }
++                int status = statusInfo.getStatus();
++                if (status == CMCStatusInfoV2.SUCCESS) {
++                    continue;
++                }
+ 
+-            SEQUENCE bodyList = statusInfo.getBodyList();
++                SEQUENCE bodyList = statusInfo.getBodyList();
+ 
+-            Collection<INTEGER> list = new ArrayList<>();
+-            for (int i = 0; i < bodyList.size(); i++) {
+-                INTEGER n = (INTEGER) bodyList.elementAt(i);
+-                list.add(n);
+-            }
++                Collection<INTEGER> list = new ArrayList<>();
++                for (int i = 0; i < bodyList.size(); i++) {
++                    INTEGER n = (INTEGER) bodyList.elementAt(i);
++                    list.add(n);
++                }
+ 
+-            System.err.println("ERROR: CMC status for " + list + ": " + CMCStatusInfoV2.STATUS[status]);
+-            System.exit(1);
++                System.err.println("ERROR: CMC status for " + list + ": " + CMCStatusInfoV2.STATUS[status]);
++                System.exit(1);
++            }
+         }
+ 
+         // export PKCS #7 if requested
+-- 
+1.8.3.1
+
+
+From 3ad054342a08719cd80c618c2aa260210b418113 Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Wed, 27 Jun 2018 15:04:57 -0700
+Subject: [PATCH 6/7] Ticket #2959 Address pkispawn ECC profile overrides
+
+This patch enables proper ECC profiles to be automatically applied during
+pkispawn.
+
+This patch would eliminate the need for the workaround documented here:
+http://www.dogtagpki.org/wiki/PKI_10.5_Pkispawn_ECC_Profile_Workaround
+
+The idea is to use the % replacement strings as part of the profile names
+in the default.cfg file for pkispawn,
+and change the profile names to mach the format. So for example:
+
+%(pki_admin_key_type)AdminCert.profile
+
+would either be translated to rsaAdminCert.profile or eccAdminCert.profile
+depending  on the value in pki_admin_key_type
+
+All 6 relevant profiles have been renamed per new convention.
+
+fixes https://pagure.io/dogtagpki/issue/2959
+
+Change-Id: I9a9f70e415438e0b4130294abb725c74fd6e1b95
+---
+ base/ca/shared/conf/ECadminCert.profile      | 39 --------------------------
+ base/ca/shared/conf/ECserverCert.profile     | 39 --------------------------
+ base/ca/shared/conf/ECsubsystemCert.profile  | 39 --------------------------
+ base/ca/shared/conf/adminCert.profile        | 39 --------------------------
+ base/ca/shared/conf/eccAdminCert.profile     | 39 ++++++++++++++++++++++++++
+ base/ca/shared/conf/eccServerCert.profile    | 39 ++++++++++++++++++++++++++
+ base/ca/shared/conf/eccSubsystemCert.profile | 39 ++++++++++++++++++++++++++
+ base/ca/shared/conf/rsaAdminCert.profile     | 39 ++++++++++++++++++++++++++
+ base/ca/shared/conf/rsaServerCert.profile    | 41 ++++++++++++++++++++++++++++
+ base/ca/shared/conf/rsaSubsystemCert.profile | 39 ++++++++++++++++++++++++++
+ base/ca/shared/conf/serverCert.profile       | 41 ----------------------------
+ base/ca/shared/conf/subsystemCert.profile    | 39 --------------------------
+ base/server/etc/default.cfg                  |  6 ++--
+ 13 files changed, 239 insertions(+), 239 deletions(-)
+ delete mode 100644 base/ca/shared/conf/ECadminCert.profile
+ delete mode 100644 base/ca/shared/conf/ECserverCert.profile
+ delete mode 100644 base/ca/shared/conf/ECsubsystemCert.profile
+ delete mode 100644 base/ca/shared/conf/adminCert.profile
+ create mode 100644 base/ca/shared/conf/eccAdminCert.profile
+ create mode 100644 base/ca/shared/conf/eccServerCert.profile
+ create mode 100644 base/ca/shared/conf/eccSubsystemCert.profile
+ create mode 100644 base/ca/shared/conf/rsaAdminCert.profile
+ create mode 100644 base/ca/shared/conf/rsaServerCert.profile
+ create mode 100644 base/ca/shared/conf/rsaSubsystemCert.profile
+ delete mode 100644 base/ca/shared/conf/serverCert.profile
+ delete mode 100644 base/ca/shared/conf/subsystemCert.profile
+
+diff --git a/base/ca/shared/conf/ECadminCert.profile b/base/ca/shared/conf/ECadminCert.profile
+deleted file mode 100644
+index 46d157a..0000000
+--- a/base/ca/shared/conf/ECadminCert.profile
++++ /dev/null
+@@ -1,39 +0,0 @@
+-#
+-# Admin Certificate
+-#
+-id=adminCert.profile
+-name=All Purpose admin cert with ECC keys Profile
+-description=This profile creates an administrator's certificate with ECC keys
+-profileIDMapping=caAdminCert
+-profileSetIDMapping=adminCertSet
+-list=2,4,5,6,7
+-2.default.class=com.netscape.cms.profile.def.ValidityDefault
+-2.default.name=Validity Default
+-2.default.params.range=720
+-2.default.params.startTime=0
+-4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
+-4.default.name=Authority Key Identifier Default
+-5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
+-5.default.name=AIA Extension Default
+-5.default.params.authInfoAccessADEnable_0=true
+-5.default.params.authInfoAccessADLocationType_0=URIName
+-5.default.params.authInfoAccessADLocation_0=
+-5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
+-5.default.params.authInfoAccessCritical=false
+-5.default.params.authInfoAccessNumADs=1
+-6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
+-6.default.name=Key Usage Default
+-6.default.params.keyUsageCritical=true
+-6.default.params.keyUsageDigitalSignature=true
+-6.default.params.keyUsageNonRepudiation=true
+-6.default.params.keyUsageDataEncipherment=true
+-6.default.params.keyUsageKeyEncipherment=false
+-6.default.params.keyUsageKeyAgreement=true
+-6.default.params.keyUsageKeyCertSign=false
+-6.default.params.keyUsageCrlSign=false
+-6.default.params.keyUsageEncipherOnly=false
+-6.default.params.keyUsageDecipherOnly=false
+-7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
+-7.default.name=Extended Key Usage Extension Default
+-7.default.params.exKeyUsageCritical=false
+-7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2,1.3.6.1.5.5.7.3.4
+diff --git a/base/ca/shared/conf/ECserverCert.profile b/base/ca/shared/conf/ECserverCert.profile
+deleted file mode 100644
+index 8c679f7..0000000
+--- a/base/ca/shared/conf/ECserverCert.profile
++++ /dev/null
+@@ -1,39 +0,0 @@
+-#
+-# ECC Server Certificate
+-#
+-id=serverCert.profile
+-name=All Purpose SSL server cert with ECC keys Profile
+-description=This profile creates an SSL server certificate with ECC keys that is valid for SSL servers
+-profileIDMapping=caECServerCert
+-profileSetIDMapping=serverCertSet
+-list=2,4,5,6,7
+-2.default.class=com.netscape.cms.profile.def.ValidityDefault
+-2.default.name=Validity Default
+-2.default.params.range=720
+-2.default.params.startTime=0
+-4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
+-4.default.name=Authority Key Identifier Default
+-5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
+-5.default.name=AIA Extension Default
+-5.default.params.authInfoAccessADEnable_0=true
+-5.default.params.authInfoAccessADLocationType_0=URIName
+-5.default.params.authInfoAccessADLocation_0=
+-5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
+-5.default.params.authInfoAccessCritical=false
+-5.default.params.authInfoAccessNumADs=1
+-6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
+-6.default.name=Key Usage Default
+-6.default.params.keyUsageCritical=true
+-6.default.params.keyUsageDigitalSignature=true
+-6.default.params.keyUsageNonRepudiation=false
+-6.default.params.keyUsageDataEncipherment=true
+-6.default.params.keyUsageKeyEncipherment=false
+-6.default.params.keyUsageKeyAgreement=true
+-6.default.params.keyUsageKeyCertSign=false
+-6.default.params.keyUsageCrlSign=false
+-6.default.params.keyUsageEncipherOnly=false
+-6.default.params.keyUsageDecipherOnly=false
+-7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
+-7.default.name=Extended Key Usage Extension Default
+-7.default.params.exKeyUsageCritical=false
+-7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.1
+diff --git a/base/ca/shared/conf/ECsubsystemCert.profile b/base/ca/shared/conf/ECsubsystemCert.profile
+deleted file mode 100644
+index d11dabb..0000000
+--- a/base/ca/shared/conf/ECsubsystemCert.profile
++++ /dev/null
+@@ -1,39 +0,0 @@
+-#
+-# ECC Subsystem Certificate
+-#
+-id=subsystemCert.profile
+-name=Subsystem cert with ECC keys Profile
+-description=This profile creates a subsystem certificate with ECC keys that is valid for SSL clients
+-profileIDMapping=caECSubsystemCert
+-profileSetIDMapping=serverCertSet
+-list=2,4,5,6,7
+-2.default.class=com.netscape.cms.profile.def.ValidityDefault
+-2.default.name=Validity Default
+-2.default.params.range=720
+-2.default.params.startTime=0
+-4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
+-4.default.name=Authority Key Identifier Default
+-5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
+-5.default.name=AIA Extension Default
+-5.default.params.authInfoAccessADEnable_0=true
+-5.default.params.authInfoAccessADLocationType_0=URIName
+-5.default.params.authInfoAccessADLocation_0=
+-5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
+-5.default.params.authInfoAccessCritical=false
+-5.default.params.authInfoAccessNumADs=1
+-6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
+-6.default.name=Key Usage Default
+-6.default.params.keyUsageCritical=true
+-6.default.params.keyUsageDigitalSignature=true
+-6.default.params.keyUsageNonRepudiation=false
+-6.default.params.keyUsageDataEncipherment=true
+-6.default.params.keyUsageKeyEncipherment=false
+-6.default.params.keyUsageKeyAgreement=true
+-6.default.params.keyUsageKeyCertSign=false
+-6.default.params.keyUsageCrlSign=false
+-6.default.params.keyUsageEncipherOnly=false
+-6.default.params.keyUsageDecipherOnly=false
+-7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
+-7.default.name=Extended Key Usage Extension Default
+-7.default.params.exKeyUsageCritical=false
+-7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2
+diff --git a/base/ca/shared/conf/adminCert.profile b/base/ca/shared/conf/adminCert.profile
+deleted file mode 100644
+index 5e84d74..0000000
+--- a/base/ca/shared/conf/adminCert.profile
++++ /dev/null
+@@ -1,39 +0,0 @@
+-#
+-# Server Certificate
+-#
+-id=adminCert.profile
+-name=All Purpose admin server cert Profile
+-description=This profile creates an administrator's certificate
+-profileIDMapping=caAdminCert
+-profileSetIDMapping=adminCertSet
+-list=2,4,5,6,7
+-2.default.class=com.netscape.cms.profile.def.ValidityDefault
+-2.default.name=Validity Default
+-2.default.params.range=720
+-2.default.params.startTime=0
+-4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
+-4.default.name=Authority Key Identifier Default
+-5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
+-5.default.name=AIA Extension Default
+-5.default.params.authInfoAccessADEnable_0=true
+-5.default.params.authInfoAccessADLocationType_0=URIName
+-5.default.params.authInfoAccessADLocation_0=
+-5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
+-5.default.params.authInfoAccessCritical=false
+-5.default.params.authInfoAccessNumADs=1
+-6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
+-6.default.name=Key Usage Default
+-6.default.params.keyUsageCritical=true
+-6.default.params.keyUsageDigitalSignature=true
+-6.default.params.keyUsageNonRepudiation=true
+-6.default.params.keyUsageDataEncipherment=true
+-6.default.params.keyUsageKeyEncipherment=true
+-6.default.params.keyUsageKeyAgreement=false
+-6.default.params.keyUsageKeyCertSign=false
+-6.default.params.keyUsageCrlSign=false
+-6.default.params.keyUsageEncipherOnly=false
+-6.default.params.keyUsageDecipherOnly=false
+-7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
+-7.default.name=Extended Key Usage Extension Default
+-7.default.params.exKeyUsageCritical=false
+-7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2,1.3.6.1.5.5.7.3.4
+diff --git a/base/ca/shared/conf/eccAdminCert.profile b/base/ca/shared/conf/eccAdminCert.profile
+new file mode 100644
+index 0000000..46d157a
+--- /dev/null
++++ b/base/ca/shared/conf/eccAdminCert.profile
+@@ -0,0 +1,39 @@
++#
++# Admin Certificate
++#
++id=adminCert.profile
++name=All Purpose admin cert with ECC keys Profile
++description=This profile creates an administrator's certificate with ECC keys
++profileIDMapping=caAdminCert
++profileSetIDMapping=adminCertSet
++list=2,4,5,6,7
++2.default.class=com.netscape.cms.profile.def.ValidityDefault
++2.default.name=Validity Default
++2.default.params.range=720
++2.default.params.startTime=0
++4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
++4.default.name=Authority Key Identifier Default
++5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
++5.default.name=AIA Extension Default
++5.default.params.authInfoAccessADEnable_0=true
++5.default.params.authInfoAccessADLocationType_0=URIName
++5.default.params.authInfoAccessADLocation_0=
++5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
++5.default.params.authInfoAccessCritical=false
++5.default.params.authInfoAccessNumADs=1
++6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
++6.default.name=Key Usage Default
++6.default.params.keyUsageCritical=true
++6.default.params.keyUsageDigitalSignature=true
++6.default.params.keyUsageNonRepudiation=true
++6.default.params.keyUsageDataEncipherment=true
++6.default.params.keyUsageKeyEncipherment=false
++6.default.params.keyUsageKeyAgreement=true
++6.default.params.keyUsageKeyCertSign=false
++6.default.params.keyUsageCrlSign=false
++6.default.params.keyUsageEncipherOnly=false
++6.default.params.keyUsageDecipherOnly=false
++7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
++7.default.name=Extended Key Usage Extension Default
++7.default.params.exKeyUsageCritical=false
++7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2,1.3.6.1.5.5.7.3.4
+diff --git a/base/ca/shared/conf/eccServerCert.profile b/base/ca/shared/conf/eccServerCert.profile
+new file mode 100644
+index 0000000..8c679f7
+--- /dev/null
++++ b/base/ca/shared/conf/eccServerCert.profile
+@@ -0,0 +1,39 @@
++#
++# ECC Server Certificate
++#
++id=serverCert.profile
++name=All Purpose SSL server cert with ECC keys Profile
++description=This profile creates an SSL server certificate with ECC keys that is valid for SSL servers
++profileIDMapping=caECServerCert
++profileSetIDMapping=serverCertSet
++list=2,4,5,6,7
++2.default.class=com.netscape.cms.profile.def.ValidityDefault
++2.default.name=Validity Default
++2.default.params.range=720
++2.default.params.startTime=0
++4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
++4.default.name=Authority Key Identifier Default
++5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
++5.default.name=AIA Extension Default
++5.default.params.authInfoAccessADEnable_0=true
++5.default.params.authInfoAccessADLocationType_0=URIName
++5.default.params.authInfoAccessADLocation_0=
++5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
++5.default.params.authInfoAccessCritical=false
++5.default.params.authInfoAccessNumADs=1
++6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
++6.default.name=Key Usage Default
++6.default.params.keyUsageCritical=true
++6.default.params.keyUsageDigitalSignature=true
++6.default.params.keyUsageNonRepudiation=false
++6.default.params.keyUsageDataEncipherment=true
++6.default.params.keyUsageKeyEncipherment=false
++6.default.params.keyUsageKeyAgreement=true
++6.default.params.keyUsageKeyCertSign=false
++6.default.params.keyUsageCrlSign=false
++6.default.params.keyUsageEncipherOnly=false
++6.default.params.keyUsageDecipherOnly=false
++7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
++7.default.name=Extended Key Usage Extension Default
++7.default.params.exKeyUsageCritical=false
++7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.1
+diff --git a/base/ca/shared/conf/eccSubsystemCert.profile b/base/ca/shared/conf/eccSubsystemCert.profile
+new file mode 100644
+index 0000000..d11dabb
+--- /dev/null
++++ b/base/ca/shared/conf/eccSubsystemCert.profile
+@@ -0,0 +1,39 @@
++#
++# ECC Subsystem Certificate
++#
++id=subsystemCert.profile
++name=Subsystem cert with ECC keys Profile
++description=This profile creates a subsystem certificate with ECC keys that is valid for SSL clients
++profileIDMapping=caECSubsystemCert
++profileSetIDMapping=serverCertSet
++list=2,4,5,6,7
++2.default.class=com.netscape.cms.profile.def.ValidityDefault
++2.default.name=Validity Default
++2.default.params.range=720
++2.default.params.startTime=0
++4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
++4.default.name=Authority Key Identifier Default
++5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
++5.default.name=AIA Extension Default
++5.default.params.authInfoAccessADEnable_0=true
++5.default.params.authInfoAccessADLocationType_0=URIName
++5.default.params.authInfoAccessADLocation_0=
++5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
++5.default.params.authInfoAccessCritical=false
++5.default.params.authInfoAccessNumADs=1
++6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
++6.default.name=Key Usage Default
++6.default.params.keyUsageCritical=true
++6.default.params.keyUsageDigitalSignature=true
++6.default.params.keyUsageNonRepudiation=false
++6.default.params.keyUsageDataEncipherment=true
++6.default.params.keyUsageKeyEncipherment=false
++6.default.params.keyUsageKeyAgreement=true
++6.default.params.keyUsageKeyCertSign=false
++6.default.params.keyUsageCrlSign=false
++6.default.params.keyUsageEncipherOnly=false
++6.default.params.keyUsageDecipherOnly=false
++7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
++7.default.name=Extended Key Usage Extension Default
++7.default.params.exKeyUsageCritical=false
++7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2
+diff --git a/base/ca/shared/conf/rsaAdminCert.profile b/base/ca/shared/conf/rsaAdminCert.profile
+new file mode 100644
+index 0000000..5e84d74
+--- /dev/null
++++ b/base/ca/shared/conf/rsaAdminCert.profile
+@@ -0,0 +1,39 @@
++#
++# Server Certificate
++#
++id=adminCert.profile
++name=All Purpose admin server cert Profile
++description=This profile creates an administrator's certificate
++profileIDMapping=caAdminCert
++profileSetIDMapping=adminCertSet
++list=2,4,5,6,7
++2.default.class=com.netscape.cms.profile.def.ValidityDefault
++2.default.name=Validity Default
++2.default.params.range=720
++2.default.params.startTime=0
++4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
++4.default.name=Authority Key Identifier Default
++5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
++5.default.name=AIA Extension Default
++5.default.params.authInfoAccessADEnable_0=true
++5.default.params.authInfoAccessADLocationType_0=URIName
++5.default.params.authInfoAccessADLocation_0=
++5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
++5.default.params.authInfoAccessCritical=false
++5.default.params.authInfoAccessNumADs=1
++6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
++6.default.name=Key Usage Default
++6.default.params.keyUsageCritical=true
++6.default.params.keyUsageDigitalSignature=true
++6.default.params.keyUsageNonRepudiation=true
++6.default.params.keyUsageDataEncipherment=true
++6.default.params.keyUsageKeyEncipherment=true
++6.default.params.keyUsageKeyAgreement=false
++6.default.params.keyUsageKeyCertSign=false
++6.default.params.keyUsageCrlSign=false
++6.default.params.keyUsageEncipherOnly=false
++6.default.params.keyUsageDecipherOnly=false
++7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
++7.default.name=Extended Key Usage Extension Default
++7.default.params.exKeyUsageCritical=false
++7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2,1.3.6.1.5.5.7.3.4
+diff --git a/base/ca/shared/conf/rsaServerCert.profile b/base/ca/shared/conf/rsaServerCert.profile
+new file mode 100644
+index 0000000..e740760
+--- /dev/null
++++ b/base/ca/shared/conf/rsaServerCert.profile
+@@ -0,0 +1,41 @@
++#
++# Server Certificate
++#
++id=serverCert.profile
++name=All Purpose SSL server cert Profile
++description=This profile creates an SSL server certificate that is valid for SSL servers
++profileIDMapping=caServerCert
++profileSetIDMapping=serverCertSet
++list=2,4,5,6,7,8
++2.default.class=com.netscape.cms.profile.def.ValidityDefault
++2.default.name=Validity Default
++2.default.params.range=720
++2.default.params.startTime=0
++4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
++4.default.name=Authority Key Identifier Default
++5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
++5.default.name=AIA Extension Default
++5.default.params.authInfoAccessADEnable_0=true
++5.default.params.authInfoAccessADLocationType_0=URIName
++5.default.params.authInfoAccessADLocation_0=
++5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
++5.default.params.authInfoAccessCritical=false
++5.default.params.authInfoAccessNumADs=1
++6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
++6.default.name=Key Usage Default
++6.default.params.keyUsageCritical=true
++6.default.params.keyUsageDigitalSignature=true
++6.default.params.keyUsageNonRepudiation=false
++6.default.params.keyUsageDataEncipherment=true
++6.default.params.keyUsageKeyEncipherment=true
++6.default.params.keyUsageKeyAgreement=false
++6.default.params.keyUsageKeyCertSign=false
++6.default.params.keyUsageCrlSign=false
++6.default.params.keyUsageEncipherOnly=false
++6.default.params.keyUsageDecipherOnly=false
++7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
++7.default.name=Extended Key Usage Extension Default
++7.default.params.exKeyUsageCritical=false
++7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.1
++8.default.class=com.netscape.cms.profile.def.CommonNameToSANDefault
++8.default.name=Copy Common Name to Subjec Alternative Name Extension
+diff --git a/base/ca/shared/conf/rsaSubsystemCert.profile b/base/ca/shared/conf/rsaSubsystemCert.profile
+new file mode 100644
+index 0000000..fa8f84e
+--- /dev/null
++++ b/base/ca/shared/conf/rsaSubsystemCert.profile
+@@ -0,0 +1,39 @@
++#
++# Subsystem Certificate
++#
++id=subsystemCert.profile
++name=All Purpose SSL server cert Profile
++description=This profile creates a subsystem certificate that is valid for SSL client
++profileIDMapping=caSubsystemCert
++profileSetIDMapping=serverCertSet
++list=2,4,5,6,7
++2.default.class=com.netscape.cms.profile.def.ValidityDefault
++2.default.name=Validity Default
++2.default.params.range=720
++2.default.params.startTime=0
++4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
++4.default.name=Authority Key Identifier Default
++5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
++5.default.name=AIA Extension Default
++5.default.params.authInfoAccessADEnable_0=true
++5.default.params.authInfoAccessADLocationType_0=URIName
++5.default.params.authInfoAccessADLocation_0=
++5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
++5.default.params.authInfoAccessCritical=false
++5.default.params.authInfoAccessNumADs=1
++6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
++6.default.name=Key Usage Default
++6.default.params.keyUsageCritical=true
++6.default.params.keyUsageDigitalSignature=true
++6.default.params.keyUsageNonRepudiation=true
++6.default.params.keyUsageDataEncipherment=true
++6.default.params.keyUsageKeyEncipherment=true
++6.default.params.keyUsageKeyAgreement=false
++6.default.params.keyUsageKeyCertSign=false
++6.default.params.keyUsageCrlSign=false
++6.default.params.keyUsageEncipherOnly=false
++6.default.params.keyUsageDecipherOnly=false
++7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
++7.default.name=Extended Key Usage Extension Default
++7.default.params.exKeyUsageCritical=false
++7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2
+diff --git a/base/ca/shared/conf/serverCert.profile b/base/ca/shared/conf/serverCert.profile
+deleted file mode 100644
+index e740760..0000000
+--- a/base/ca/shared/conf/serverCert.profile
++++ /dev/null
+@@ -1,41 +0,0 @@
+-#
+-# Server Certificate
+-#
+-id=serverCert.profile
+-name=All Purpose SSL server cert Profile
+-description=This profile creates an SSL server certificate that is valid for SSL servers
+-profileIDMapping=caServerCert
+-profileSetIDMapping=serverCertSet
+-list=2,4,5,6,7,8
+-2.default.class=com.netscape.cms.profile.def.ValidityDefault
+-2.default.name=Validity Default
+-2.default.params.range=720
+-2.default.params.startTime=0
+-4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
+-4.default.name=Authority Key Identifier Default
+-5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
+-5.default.name=AIA Extension Default
+-5.default.params.authInfoAccessADEnable_0=true
+-5.default.params.authInfoAccessADLocationType_0=URIName
+-5.default.params.authInfoAccessADLocation_0=
+-5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
+-5.default.params.authInfoAccessCritical=false
+-5.default.params.authInfoAccessNumADs=1
+-6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
+-6.default.name=Key Usage Default
+-6.default.params.keyUsageCritical=true
+-6.default.params.keyUsageDigitalSignature=true
+-6.default.params.keyUsageNonRepudiation=false
+-6.default.params.keyUsageDataEncipherment=true
+-6.default.params.keyUsageKeyEncipherment=true
+-6.default.params.keyUsageKeyAgreement=false
+-6.default.params.keyUsageKeyCertSign=false
+-6.default.params.keyUsageCrlSign=false
+-6.default.params.keyUsageEncipherOnly=false
+-6.default.params.keyUsageDecipherOnly=false
+-7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
+-7.default.name=Extended Key Usage Extension Default
+-7.default.params.exKeyUsageCritical=false
+-7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.1
+-8.default.class=com.netscape.cms.profile.def.CommonNameToSANDefault
+-8.default.name=Copy Common Name to Subjec Alternative Name Extension
+diff --git a/base/ca/shared/conf/subsystemCert.profile b/base/ca/shared/conf/subsystemCert.profile
+deleted file mode 100644
+index fa8f84e..0000000
+--- a/base/ca/shared/conf/subsystemCert.profile
++++ /dev/null
+@@ -1,39 +0,0 @@
+-#
+-# Subsystem Certificate
+-#
+-id=subsystemCert.profile
+-name=All Purpose SSL server cert Profile
+-description=This profile creates a subsystem certificate that is valid for SSL client
+-profileIDMapping=caSubsystemCert
+-profileSetIDMapping=serverCertSet
+-list=2,4,5,6,7
+-2.default.class=com.netscape.cms.profile.def.ValidityDefault
+-2.default.name=Validity Default
+-2.default.params.range=720
+-2.default.params.startTime=0
+-4.default.class=com.netscape.cms.profile.def.AuthorityKeyIdentifierExtDefault
+-4.default.name=Authority Key Identifier Default
+-5.default.class=com.netscape.cms.profile.def.AuthInfoAccessExtDefault
+-5.default.name=AIA Extension Default
+-5.default.params.authInfoAccessADEnable_0=true
+-5.default.params.authInfoAccessADLocationType_0=URIName
+-5.default.params.authInfoAccessADLocation_0=
+-5.default.params.authInfoAccessADMethod_0=1.3.6.1.5.5.7.48.1
+-5.default.params.authInfoAccessCritical=false
+-5.default.params.authInfoAccessNumADs=1
+-6.default.class=com.netscape.cms.profile.def.KeyUsageExtDefault
+-6.default.name=Key Usage Default
+-6.default.params.keyUsageCritical=true
+-6.default.params.keyUsageDigitalSignature=true
+-6.default.params.keyUsageNonRepudiation=true
+-6.default.params.keyUsageDataEncipherment=true
+-6.default.params.keyUsageKeyEncipherment=true
+-6.default.params.keyUsageKeyAgreement=false
+-6.default.params.keyUsageKeyCertSign=false
+-6.default.params.keyUsageCrlSign=false
+-6.default.params.keyUsageEncipherOnly=false
+-6.default.params.keyUsageDecipherOnly=false
+-7.default.class=com.netscape.cms.profile.def.ExtendedKeyUsageExtDefault
+-7.default.name=Extended Key Usage Extension Default
+-7.default.params.exKeyUsageCritical=false
+-7.default.params.exKeyUsageOIDs=1.3.6.1.5.5.7.3.2
+diff --git a/base/server/etc/default.cfg b/base/server/etc/default.cfg
+index e727648..c575e68 100644
+--- a/base/server/etc/default.cfg
++++ b/base/server/etc/default.cfg
+@@ -400,12 +400,12 @@ pki_source_flatfile_txt=%(pki_source_conf_path)s/flatfile.txt
+ pki_source_profiles=/usr/share/pki/ca/profiles
+ pki_source_proxy_conf=%(pki_source_conf_path)s/proxy.conf
+ pki_source_registry_cfg=%(pki_source_conf_path)s/registry.cfg
+-pki_source_admincert_profile=%(pki_source_conf_path)s/adminCert.profile
++pki_source_admincert_profile=%(pki_source_conf_path)s/%(pki_admin_key_type)sAdminCert.profile
+ pki_source_caauditsigningcert_profile=%(pki_source_conf_path)s/caAuditSigningCert.profile
+ pki_source_cacert_profile=%(pki_source_conf_path)s/caCert.profile
+ pki_source_caocspcert_profile=%(pki_source_conf_path)s/caOCSPCert.profile
+-pki_source_servercert_profile=%(pki_source_conf_path)s/serverCert.profile
+-pki_source_subsystemcert_profile=%(pki_source_conf_path)s/subsystemCert.profile
++pki_source_servercert_profile=%(pki_source_conf_path)s/%(pki_sslserver_key_type)sServerCert.profile
++pki_source_subsystemcert_profile=%(pki_source_conf_path)s/%(pki_subsystem_key_type)sSubsystemCert.profile
+ pki_subsystem_emails_path=%(pki_subsystem_path)s/emails
+ pki_subsystem_profiles_path=%(pki_subsystem_path)s/profiles
+ 
+-- 
+1.8.3.1
+
+
+From 2a9c2022d39e293269c49d806fa142992bef8abd Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Tue, 12 Jun 2018 11:47:57 -0700
+Subject: [PATCH 7/7] Ticket 2865 X500Name.directoryStringEncodingOrder
+ overridden by CSR encoding
+
+This patch allows profile to have control over whether to override the subjectDN
+encoding in the CSR with the encoding set by the system.
+
+New parameter in profile:
+policyset.<policy set>.<#>.default.params.useSysEncoding=true
+
+where "true" means to override the subjectdn with the system default order or
+the order set by X500Name.directoryStringEncodingOrder in CS.cfg
+
+by default, without useSysEncoding in profile, it is treated as false.
+
+fixes https://pagure.io/dogtagpki/issue/2865
+
+Change-Id: I41f8f5371f26668909624f056a77ffbf66f0f5e1
+---
+ .../cms/profile/def/UserSubjectNameDefault.java    | 83 +++++++++++++++++-----
+ base/server/cmsbundle/src/UserMessages.properties  |  1 +
+ .../netscape/cmscore/cert/X500NameSubsystem.java   |  7 +-
+ 3 files changed, 72 insertions(+), 19 deletions(-)
+
+diff --git a/base/server/cms/src/com/netscape/cms/profile/def/UserSubjectNameDefault.java b/base/server/cms/src/com/netscape/cms/profile/def/UserSubjectNameDefault.java
+index 9064bc1..636b045 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/def/UserSubjectNameDefault.java
++++ b/base/server/cms/src/com/netscape/cms/profile/def/UserSubjectNameDefault.java
+@@ -44,9 +44,11 @@ import com.netscape.certsrv.request.IRequest;
+ public class UserSubjectNameDefault extends EnrollDefault {
+ 
+     public static final String VAL_NAME = "name";
++    public static final String CONFIG_USE_SYS_ENCODING = "useSysEncoding";
+ 
+     public UserSubjectNameDefault() {
+         super();
++        addConfigName(CONFIG_USE_SYS_ENCODING);
+         addValueName(VAL_NAME);
+     }
+ 
+@@ -55,6 +57,16 @@ public class UserSubjectNameDefault extends EnrollDefault {
+         super.init(profile, config);
+     }
+ 
++    public IDescriptor getConfigDescriptor(Locale locale, String name) {
++        if (name.equals(CONFIG_USE_SYS_ENCODING)) {
++            return new Descriptor(IDescriptor.BOOLEAN, null,
++                    "false",
++                    CMS.getUserMessage(locale, "CMS_PROFILE_CONFIG_USE_SYS_ENCODING"));
++        } else {
++            return null;
++        }
++    }
++
+     public IDescriptor getValueDescriptor(Locale locale, String name) {
+         if (name.equals(VAL_NAME)) {
+             return new Descriptor(IDescriptor.STRING, null, null,
+@@ -64,52 +76,79 @@ public class UserSubjectNameDefault extends EnrollDefault {
+         }
+     }
+ 
+-    public void setValue(String name, Locale locale,
+-            X509CertInfo info, String value)
+-            throws EPropertyException {
+-        if (name == null) {
+-            throw new EPropertyException(CMS.getUserMessage(
+-                        locale, "CMS_INVALID_PROPERTY", name));
+-        }
+-        if (name.equals(VAL_NAME)) {
++    private X500Name getX500Name(X509CertInfo info, String value) {
++            String method = "UserSubjectNameDefault: getX500Name: ";
+             X500Name x500name = null;
++            /*
++             * useSysEencoding default is false
++             * To change that, add the following in the affected profile:
++             * policyset.<policy set>.<#>.default.params.useSysEncoding=true
++             */
++            boolean useSysEncoding = getConfigBoolean(CONFIG_USE_SYS_ENCODING);
++            CMS.debug(method +
++                    "use system encoding: " + useSysEncoding);
+ 
+             try {
+-                x500name = new X500Name(value);
++                if (value != null)
++                    x500name = new X500Name(value);
+ 
++                // oldName is what comes with the CSR
+                 CertificateSubjectName oldName = info.getSubjectObj();
+                 if (oldName != null) {
++                    CMS.debug(method + "subjectDN exists in CSR. ");
++                } else {
++                    CMS.debug(method + "subjectDN does not exist in CSR. ");
++                }
++                if ((useSysEncoding == false) && (oldName != null)) {
+                     /* If the canonical string representations of
+                      * existing Subject DN and new DN are equal,
+                      * keep the old name so that the attribute
+                      * encodings are preserved. */
+                     X500Name oldX500name = oldName.getX500Name();
+                     if (x500name.toString().equals(oldX500name.toString())) {
+-                        CMS.debug(
+-                            "UserSubjectNameDefault: setValue: "
++                        CMS.debug( method
+                             + "new Subject DN has same string representation "
+                             + "as current value; retaining current value."
+                         );
+                         x500name = oldX500name;
+                     } else {
+-                        CMS.debug(
+-                            "UserSubjectNameDefault: setValue: "
++                        CMS.debug(method
+                             + "replacing current value `" + oldX500name.toString() + "` "
+                             + "with new value `" + x500name.toString() + "`"
+                         );
+                     }
+                 }
+             } catch (IOException e) {
+-                CMS.debug(e.toString());
++                CMS.debug(method + e.toString());
+                 // failed to build x500 name
+             }
+-            CMS.debug("UserSubjectNameDefault: setValue name=" + x500name);
++            return x500name;
++    }
++
++    public void setValue(String name, Locale locale,
++            X509CertInfo info, String value)
++            throws EPropertyException {
++        String method = "UserSubjectNameDefault: setValue: ";
++        if (name == null) {
++            CMS.debug(name + "name null");
++            throw new EPropertyException(CMS.getUserMessage(
++                        locale, "CMS_INVALID_PROPERTY", name));
++        }
++        CMS.debug(method + "name = " + name);
++        if (value != null)
++            CMS.debug(method + "value = " + value);
++        else
++            CMS.debug(method + "value = null");
++
++        if (name.equals(VAL_NAME)) {
++            X500Name x500name = getX500Name(info, value);
++            CMS.debug(method + "setting name=" + x500name);
+             try {
+                 info.set(X509CertInfo.SUBJECT,
+                         new CertificateSubjectName(x500name));
+             } catch (Exception e) {
+                 // failed to insert subject name
+-                CMS.debug("UserSubjectNameDefault: setValue " + e.toString());
++                CMS.debug(method + e.toString());
+                 throw new EPropertyException(CMS.getUserMessage(
+                             locale, "CMS_INVALID_PROPERTY", name));
+             }
+@@ -155,9 +194,17 @@ public class UserSubjectNameDefault extends EnrollDefault {
+             throws EProfileException {
+         // authenticate the subject name and populate it
+         // to the certinfo
++        CertificateSubjectName req_sbj = request.getExtDataInCertSubjectName(
++                    IEnrollProfile.REQUEST_SUBJECT_NAME);
+         try {
+-            info.set(X509CertInfo.SUBJECT, request.getExtDataInCertSubjectName(
+-                    IEnrollProfile.REQUEST_SUBJECT_NAME));
++            info.set(X509CertInfo.SUBJECT, req_sbj);
++
++            // see if the encoding needs changing
++            X500Name x500name = getX500Name(info, req_sbj.toString());
++            if (x500name != null) {
++                info.set(X509CertInfo.SUBJECT,
++                        new CertificateSubjectName(x500name));
++            }
+         } catch (Exception e) {
+             // failed to insert subject name
+             CMS.debug("UserSubjectNameDefault: populate " + e.toString());
+diff --git a/base/server/cmsbundle/src/UserMessages.properties b/base/server/cmsbundle/src/UserMessages.properties
+index 9c324f5..208632d 100644
+--- a/base/server/cmsbundle/src/UserMessages.properties
++++ b/base/server/cmsbundle/src/UserMessages.properties
+@@ -754,6 +754,7 @@ CMS_PROFILE_ENCODING_ERROR=Error in BER encoding
+ CMS_PROFILE_REVOKE_DUPKEY_CERT=Revoke certificate with duplicate key
+ CMS_PROFILE_CONFIG_ALLOW_SAME_KEY_RENEWAL=Allow renewal of certification with same keys
+ CMS_PROFILE_CONFIG_KEY_USAGE_EXTENSION_CHECKING=Allow duplicate subject names with different key usage for agent approved requests
++CMS_PROFILE_CONFIG_USE_SYS_ENCODING=Use subject DN encoding from system-defined order
+ CMS_PROFILE_INTERNAL_ERROR=Profile internal error: {0}
+ CMS_PROFILE_DENY_OPERATION=Not authorized to do this operation.
+ CMS_PROFILE_DELETE_ENABLEPROFILE=Cannot delete enabled profile: {0}
+diff --git a/base/server/cmscore/src/com/netscape/cmscore/cert/X500NameSubsystem.java b/base/server/cmscore/src/com/netscape/cmscore/cert/X500NameSubsystem.java
+index 7accf2b..f1b3eb6 100644
+--- a/base/server/cmscore/src/com/netscape/cmscore/cert/X500NameSubsystem.java
++++ b/base/server/cmscore/src/com/netscape/cmscore/cert/X500NameSubsystem.java
+@@ -185,10 +185,15 @@ public class X500NameSubsystem implements ISubsystem {
+      */
+     private void setDirStrEncodingOrder()
+             throws EBaseException {
++        String method = "X500NameSubsystem: setDirStrEncodingOrder: ";
+         String order = mConfig.getString(PROP_DIR_STR_ENCODING_ORDER, null);
+ 
+-        if (order == null || order.length() == 0) // nothing.
++        if (order == null || order.length() == 0) { // nothing.
++            CMS.debug(method + "X500Name.directoryStringEncodingOrder not specified in config; Using default order in DirStrConverter.");
+             return;
++        }
++        CMS.debug(method + "X500Name.directoryStringEncodingOrder specified in config: " + order);
++
+         StringTokenizer toker = new StringTokenizer(order, ", \t");
+         int numTokens = toker.countTokens();
+ 
+-- 
+1.8.3.1
+

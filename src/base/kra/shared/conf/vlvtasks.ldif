@@ -1,0 +1,19 @@
+dn: cn=index1160527115, cn=index, cn=tasks, cn=config
+objectclass: top
+objectclass: extensibleObject
+cn: index1160527115
+ttl: 10
+nsinstance: {database}
+nsindexVLVAttribute: allKeys-{instanceId}Index
+nsindexVLVAttribute: kraAll-{instanceId}Index
+nsindexVLVAttribute: kraArchival-{instanceId}Index
+nsindexVLVAttribute: kraRecovery-{instanceId}Index
+nsindexVLVAttribute: kraCanceled-{instanceId}Index
+nsindexVLVAttribute: kraCanceledEnrollment-{instanceId}Index
+nsindexVLVAttribute: kraCanceledRecovery-{instanceId}Index
+nsindexVLVAttribute: kraRejected-{instanceId}Index
+nsindexVLVAttribute: kraRejectedEnrollment-{instanceId}Index
+nsindexVLVAttribute: kraRejectedRecovery-{instanceId}Index
+nsindexVLVAttribute: kraComplete-{instanceId}Index
+nsindexVLVAttribute: kraCompleteEnrollment-{instanceId}Index
+nsindexVLVAttribute: kraCompleteRecovery-{instanceId}Index

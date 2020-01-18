@@ -1,0 +1,2236 @@
+From 073b60fe200768ca56ef53f9b24cf6ba9225cc52 Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Mon, 27 Nov 2017 22:42:00 -0700
+Subject: Fix seobject pylint issues
+
+dogtagpki Pagure Issue #2856 - Pylint flags seobject failures
+
+Change-Id: Ied117961e8212ac0a73e78b9857282de91aa7cf7
+(cherry picked from commit c3b69ae92c884e7f230766b37a8723c2ce905eca)
+---
+ base/server/python/pki/server/deployment/pkihelper.py             | 5 ++++-
+ .../python/pki/server/deployment/scriptlets/selinux_setup.py      | 8 ++++----
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/base/server/python/pki/server/deployment/pkihelper.py b/base/server/python/pki/server/deployment/pkihelper.py
+index c6e1597..49945b9 100644
+--- a/base/server/python/pki/server/deployment/pkihelper.py
++++ b/base/server/python/pki/server/deployment/pkihelper.py
+@@ -801,7 +801,9 @@ class ConfigurationFile:
+                 extra=config.PKI_INDENTATION_LEVEL_2)
+             return
+ 
+-        portrecs = seobject.portRecords().get_all()
++        trans = seobject.semanageRecords("targeted")
++        trans.start()
++        portrecs = seobject.portRecords(trans).get_all()
+         portlist = ports[:]
+         for port in portlist:
+             context = ""
+@@ -829,6 +831,7 @@ class ConfigurationFile:
+                 raise Exception(
+                     log.PKIHELPER_INVALID_SELINUX_CONTEXT_FOR_PORT %
+                     (port, context))
++        trans.finish()
+         return
+ 
+     def verify_ds_secure_connection_data(self):
+diff --git a/base/server/python/pki/server/deployment/scriptlets/selinux_setup.py b/base/server/python/pki/server/deployment/scriptlets/selinux_setup.py
+index 9c926d1..d5e4b0c 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/selinux_setup.py
++++ b/base/server/python/pki/server/deployment/scriptlets/selinux_setup.py
+@@ -83,7 +83,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+                     if deployer.mdict['pki_instance_name'] != \
+                             config.PKI_DEPLOYMENT_DEFAULT_TOMCAT_INSTANCE_NAME:
+ 
+-                        fcon = seobject.fcontextRecords()
++                        fcon = seobject.fcontextRecords(trans)
+ 
+                         config.pki_log.info(
+                             "adding selinux fcontext \"%s\"",
+@@ -121,7 +121,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+                             deployer.mdict['pki_database_path'] + self.suffix,
+                             config.PKI_CERTDB_SELINUX_CONTEXT, "", "s0", "")
+ 
+-                        port_records = seobject.portRecords()
++                        port_records = seobject.portRecords(trans)
+                         for port in ports:
+                             config.pki_log.info(
+                                 "adding selinux port %s", port,
+@@ -176,7 +176,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+                     if deployer.mdict['pki_instance_name'] != \
+                             config.PKI_DEPLOYMENT_DEFAULT_TOMCAT_INSTANCE_NAME:
+ 
+-                        fcon = seobject.fcontextRecords()
++                        fcon = seobject.fcontextRecords(trans)
+ 
+                         config.pki_log.info(
+                             "deleting selinux fcontext \"%s\"",
+@@ -212,7 +212,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+                             deployer.mdict['pki_database_path'] +
+                             self.suffix, "")
+ 
+-                        port_records = seobject.portRecords()
++                        port_records = seobject.portRecords(trans)
+                         for port in ports:
+                             config.pki_log.info(
+                                 "deleting selinux port %s", port,
+-- 
+1.8.3.1
+
+
+From d70d4af983bd78444e8779c24e105c13c66ab502 Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Thu, 30 Nov 2017 15:28:38 -0800
+Subject: =?UTF-8?q?Ticket=20#2861=20ExternalCA:=20Failures=20in=20External?=
+ =?UTF-8?q?CA=20when=20tried=20to=20setup=20with=20CMC=20signed=20certific?=
+ =?UTF-8?q?ates=0AThe=20issue=20was=20found=20when=20the=20ValidityConstra?=
+ =?UTF-8?q?int=20does=20not=20restrict=20the=20cert=20signed=20to=20not=20?=
+ =?UTF-8?q?exceed=20the=20CA=20signing=20cert's=20expiry=20date.=20=20Upon?=
+ =?UTF-8?q?=20close=20examination,=20it=20appears=20that=20the=20CAValidit?=
+ =?UTF-8?q?yConstraint=20was=20not=20registered=20by=20default.=20=20By=20?=
+ =?UTF-8?q?registering=20this=20constraint=20and=20replacing=20the=20Valid?=
+ =?UTF-8?q?ityConstraint=20in=20the=20caCMCcaCert=20profile,=20it=20effect?=
+ =?UTF-8?q?ively=20sets=20the=20restriction.?=
+
+Change-Id: I557894cfffacc656e3b3a453fe7e7c98f0b61d87
+(cherry picked from commit a6a9576d506fbe6944b3dca32258c8661c2a800a)
+---
+ base/ca/shared/conf/registry.cfg                      |  5 ++++-
+ base/ca/shared/profiles/ca/caCMCcaCert.cfg            |  6 ++----
+ .../cms/profile/constraint/CAValidityConstraint.java  | 19 +++++++++++++------
+ 3 files changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/base/ca/shared/conf/registry.cfg b/base/ca/shared/conf/registry.cfg
+index 519d854..54e4d95 100644
+--- a/base/ca/shared/conf/registry.cfg
++++ b/base/ca/shared/conf/registry.cfg
+@@ -1,5 +1,5 @@
+ types=profile,defaultPolicy,constraintPolicy,profileInput,profileOutput,profileUpdater
+-constraintPolicy.ids=noConstraintImpl,subjectNameConstraintImpl,uniqueSubjectNameConstraintImpl,userSubjectNameConstraintImpl,cmcUserSignedSubjectNameConstraintImpl,validityConstraintImpl,keyUsageExtConstraintImpl,nsCertTypeExtConstraintImpl,extendedKeyUsageExtConstraintImpl,keyConstraintImpl,basicConstraintsExtConstraintImpl,extensionConstraintImpl,signingAlgConstraintImpl,uniqueKeyConstraintImpl,renewGracePeriodConstraintImpl,authzRealmConstraintImpl,externalProcessConstraintImpl
++constraintPolicy.ids=noConstraintImpl,subjectNameConstraintImpl,uniqueSubjectNameConstraintImpl,userSubjectNameConstraintImpl,cmcUserSignedSubjectNameConstraintImpl,caValidityConstraintImpl,validityConstraintImpl,keyUsageExtConstraintImpl,nsCertTypeExtConstraintImpl,extendedKeyUsageExtConstraintImpl,keyConstraintImpl,basicConstraintsExtConstraintImpl,extensionConstraintImpl,signingAlgConstraintImpl,uniqueKeyConstraintImpl,renewGracePeriodConstraintImpl,authzRealmConstraintImpl,externalProcessConstraintImpl
+ constraintPolicy.signingAlgConstraintImpl.class=com.netscape.cms.profile.constraint.SigningAlgConstraint
+ constraintPolicy.signingAlgConstraintImpl.desc=Signing Algorithm Constraint
+ constraintPolicy.signingAlgConstraintImpl.name=Signing Algorithm Constraint
+@@ -42,6 +42,9 @@ constraintPolicy.cmcUserSignedSubjectNameConstraintImpl.name=CMC User Subject Na
+ constraintPolicy.validityConstraintImpl.class=com.netscape.cms.profile.constraint.ValidityConstraint
+ constraintPolicy.validityConstraintImpl.desc=Validity Constraint
+ constraintPolicy.validityConstraintImpl.name=Validity Constraint
++constraintPolicy.caValidityConstraintImpl.class=com.netscape.cms.profile.constraint.CAValidityConstraint
++constraintPolicy.caValidityConstraintImpl.desc=CA Validity Constraint
++constraintPolicy.caValidityConstraintImpl.name=CA Validity Constraint
+ constraintPolicy.renewGracePeriodConstraintImpl.class=com.netscape.cms.profile.constraint.RenewGracePeriodConstraint
+ constraintPolicy.renewGracePeriodConstraintImpl.desc=Renewal Grace Period Constraint
+ constraintPolicy.renewGracePeriodConstraintImpl.name=Renewal Grace Period Constraint
+diff --git a/base/ca/shared/profiles/ca/caCMCcaCert.cfg b/base/ca/shared/profiles/ca/caCMCcaCert.cfg
+index f6df36f..9c95182 100644
+--- a/base/ca/shared/profiles/ca/caCMCcaCert.cfg
++++ b/base/ca/shared/profiles/ca/caCMCcaCert.cfg
+@@ -19,11 +19,9 @@ policyset.caCertSet.1.constraint.params.accept=true
+ policyset.caCertSet.1.default.class_id=userSubjectNameDefaultImpl
+ policyset.caCertSet.1.default.name=Subject Name Default
+ policyset.caCertSet.1.default.params.name=
+-policyset.caCertSet.2.constraint.class_id=validityConstraintImpl
+-policyset.caCertSet.2.constraint.name=Validity Constraint
++policyset.caCertSet.2.constraint.class_id=caValidityConstraintImpl
++policyset.caCertSet.2.constraint.name=CA Validity Constraint
+ policyset.caCertSet.2.constraint.params.range=7305
+-policyset.caCertSet.2.constraint.params.notBeforeCheck=false
+-policyset.caCertSet.2.constraint.params.notAfterCheck=false
+ policyset.caCertSet.2.default.class_id=caValidityDefaultImpl
+ policyset.caCertSet.2.default.name=CA Certificate Validity Default
+ policyset.caCertSet.2.default.params.range=7305
+diff --git a/base/server/cms/src/com/netscape/cms/profile/constraint/CAValidityConstraint.java b/base/server/cms/src/com/netscape/cms/profile/constraint/CAValidityConstraint.java
+index 77585c0..0e55f2b 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/constraint/CAValidityConstraint.java
++++ b/base/server/cms/src/com/netscape/cms/profile/constraint/CAValidityConstraint.java
+@@ -74,7 +74,8 @@ public class CAValidityConstraint extends CAEnrollConstraint {
+      */
+     public void validate(IRequest request, X509CertInfo info)
+             throws ERejectException {
+-        CMS.debug("CAValidityConstraint: validate start");
++        String method = "CAValidityConstraint: validate: ";
++        CMS.debug(method + "validate start");
+         CertificateValidity v = null;
+ 
+         try {
+@@ -88,7 +89,7 @@ public class CAValidityConstraint extends CAEnrollConstraint {
+         try {
+             notBefore = (Date) v.get(CertificateValidity.NOT_BEFORE);
+         } catch (IOException e) {
+-            CMS.debug("CAValidity: not before " + e.toString());
++            CMS.debug(method + "not before " + e.toString());
+             throw new ERejectException(CMS.getUserMessage(
+                         getLocale(request), "CMS_PROFILE_INVALID_NOT_BEFORE"));
+         }
+@@ -97,27 +98,33 @@ public class CAValidityConstraint extends CAEnrollConstraint {
+         try {
+             notAfter = (Date) v.get(CertificateValidity.NOT_AFTER);
+         } catch (IOException e) {
+-            CMS.debug("CAValidity: not after " + e.toString());
++            CMS.debug(method + "not after " + e.toString());
+             throw new ERejectException(CMS.getUserMessage(
+                         getLocale(request), "CMS_PROFILE_INVALID_NOT_AFTER"));
+         }
+ 
+         if (mDefNotBefore != null) {
+-            CMS.debug("ValidtyConstraint: notBefore=" + notBefore +
++            CMS.debug(method + "notBefore=" + notBefore +
+                     " defNotBefore=" + mDefNotBefore);
+             if (notBefore.before(mDefNotBefore)) {
+                 throw new ERejectException(CMS.getUserMessage(
+                             getLocale(request), "CMS_PROFILE_INVALID_NOT_BEFORE"));
+             }
+         }
+-        CMS.debug("ValidtyConstraint: notAfter=" + notAfter +
++        CMS.debug(method + "notAfter=" + notAfter +
+                 " defNotAfter=" + mDefNotAfter);
+         if (notAfter.after(mDefNotAfter)) {
+             throw new ERejectException(CMS.getUserMessage(
+                         getLocale(request), "CMS_PROFILE_INVALID_NOT_AFTER"));
+         }
+ 
+-        CMS.debug("CAValidtyConstraint: validate end");
++        if (notAfter.getTime() < notBefore.getTime()) {
++            CMS.debug(method + "notAfter (" + notAfter + ") < notBefore (" + notBefore + ")");
++            throw new ERejectException(CMS.getUserMessage(getLocale(request),
++                        "CMS_PROFILE_NOT_AFTER_BEFORE_NOT_BEFORE"));
++        }
++
++        CMS.debug(method + "validate end");
+     }
+ 
+     public String getText(Locale locale) {
+-- 
+1.8.3.1
+
+
+From 28319a47ffa02b7dc2d02364dedde36e8738f2b6 Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Mon, 4 Dec 2017 22:05:06 +0100
+Subject: Cleaned up CMake scripts.
+
+The CMake scripts in Tomcat folders have been cleaned up to remove
+redundant find_file() invocations.
+
+https://pagure.io/dogtagpki/issue/2560
+
+Change-Id: Idf7c21e9c55c6113111ac43cc2e3ea4239076164
+(cherry picked from commit 3a179d961561c3cbb51d19e358d7eae4b7d067a7)
+---
+ base/CMakeLists.txt                    |   7 ++
+ base/server/tomcat/src/CMakeLists.txt  | 118 ++-------------------------------
+ base/server/tomcat7/src/CMakeLists.txt |  89 -------------------------
+ base/server/tomcat8/src/CMakeLists.txt |  92 +------------------------
+ 4 files changed, 13 insertions(+), 293 deletions(-)
+
+diff --git a/base/CMakeLists.txt b/base/CMakeLists.txt
+index 0b93c51..4ece8e0 100644
+--- a/base/CMakeLists.txt
++++ b/base/CMakeLists.txt
+@@ -152,6 +152,13 @@ find_file(TOMCAT_CATALINA_JAR
+         /usr/share/java/tomcat
+ )
+ 
++find_file(TOMCAT_COYOTE_JAR
++    NAMES
++        tomcat-coyote.jar
++    PATHS
++        /usr/share/java/tomcat
++)
++
+ find_file(TOMCAT_UTIL_JAR
+     NAMES
+         tomcat-util.jar
+diff --git a/base/server/tomcat/src/CMakeLists.txt b/base/server/tomcat/src/CMakeLists.txt
+index b9a3b4c..ebbf696 100644
+--- a/base/server/tomcat/src/CMakeLists.txt
++++ b/base/server/tomcat/src/CMakeLists.txt
+@@ -1,125 +1,15 @@
+ project(pki-tomcat)
+ 
+-find_file(JSS_JAR
+-    NAMES
+-        jss4.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(LDAPJDK_JAR
+-    NAMES
+-        ldapjdk.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(COMMONS_CODEC_JAR
+-    NAMES
+-        commons-codec.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(COMMONS_HTTPCLIENT_JAR
+-    NAMES
+-        commons-httpclient.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(APACHE_COMMONS_LANG_JAR
+-    NAMES
+-        apache-commons-lang.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(VELOCITY_JAR
+-    NAMES
+-        velocity.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(XALAN_JAR
+-    NAMES
+-        xalan-j2.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(XERCES_JAR
+-    NAMES
+-        xerces-j2.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(RESTEASY_JAXRS_JAR
+-    NAMES
+-        resteasy-jaxrs.jar
+-    PATHS
+-        ${RESTEASY_LIB}
+-)
+-
+-find_file(RESTEASY_ATOM_PROVIDER_JAR
+-    NAMES
+-        resteasy-atom-provider.jar
+-    PATHS
+-        ${RESTEASY_LIB}
+-)
+-
+-find_file(HTTPCLIENT_JAR
+-    NAMES
+-        httpclient.jar
+-    PATHS
+-        /usr/share/java/httpcomponents
+-)
+-
+-find_file(HTTPCORE_JAR
+-    NAMES
+-        httpcore.jar
+-    PATHS
+-        /usr/share/java/httpcomponents
+-)
+-
+-find_file(TOMCATJSS_JAR
+-    NAMES
+-        tomcatjss.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(NUXWDOG_JAR
+-    NAMES
+-        nuxwdog.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(TOMCAT_COYOTE_JAR
+-    NAMES
+-        tomcat-coyote.jar
+-    PATHS
+-        /usr/share/java/tomcat
+-)
+-
+ # build pki-tomcat
+ javac(pki-tomcat-classes
+     SOURCES
+         *.java
+     CLASSPATH
+-        ${SERVLET_JAR} ${TOMCAT_CATALINA_JAR} ${TOMCAT_UTIL_SCAN_JAR}
+-		${NUXWDOG_JAR} ${APACHE_COMMONS_LANG_JAR} ${TOMCATJSS_JAR}
+-		${TOMCAT_COYOTE_JAR}
++        ${SERVLET_JAR}
++        ${TOMCAT_CATALINA_JAR} ${TOMCAT_COYOTE_JAR} ${TOMCAT_UTIL_SCAN_JAR}
++        ${NUXWDOG_JAR} ${APACHE_COMMONS_LANG_JAR} ${TOMCATJSS_JAR}
+     OUTPUT_DIR
+         ${CMAKE_BINARY_DIR}/../../tomcat
+     DEPENDS
++        pki-tools-jar
+ )
+diff --git a/base/server/tomcat7/src/CMakeLists.txt b/base/server/tomcat7/src/CMakeLists.txt
+index 0293abf..58c9d87 100644
+--- a/base/server/tomcat7/src/CMakeLists.txt
++++ b/base/server/tomcat7/src/CMakeLists.txt
+@@ -1,94 +1,5 @@
+ project(pki-tomcat7)
+ 
+-find_file(JSS_JAR
+-    NAMES
+-        jss4.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(LDAPJDK_JAR
+-    NAMES
+-        ldapjdk.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(COMMONS_CODEC_JAR
+-    NAMES
+-        commons-codec.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(COMMONS_HTTPCLIENT_JAR
+-    NAMES
+-        commons-httpclient.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(APACHE_COMMONS_LANG_JAR
+-    NAMES
+-        apache-commons-lang.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(VELOCITY_JAR
+-    NAMES
+-        velocity.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(XALAN_JAR
+-    NAMES
+-        xalan-j2.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(XERCES_JAR
+-    NAMES
+-        xerces-j2.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(RESTEASY_JAXRS_JAR
+-    NAMES
+-        resteasy-jaxrs.jar
+-    PATHS
+-        ${RESTEASY_LIB}
+-)
+-
+-find_file(RESTEASY_ATOM_PROVIDER_JAR
+-    NAMES
+-        resteasy-atom-provider.jar
+-    PATHS
+-        ${RESTEASY_LIB}
+-)
+-
+-find_file(HTTPCLIENT_JAR
+-    NAMES
+-        httpclient.jar
+-    PATHS
+-        /usr/share/java/httpcomponents
+-)
+-
+-find_file(HTTPCORE_JAR
+-    NAMES
+-        httpcore.jar
+-    PATHS
+-        /usr/share/java/httpcomponents
+-)
+-
+ # build pki-tomcat
+ javac(pki-tomcat7-classes
+     SOURCES
+diff --git a/base/server/tomcat8/src/CMakeLists.txt b/base/server/tomcat8/src/CMakeLists.txt
+index 110ad20..70d0ef6 100644
+--- a/base/server/tomcat8/src/CMakeLists.txt
++++ b/base/server/tomcat8/src/CMakeLists.txt
+@@ -1,100 +1,12 @@
+ project(pki-tomcat8)
+ 
+-find_file(JSS_JAR
+-    NAMES
+-        jss4.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(LDAPJDK_JAR
+-    NAMES
+-        ldapjdk.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(COMMONS_CODEC_JAR
+-    NAMES
+-        commons-codec.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(COMMONS_HTTPCLIENT_JAR
+-    NAMES
+-        commons-httpclient.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(APACHE_COMMONS_LANG_JAR
+-    NAMES
+-        apache-commons-lang.jar
+-    PATHS
+-        /usr/share/java
+-)
+-
+-find_file(VELOCITY_JAR
+-    NAMES
+-        velocity.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(XALAN_JAR
+-    NAMES
+-        xalan-j2.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(XERCES_JAR
+-    NAMES
+-        xerces-j2.jar
+-    PATHS
+-        ${JAVA_LIB_INSTALL_DIR}
+-        /usr/share/java
+-)
+-
+-find_file(RESTEASY_JAXRS_JAR
+-    NAMES
+-        resteasy-jaxrs.jar
+-    PATHS
+-        ${RESTEASY_LIB}
+-)
+-
+-find_file(RESTEASY_ATOM_PROVIDER_JAR
+-    NAMES
+-        resteasy-atom-provider.jar
+-    PATHS
+-        ${RESTEASY_LIB}
+-)
+-
+-find_file(HTTPCLIENT_JAR
+-    NAMES
+-        httpclient.jar
+-    PATHS
+-        /usr/share/java/httpcomponents
+-)
+-
+-find_file(HTTPCORE_JAR
+-    NAMES
+-        httpcore.jar
+-    PATHS
+-        /usr/share/java/httpcomponents
+-)
+-
+ # build pki-tomcat
+ javac(pki-tomcat8-classes
+     SOURCES
+         *.java
+     CLASSPATH
+-        ${SERVLET_JAR} ${TOMCAT_CATALINA_JAR} ${TOMCAT_UTIL_SCAN_JAR} ${TOMCAT_API_JAR}
++        ${SERVLET_JAR}
++        ${TOMCAT_CATALINA_JAR} ${TOMCAT_UTIL_SCAN_JAR} ${TOMCAT_API_JAR}
+         ${JAXRS_API_JAR}
+         ${CMAKE_BINARY_DIR}/../../tomcat
+     OUTPUT_DIR
+-- 
+1.8.3.1
+
+
+From 02694bab7fdc18e08f559b7a8fa219bbb39b97ae Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Tue, 5 Dec 2017 01:18:43 +0100
+Subject: Refactored instance_layout.py.
+
+The methods in instance_layout.py has been modified to return early.
+The code has been reformatted to reduce indentations.
+
+https://pagure.io/dogtagpki/issue/2560
+
+Change-Id: Icfac8d4b1af2b09f9df82befbc5714f9d1af38aa
+(cherry picked from commit a60d4d987f1bf9dc9d72031994a6aa2fb7b9f7e4)
+---
+ .../deployment/scriptlets/instance_layout.py       | 281 +++++++++++----------
+ 1 file changed, 142 insertions(+), 139 deletions(-)
+
+diff --git a/base/server/python/pki/server/deployment/scriptlets/instance_layout.py b/base/server/python/pki/server/deployment/scriptlets/instance_layout.py
+index a9a2840..fc08fe1 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/instance_layout.py
++++ b/base/server/python/pki/server/deployment/scriptlets/instance_layout.py
+@@ -41,159 +41,162 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+         config.pki_log.info(log.INSTANCE_SPAWN_1, __name__,
+                             extra=config.PKI_INDENTATION_LEVEL_1)
+ 
+-        # if this is the first subsystem
+-        if len(deployer.instance.tomcat_instance_subsystems()) == 1:
+-
+-            # establish instance logs
+-            deployer.directory.create(deployer.mdict['pki_instance_log_path'])
++        # if this is not the first subsystem, skip
++        if len(deployer.instance.tomcat_instance_subsystems()) != 1:
++            return
+ 
+-            # copy /usr/share/pki/server/conf tree into
+-            # /var/lib/pki/<instance>/conf
+-            # except common ldif files and theme deployment descriptor
+-            deployer.directory.copy(
++        # establish instance logs
++        deployer.directory.create(deployer.mdict['pki_instance_log_path'])
++
++        # copy /usr/share/pki/server/conf tree into
++        # /var/lib/pki/<instance>/conf
++        # except common ldif files and theme deployment descriptor
++        deployer.directory.copy(
++            deployer.mdict['pki_source_server_path'],
++            deployer.mdict['pki_instance_configuration_path'],
++            ignore_cb=file_ignore_callback_src_server)
++
++        # Link /etc/pki/<instance>/logging.properties
++        # to /usr/share/pki/server/conf/logging.properties.
++        deployer.symlink.create(
++            os.path.join(deployer.mdict['pki_source_server_path'], "logging.properties"),
++            os.path.join(deployer.mdict['pki_instance_configuration_path'],
++                         "logging.properties"))
++
++        # create /etc/sysconfig/<instance>
++        deployer.file.copy_with_slot_substitution(
++            deployer.mdict['pki_source_tomcat_conf'],
++            deployer.mdict['pki_target_tomcat_conf_instance_id'],
++            uid=0, gid=0, overwrite_flag=True)
++
++        # create /var/lib/pki/<instance>/conf/tomcat.conf
++        deployer.file.copy_with_slot_substitution(
++            deployer.mdict['pki_source_tomcat_conf'],
++            deployer.mdict['pki_target_tomcat_conf'],
++            overwrite_flag=True)
++
++        # Deploy ROOT web application
++        deployer.deploy_webapp(
++            "ROOT",
++            os.path.join(
++                config.PKI_DEPLOYMENT_SOURCE_ROOT,
++                "server",
++                "webapps",
++                "ROOT"),
++            os.path.join(
++                deployer.mdict['pki_source_server_path'],
++                "Catalina",
++                "localhost",
++                "ROOT.xml"))
++
++        # Deploy pki web application which includes themes,
++        # admin templates, and JS libraries
++        deployer.deploy_webapp(
++            "pki",
++            os.path.join(
++                config.PKI_DEPLOYMENT_SOURCE_ROOT,
++                "server",
++                "webapps",
++                "pki"),
++            os.path.join(
+                 deployer.mdict['pki_source_server_path'],
+-                deployer.mdict['pki_instance_configuration_path'],
+-                ignore_cb=file_ignore_callback_src_server)
++                "Catalina",
++                "localhost",
++                "pki.xml"))
+ 
+-            # Link /etc/pki/<instance>/logging.properties
+-            # to /usr/share/pki/server/conf/logging.properties.
++        # Create Tomcat instance library
++        deployer.directory.create(deployer.mdict['pki_instance_lib'])
++        for name in os.listdir(deployer.mdict['pki_tomcat_lib_path']):
+             deployer.symlink.create(
+-                os.path.join(deployer.mdict['pki_source_server_path'], "logging.properties"),
+-                os.path.join(deployer.mdict['pki_instance_configuration_path'],
+-                             "logging.properties"))
+-
+-            # create /etc/sysconfig/<instance>
+-            deployer.file.copy_with_slot_substitution(
+-                deployer.mdict['pki_source_tomcat_conf'],
+-                deployer.mdict['pki_target_tomcat_conf_instance_id'],
+-                uid=0, gid=0, overwrite_flag=True)
+-
+-            # create /var/lib/pki/<instance>/conf/tomcat.conf
+-            deployer.file.copy_with_slot_substitution(
+-                deployer.mdict['pki_source_tomcat_conf'],
+-                deployer.mdict['pki_target_tomcat_conf'],
+-                overwrite_flag=True)
+-
+-            # Deploy ROOT web application
+-            deployer.deploy_webapp(
+-                "ROOT",
+-                os.path.join(
+-                    config.PKI_DEPLOYMENT_SOURCE_ROOT,
+-                    "server",
+-                    "webapps",
+-                    "ROOT"),
+-                os.path.join(
+-                    deployer.mdict['pki_source_server_path'],
+-                    "Catalina",
+-                    "localhost",
+-                    "ROOT.xml"))
+-
+-            # Deploy pki web application which includes themes,
+-            # admin templates, and JS libraries
+-            deployer.deploy_webapp(
+-                "pki",
+                 os.path.join(
+-                    config.PKI_DEPLOYMENT_SOURCE_ROOT,
+-                    "server",
+-                    "webapps",
+-                    "pki"),
++                    deployer.mdict['pki_tomcat_lib_path'],
++                    name),
+                 os.path.join(
+-                    deployer.mdict['pki_source_server_path'],
+-                    "Catalina",
+-                    "localhost",
+-                    "pki.xml"))
+-
+-            # Create Tomcat instance library
+-            deployer.directory.create(deployer.mdict['pki_instance_lib'])
+-            for name in os.listdir(deployer.mdict['pki_tomcat_lib_path']):
+-                deployer.symlink.create(
+-                    os.path.join(
+-                        deployer.mdict['pki_tomcat_lib_path'],
+-                        name),
+-                    os.path.join(
+-                        deployer.mdict['pki_instance_lib'],
+-                        name))
+-
+-            # Link /var/lib/pki/<instance>/lib/log4j.properties
+-            # to /usr/share/pki/server/conf/log4j.properties.
+-            deployer.symlink.create(
+-                os.path.join(deployer.mdict['pki_source_server_path'],
+-                             "log4j.properties"),
+-                deployer.mdict['pki_instance_lib_log4j_properties'])
+-
+-            # Link /var/lib/pki/<instance>/common to /usr/share/pki/server/common
+-            deployer.symlink.create(
+-                '/usr/share/pki/server/common',
+-                deployer.mdict['pki_tomcat_common_path'])
+-
+-            deployer.directory.create(deployer.mdict['pki_tomcat_tmpdir_path'])
+-
+-            deployer.directory.create(deployer.mdict['pki_tomcat_work_path'])
+-            deployer.directory.create(
+-                deployer.mdict['pki_tomcat_work_catalina_path'])
+-            deployer.directory.create(
+-                deployer.mdict['pki_tomcat_work_catalina_host_path'])
+-            deployer.directory.create(
+-                deployer.mdict['pki_tomcat_work_catalina_host_run_path'])
+-            deployer.directory.create(
+-                deployer.mdict['pki_tomcat_work_catalina_host_subsystem_path'])
+-            # establish Tomcat instance logs
+-            # establish Tomcat instance registry
+-            # establish Tomcat instance convenience symbolic links
+-            deployer.symlink.create(
+-                deployer.mdict['pki_tomcat_bin_path'],
+-                deployer.mdict['pki_tomcat_bin_link'])
+-            deployer.symlink.create(
+-                deployer.mdict['pki_tomcat_systemd'],
+-                deployer.mdict['pki_instance_systemd_link'],
+-                uid=0, gid=0)
+-
+-            # establish shared NSS security databases for this instance
+-            deployer.directory.create(deployer.mdict['pki_database_path'])
+-            # establish instance convenience symbolic links
+-            deployer.symlink.create(
+-                deployer.mdict['pki_database_path'],
+-                deployer.mdict['pki_instance_database_link'])
+-            deployer.symlink.create(
+-                deployer.mdict['pki_instance_configuration_path'],
+-                deployer.mdict['pki_instance_conf_link'])
+-            deployer.symlink.create(
+-                deployer.mdict['pki_instance_log_path'],
+-                deployer.mdict['pki_instance_logs_link'])
+-
+-            # create Tomcat instance systemd service link
+-            deployer.symlink.create(deployer.mdict['pki_systemd_service'],
+-                                    deployer.mdict['pki_systemd_service_link'])
++                    deployer.mdict['pki_instance_lib'],
++                    name))
++
++        # Link /var/lib/pki/<instance>/lib/log4j.properties
++        # to /usr/share/pki/server/conf/log4j.properties.
++        deployer.symlink.create(
++            os.path.join(deployer.mdict['pki_source_server_path'],
++                         "log4j.properties"),
++            deployer.mdict['pki_instance_lib_log4j_properties'])
++
++        # Link /var/lib/pki/<instance>/common to /usr/share/pki/server/common
++        deployer.symlink.create(
++            '/usr/share/pki/server/common',
++            deployer.mdict['pki_tomcat_common_path'])
++
++        deployer.directory.create(deployer.mdict['pki_tomcat_tmpdir_path'])
++
++        deployer.directory.create(deployer.mdict['pki_tomcat_work_path'])
++        deployer.directory.create(
++            deployer.mdict['pki_tomcat_work_catalina_path'])
++        deployer.directory.create(
++            deployer.mdict['pki_tomcat_work_catalina_host_path'])
++        deployer.directory.create(
++            deployer.mdict['pki_tomcat_work_catalina_host_run_path'])
++        deployer.directory.create(
++            deployer.mdict['pki_tomcat_work_catalina_host_subsystem_path'])
++        # establish Tomcat instance logs
++        # establish Tomcat instance registry
++        # establish Tomcat instance convenience symbolic links
++        deployer.symlink.create(
++            deployer.mdict['pki_tomcat_bin_path'],
++            deployer.mdict['pki_tomcat_bin_link'])
++        deployer.symlink.create(
++            deployer.mdict['pki_tomcat_systemd'],
++            deployer.mdict['pki_instance_systemd_link'],
++            uid=0, gid=0)
++
++        # establish shared NSS security databases for this instance
++        deployer.directory.create(deployer.mdict['pki_database_path'])
++        # establish instance convenience symbolic links
++        deployer.symlink.create(
++            deployer.mdict['pki_database_path'],
++            deployer.mdict['pki_instance_database_link'])
++        deployer.symlink.create(
++            deployer.mdict['pki_instance_configuration_path'],
++            deployer.mdict['pki_instance_conf_link'])
++        deployer.symlink.create(
++            deployer.mdict['pki_instance_log_path'],
++            deployer.mdict['pki_instance_logs_link'])
++
++        # create Tomcat instance systemd service link
++        deployer.symlink.create(deployer.mdict['pki_systemd_service'],
++                                deployer.mdict['pki_systemd_service_link'])
+ 
+     def destroy(self, deployer):
+ 
+         config.pki_log.info(log.INSTANCE_DESTROY_1, __name__,
+                             extra=config.PKI_INDENTATION_LEVEL_1)
+ 
+-        if len(deployer.instance.tomcat_instance_subsystems()) == 0:
+-
+-            # remove Tomcat instance systemd service link
+-            deployer.symlink.delete(deployer.mdict['pki_systemd_service_link'])
++        # if this is not the last subsystem, skip
++        if len(deployer.instance.tomcat_instance_subsystems()) != 0:
++            return
+ 
+-            # remove Tomcat instance base
+-            deployer.directory.delete(deployer.mdict['pki_instance_path'])
+-            # remove Tomcat instance logs
+-            deployer.directory.delete(deployer.mdict['pki_instance_log_path'])
+-            # remove shared NSS security database path for this instance
+-            deployer.directory.delete(deployer.mdict['pki_database_path'])
+-            # remove Tomcat instance configuration
+-            deployer.directory.delete(
+-                deployer.mdict['pki_instance_configuration_path'])
+-            # remove PKI 'tomcat.conf' instance file
+-            deployer.file.delete(
+-                deployer.mdict['pki_target_tomcat_conf_instance_id'])
+-            # remove Tomcat instance registry
++        # remove Tomcat instance systemd service link
++        deployer.symlink.delete(deployer.mdict['pki_systemd_service_link'])
++
++        # remove Tomcat instance base
++        deployer.directory.delete(deployer.mdict['pki_instance_path'])
++        # remove Tomcat instance logs
++        deployer.directory.delete(deployer.mdict['pki_instance_log_path'])
++        # remove shared NSS security database path for this instance
++        deployer.directory.delete(deployer.mdict['pki_database_path'])
++        # remove Tomcat instance configuration
++        deployer.directory.delete(
++            deployer.mdict['pki_instance_configuration_path'])
++        # remove PKI 'tomcat.conf' instance file
++        deployer.file.delete(
++            deployer.mdict['pki_target_tomcat_conf_instance_id'])
++        # remove Tomcat instance registry
++        deployer.directory.delete(
++            deployer.mdict['pki_instance_registry_path'])
++        # remove Tomcat PKI registry (if empty)
++        if deployer.instance.tomcat_instances() == 0:
+             deployer.directory.delete(
+-                deployer.mdict['pki_instance_registry_path'])
+-            # remove Tomcat PKI registry (if empty)
+-            if deployer.instance.tomcat_instances() == 0:
+-                deployer.directory.delete(
+-                    deployer.mdict['pki_instance_type_registry_path'])
++                deployer.mdict['pki_instance_type_registry_path'])
+ 
+ 
+ # Callback only when the /usr/share/pki/server/conf directory
+-- 
+1.8.3.1
+
+
+From 658264176174a011c5ed5bdbad763554bdc6853d Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Tue, 5 Dec 2017 18:09:57 +0100
+Subject: Refactored configuration.py.
+
+The code that updates the cert parameter in configure_system_cert()
+has been moved into a separate update_system_cert() method to
+allow reusability.
+
+https://pagure.io/dogtagpki/issue/2560
+
+Change-Id: Ic59edf2398eca1f46037746954ced20343602580
+(cherry picked from commit a490c258c5ba5c5f3995a9bf21fe7a46b5a63002)
+---
+ .../server/deployment/scriptlets/configuration.py  | 96 ++++++++++++++--------
+ 1 file changed, 60 insertions(+), 36 deletions(-)
+
+diff --git a/base/server/python/pki/server/deployment/scriptlets/configuration.py b/base/server/python/pki/server/deployment/scriptlets/configuration.py
+index 1870505..0fe4191 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/configuration.py
++++ b/base/server/python/pki/server/deployment/scriptlets/configuration.py
+@@ -619,69 +619,75 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+ 
+         self.import_cert_chain(deployer, nssdb)
+ 
+-    def configure_system_cert(self, deployer, nssdb, subsystem, tag):
++    def configure_system_cert(self, deployer, subsystem, tag):
+ 
+         cert_id = self.get_cert_id(subsystem, tag)
+-
+         nickname = deployer.mdict['pki_%s_nickname' % cert_id]
+-        cert_data = nssdb.get_cert(
+-            nickname=nickname,
+-            output_format='base64')
+ 
+         subsystem.config['%s.%s.nickname' % (subsystem.name, tag)] = nickname
+         subsystem.config['%s.%s.tokenname' % (subsystem.name, tag)] = \
+             deployer.mdict['pki_%s_token' % cert_id]
+-        subsystem.config['%s.%s.cert' % (subsystem.name, tag)] = cert_data
+         subsystem.config['%s.%s.defaultSigningAlgorithm' % (subsystem.name, tag)] = \
+             deployer.mdict['pki_%s_key_algorithm' % cert_id]
+ 
+-    def configure_ca_signing_cert(self, deployer, nssdb, subsystem):
++    def update_system_cert(self, deployer, nssdb, subsystem, tag):
++
++        cert_id = self.get_cert_id(subsystem, tag)
++        nickname = deployer.mdict['pki_%s_nickname' % cert_id]
++
++        cert_data = nssdb.get_cert(
++            nickname=nickname,
++            output_format='base64')
++
++        subsystem.config['%s.%s.cert' % (subsystem.name, tag)] = cert_data
++
++    def configure_ca_signing_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring ca_signing certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'signing')
++        self.configure_system_cert(deployer, subsystem, 'signing')
+ 
+         nickname = deployer.mdict['pki_ca_signing_nickname']
+         subsystem.config['ca.signing.cacertnickname'] = nickname
+ 
+-    def configure_ca_ocsp_signing_cert(self, deployer, nssdb, subsystem):
++    def configure_ca_ocsp_signing_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring ca_ocsp_signing certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'ocsp_signing')
++        self.configure_system_cert(deployer, subsystem, 'ocsp_signing')
+ 
+-    def configure_sslserver_cert(self, deployer, nssdb, subsystem):
++    def configure_sslserver_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring sslserver certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'sslserver')
++        self.configure_system_cert(deployer, subsystem, 'sslserver')
+ 
+-    def configure_subsystem_cert(self, deployer, nssdb, subsystem):
++    def configure_subsystem_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring subsystem certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'subsystem')
++        self.configure_system_cert(deployer, subsystem, 'subsystem')
+ 
+-    def configure_audit_signing_cert(self, deployer, nssdb, subsystem):
++    def configure_audit_signing_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring audit_signing certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'audit_signing')
++        self.configure_system_cert(deployer, subsystem, 'audit_signing')
+ 
+-    def configure_admin_cert(self, deployer, subsystem):
++    def update_admin_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+-            "configuring admin certificate",
++            "updating admin certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+         client_nssdb = pki.nssdb.NSSDatabase(
+@@ -699,48 +705,65 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+         finally:
+             client_nssdb.close()
+ 
+-    def configure_kra_storage_cert(self, deployer, nssdb, subsystem):
++    def configure_kra_storage_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring kra_storage certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'storage')
++        self.configure_system_cert(deployer, subsystem, 'storage')
+ 
+-    def configure_kra_transport_cert(self, deployer, nssdb, subsystem):
++    def configure_kra_transport_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring kra_transport certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'transport')
++        self.configure_system_cert(deployer, subsystem, 'transport')
+ 
+-    def configure_ocsp_signing_cert(self, deployer, nssdb, subsystem):
++    def configure_ocsp_signing_cert(self, deployer, subsystem):
+ 
+         config.pki_log.info(
+             "configuring ocsp_signing certificate",
+             extra=config.PKI_INDENTATION_LEVEL_2)
+ 
+-        self.configure_system_cert(deployer, nssdb, subsystem, 'signing')
++        self.configure_system_cert(deployer, subsystem, 'signing')
++
++    def configure_system_certs(self, deployer, subsystem):
++
++        if subsystem.name == 'ca':
++            self.configure_ca_signing_cert(deployer, subsystem)
++            self.configure_ca_ocsp_signing_cert(deployer, subsystem)
++
++        if subsystem.name == 'kra':
++            self.configure_kra_storage_cert(deployer, subsystem)
++            self.configure_kra_transport_cert(deployer, subsystem)
++
++        if subsystem.name == 'ocsp':
++            self.configure_ocsp_signing_cert(deployer, subsystem)
++
++        self.configure_sslserver_cert(deployer, subsystem)
++        self.configure_subsystem_cert(deployer, subsystem)
++        self.configure_audit_signing_cert(deployer, subsystem)
+ 
+-    def configure_system_certs(self, deployer, nssdb, subsystem):
++    def update_system_certs(self, deployer, nssdb, subsystem):
+ 
+         if subsystem.name == 'ca':
+-            self.configure_ca_signing_cert(deployer, nssdb, subsystem)
+-            self.configure_ca_ocsp_signing_cert(deployer, nssdb, subsystem)
++            self.update_system_cert(deployer, nssdb, subsystem, 'signing')
++            self.update_system_cert(deployer, nssdb, subsystem, 'ocsp_signing')
+ 
+         if subsystem.name == 'kra':
+-            self.configure_kra_storage_cert(deployer, nssdb, subsystem)
+-            self.configure_kra_transport_cert(deployer, nssdb, subsystem)
+-            self.configure_admin_cert(deployer, subsystem)
++            self.update_system_cert(deployer, nssdb, subsystem, 'storage')
++            self.update_system_cert(deployer, nssdb, subsystem, 'transport')
++            self.update_admin_cert(deployer, subsystem)
+ 
+         if subsystem.name == 'ocsp':
+-            self.configure_ocsp_signing_cert(deployer, nssdb, subsystem)
+-            self.configure_admin_cert(deployer, subsystem)
++            self.update_system_cert(deployer, nssdb, subsystem, 'signing')
++            self.update_admin_cert(deployer, subsystem)
+ 
+-        self.configure_sslserver_cert(deployer, nssdb, subsystem)
+-        self.configure_subsystem_cert(deployer, nssdb, subsystem)
+-        self.configure_audit_signing_cert(deployer, nssdb, subsystem)
++        self.update_system_cert(deployer, nssdb, subsystem, 'sslserver')
++        self.update_system_cert(deployer, nssdb, subsystem, 'subsystem')
++        self.update_system_cert(deployer, nssdb, subsystem, 'audit_signing')
+ 
+     def validate_system_cert(self, deployer, nssdb, subsystem, tag):
+ 
+@@ -1007,7 +1030,8 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+                 self.import_system_cert_requests(deployer, subsystem)
+                 self.import_system_certs(deployer, nssdb, subsystem)
+ 
+-                self.configure_system_certs(deployer, nssdb, subsystem)
++                self.configure_system_certs(deployer, subsystem)
++                self.update_system_certs(deployer, nssdb, subsystem)
+                 subsystem.save()
+ 
+                 self.validate_system_certs(deployer, nssdb, subsystem)
+-- 
+1.8.3.1
+
+
+From f9dc3ed48ec7ce33b1160df7de49032e53db54a0 Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Tue, 5 Dec 2017 02:20:18 +0100
+Subject: Removed obsolete JSS connector parameters.
+
+The following JSS connector parameters are obsolete:
+* sslOptions
+* ssl2Ciphers
+* ssl3Ciphers
+* tlsCiphers
+
+They are ignored when the "range" parameters are present, so they
+have been removed from server.xml templates.
+
+https://pagure.io/dogtagpki/issue/2630
+
+Change-Id: I966add1d919a26317929a69a53b9e56cb0134b29
+(cherry picked from commit bfaa447d9ecaaf5fd7156cc1bcbdf36036122de2)
+---
+ base/server/config/pkislots.cfg                    |  4 --
+ .../python/pki/server/deployment/pkiparser.py      | 48 ----------------------
+ base/server/tomcat7/conf/server.xml                |  8 ----
+ base/server/tomcat8/conf/server.xml                |  8 ----
+ 4 files changed, 68 deletions(-)
+
+diff --git a/base/server/config/pkislots.cfg b/base/server/config/pkislots.cfg
+index d806c1f..0f07e19 100644
+--- a/base/server/config/pkislots.cfg
++++ b/base/server/config/pkislots.cfg
+@@ -74,10 +74,6 @@ TOMCAT_INSTANCE_COMMON_LIB_SLOT=[TOMCAT_INSTANCE_COMMON_LIB]
+ TOMCAT_LOG_DIR_SLOT=[TOMCAT_LOG_DIR]
+ TOMCAT_PIDFILE_SLOT=[TOMCAT_PIDFILE]
+ TOMCAT_SERVER_PORT_SLOT=[TOMCAT_SERVER_PORT]
+-TOMCAT_SSL2_CIPHERS_SLOT=[TOMCAT_SSL2_CIPHERS]
+-TOMCAT_SSL3_CIPHERS_SLOT=[TOMCAT_SSL3_CIPHERS]
+-TOMCAT_SSL_OPTIONS_SLOT=[TOMCAT_SSL_OPTIONS]
+-TOMCAT_TLS_CIPHERS_SLOT=[TOMCAT_TLS_CIPHERS]
+ TOMCAT_SSL_VERSION_RANGE_STREAM_SLOT=[TOMCAT_SSL_VERSION_RANGE_STREAM]
+ TOMCAT_SSL_VERSION_RANGE_DATAGRAM_SLOT=[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]
+ TOMCAT_SSL_RANGE_CIPHERS_SLOT=[TOMCAT_SSL_RANGE_CIPHERS]
+diff --git a/base/server/python/pki/server/deployment/pkiparser.py b/base/server/python/pki/server/deployment/pkiparser.py
+index c95fed1..e924908 100644
+--- a/base/server/python/pki/server/deployment/pkiparser.py
++++ b/base/server/python/pki/server/deployment/pkiparser.py
+@@ -1148,54 +1148,6 @@ class PKIConfigParser:
+                     "-TLS_RSA_WITH_3DES_EDE_CBC_SHA," + \
+                     "+TLS_RSA_WITH_AES_128_CBC_SHA," + \
+                     "+TLS_RSA_WITH_AES_256_CBC_SHA"
+-            self.mdict['TOMCAT_SSL2_CIPHERS_SLOT'] = \
+-                "-SSL2_RC4_128_WITH_MD5," + \
+-                "-SSL2_RC4_128_EXPORT40_WITH_MD5," + \
+-                "-SSL2_RC2_128_CBC_WITH_MD5," + \
+-                "-SSL2_RC2_128_CBC_EXPORT40_WITH_MD5," + \
+-                "-SSL2_DES_64_CBC_WITH_MD5," + \
+-                "-SSL2_DES_192_EDE3_CBC_WITH_MD5"
+-            self.mdict['TOMCAT_SSL3_CIPHERS_SLOT'] = \
+-                "-SSL3_FORTEZZA_DMS_WITH_NULL_SHA," + \
+-                "-SSL3_FORTEZZA_DMS_WITH_RC4_128_SHA," + \
+-                "+SSL3_RSA_WITH_RC4_128_SHA," + \
+-                "-SSL3_RSA_EXPORT_WITH_RC4_40_MD5," + \
+-                "-SSL3_RSA_WITH_3DES_EDE_CBC_SHA," + \
+-                "-SSL3_RSA_WITH_DES_CBC_SHA," + \
+-                "-SSL3_RSA_EXPORT_WITH_RC2_CBC_40_MD5," + \
+-                "-SSL3_FORTEZZA_DMS_WITH_FORTEZZA_CBC_SHA," + \
+-                "-SSL_RSA_FIPS_WITH_DES_CBC_SHA," + \
+-                "-SSL_RSA_FIPS_WITH_3DES_EDE_CBC_SHA," + \
+-                "-SSL3_RSA_WITH_NULL_MD5," + \
+-                "-TLS_RSA_EXPORT1024_WITH_RC4_56_SHA," + \
+-                "-TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA," + \
+-                "+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA"
+-            self.mdict['TOMCAT_SSL_OPTIONS_SLOT'] = \
+-                "ssl2=false," + \
+-                "ssl3=false," + \
+-                "tls=true"
+-            self.mdict['TOMCAT_TLS_CIPHERS_SLOT'] = \
+-                "-TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA," + \
+-                "-TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA," + \
+-                "-TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA," + \
+-                "+TLS_ECDH_RSA_WITH_AES_128_CBC_SHA," + \
+-                "+TLS_ECDH_RSA_WITH_AES_256_CBC_SHA," + \
+-                "-TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA," + \
+-                "+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA," + \
+-                "-TLS_RSA_WITH_3DES_EDE_CBC_SHA," + \
+-                "+TLS_RSA_WITH_AES_128_CBC_SHA," + \
+-                "+TLS_RSA_WITH_AES_256_CBC_SHA," + \
+-                "-TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA," + \
+-                "+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA," + \
+-                "-TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA," + \
+-                "-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA," + \
+-                "-TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA," + \
+-                "-TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA," + \
+-                "+TLS_DHE_DSS_WITH_AES_128_CBC_SHA," + \
+-                "+TLS_DHE_DSS_WITH_AES_256_CBC_SHA," + \
+-                "-TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA," + \
+-                "+TLS_DHE_RSA_WITH_AES_128_CBC_SHA," + \
+-                "+TLS_DHE_RSA_WITH_AES_256_CBC_SHA"
+ 
+             if self.deployer.architecture == 64:
+                 self.mdict['NUXWDOG_JNI_PATH_SLOT'] = (
+diff --git a/base/server/tomcat7/conf/server.xml b/base/server/tomcat7/conf/server.xml
+index 2db8bca..dae513d 100644
+--- a/base/server/tomcat7/conf/server.xml
++++ b/base/server/tomcat7/conf/server.xml
+@@ -143,10 +143,6 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+               'ocspTimeout'
+               'strictCiphers'
+               'clientauth' (ALL lowercase)
+-              'sslOptions'
+-              'ssl2Ciphers'
+-              'ssl3Ciphers'
+-              'tlsCiphers'
+               'sslVersionRangeStream'
+               'sslVersionRangeDatagram'
+               'sslRangeCiphers'
+@@ -201,10 +197,6 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+            ocspTimeout="10"
+            strictCiphers="true"
+            clientAuth="[PKI_AGENT_CLIENTAUTH]"
+-           sslOptions="[TOMCAT_SSL_OPTIONS]"
+-           ssl2Ciphers="[TOMCAT_SSL2_CIPHERS]"
+-           ssl3Ciphers="[TOMCAT_SSL3_CIPHERS]"
+-           tlsCiphers="[TOMCAT_TLS_CIPHERS]"
+            sslVersionRangeStream="[TOMCAT_SSL_VERSION_RANGE_STREAM]"
+            sslVersionRangeDatagram="[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]"
+            sslRangeCiphers="[TOMCAT_SSL_RANGE_CIPHERS]"
+diff --git a/base/server/tomcat8/conf/server.xml b/base/server/tomcat8/conf/server.xml
+index 64b1b00..d08e3b1 100644
+--- a/base/server/tomcat8/conf/server.xml
++++ b/base/server/tomcat8/conf/server.xml
+@@ -162,10 +162,6 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+               'ocspTimeout'
+               'strictCiphers'
+               'clientauth' (ALL lowercase)
+-              'sslOptions'
+-              'ssl2Ciphers'
+-              'ssl3Ciphers'
+-              'tlsCiphers'
+               'sslVersionRangeStream'
+               'sslVersionRangeDatagram'
+               'sslRangeCiphers'
+@@ -227,10 +223,6 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+            ocspTimeout="10"
+            strictCiphers="true"
+            clientAuth="[PKI_AGENT_CLIENTAUTH]"
+-           sslOptions="[TOMCAT_SSL_OPTIONS]"
+-           ssl2Ciphers="[TOMCAT_SSL2_CIPHERS]"
+-           ssl3Ciphers="[TOMCAT_SSL3_CIPHERS]"
+-           tlsCiphers="[TOMCAT_TLS_CIPHERS]"
+            sslVersionRangeStream="[TOMCAT_SSL_VERSION_RANGE_STREAM]"
+            sslVersionRangeDatagram="[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]"
+            sslRangeCiphers="[TOMCAT_SSL_RANGE_CIPHERS]"
+-- 
+1.8.3.1
+
+
+From 5d79128fc6834737bf2f93b8d9e95296154e184f Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Tue, 5 Dec 2017 08:15:51 +0100
+Subject: Added pki-server cert-export CLI.
+
+A new pki-server cert-export CLI has been added to export a system
+certificate with its key and certificate chain into a PKCS #12 file.
+This is needed to export the SSL server certificate to be used by
+Tomcat's built-in SSL connector.
+
+https://pagure.io/dogtagpki/issue/2560
+
+Change-Id: Ic10af305bfb25c21641e78ef615533f70f9799b1
+(cherry picked from commit 33529f21f650a18d0ef80333158a6fd63812f770)
+---
+ base/server/python/pki/server/cli/cert.py | 201 ++++++++++++++++++++++++++++++
+ 1 file changed, 201 insertions(+)
+
+diff --git a/base/server/python/pki/server/cli/cert.py b/base/server/python/pki/server/cli/cert.py
+index 0757b36..0885348 100644
+--- a/base/server/python/pki/server/cli/cert.py
++++ b/base/server/python/pki/server/cli/cert.py
+@@ -22,6 +22,7 @@ from __future__ import absolute_import
+ from __future__ import print_function
+ 
+ import getopt
++import getpass
+ import sys
+ import tempfile
+ import os
+@@ -45,6 +46,7 @@ class CertCLI(pki.cli.CLI):
+         self.add_module(CertUpdateCLI())
+         self.add_module(CertCreateCLI())
+         self.add_module(CertImportCLI())
++        self.add_module(CertExportCLI())
+ 
+     @staticmethod
+     def print_system_cert(cert, show_all=False):
+@@ -870,3 +872,202 @@ class CertImportCLI(pki.cli.CLI):
+ 
+         finally:
+             nssdb.close()
++
++
++class CertExportCLI(pki.cli.CLI):
++    def __init__(self):
++        super(CertExportCLI, self).__init__(
++            'export', 'Export system certificate.')
++
++    def usage(self):  # flake8: noqa
++        print('Usage: pki-server cert-export [OPTIONS] <Cert ID>')
++        print()
++        print('Specify at least one output file: certificate, CSR, or PKCS #12.')
++        print()
++        print('  -i, --instance <instance ID>       Instance ID (default: pki-tomcat).')
++        print('      --cert-file <path>             Output file to store the exported certificate in PEM format.')
++        print('      --csr-file <path>              Output file to store the exported CSR in PEM format.')
++        print('      --pkcs12-file <path>           Output file to store the exported certificate and key in PKCS #12 format.')
++        print('      --pkcs12-password <password>   Password for the PKCS #12 file.')
++        print('      --pkcs12-password-file <path>  Input file containing the password for the PKCS #12 file.')
++        print('      --append                       Append into an existing PKCS #12 file.')
++        print('      --no-trust-flags               Do not include trust flags')
++        print('      --no-key                       Do not include private key')
++        print('      --no-chain                     Do not include certificate chain')
++        print('  -v, --verbose                      Run in verbose mode.')
++        print('      --help                         Show help message.')
++        print()
++
++    def execute(self, argv):
++        try:
++            opts, args = getopt.gnu_getopt(argv, 'i:v', [
++                'instance=', 'cert-file=', 'csr-file=',
++                'pkcs12-file=', 'pkcs12-password=', 'pkcs12-password-file=',
++                'append', 'no-trust-flags', 'no-key', 'no-chain',
++                'verbose', 'debug', 'help'])
++
++        except getopt.GetoptError as e:
++            print('ERROR: ' + str(e))
++            self.usage()
++            sys.exit(1)
++
++        instance_name = 'pki-tomcat'
++        cert_file = None
++        csr_file = None
++        pkcs12_file = None
++        pkcs12_password = None
++        pkcs12_password_file = None
++        append = False
++        include_trust_flags = True
++        include_key = True
++        include_chain = True
++        debug = False
++
++        for o, a in opts:
++            if o in ('-i', '--instance'):
++                instance_name = a
++
++            elif o == '--cert-file':
++                cert_file = a
++
++            elif o == '--csr-file':
++                csr_file = a
++
++            elif o == '--pkcs12-file':
++                pkcs12_file = a
++
++            elif o == '--pkcs12-password':
++                pkcs12_password = a
++
++            elif o == '--pkcs12-password-file':
++                pkcs12_password_file = a
++
++            elif o == '--append':
++                append = True
++
++            elif o == '--no-trust-flags':
++                include_trust_flags = False
++
++            elif o == '--no-key':
++                include_key = False
++
++            elif o == '--no-chain':
++                include_chain = False
++
++            elif o in ('-v', '--verbose'):
++                self.set_verbose(True)
++
++            elif o == '--debug':
++                debug = True
++
++            elif o == '--help':
++                self.usage()
++                sys.exit()
++
++            else:
++                self.print_message('ERROR: unknown option ' + o)
++                self.usage()
++                sys.exit(1)
++
++        if len(args) < 1:
++            print('ERROR: missing cert ID')
++            self.usage()
++            sys.exit(1)
++
++        cert_id = args[0]
++
++        if not (cert_file or csr_file or pkcs12_file):
++            print('ERROR: missing output file')
++            self.usage()
++            sys.exit(1)
++
++        instance = server.PKIInstance(instance_name)
++
++        if not instance.is_valid():
++            print('ERROR: Invalid instance %s.' % instance_name)
++            sys.exit(1)
++
++        instance.load()
++
++        subsystem_name = None
++        cert_tag = cert_id
++
++        if cert_id != 'sslserver' and cert_id != 'subsystem':
++            # To avoid ambiguity where cert ID can contain more than 1 _, we limit to one split
++            temp_cert_identify = cert_id.split('_', 1)
++            subsystem_name = temp_cert_identify[0]
++            cert_tag = temp_cert_identify[1]
++
++        # If cert ID is instance specific, get it from first subsystem
++        if not subsystem_name:
++            subsystem_name = instance.subsystems[0].name
++
++        subsystem = instance.get_subsystem(subsystem_name)
++
++        if not subsystem:
++            print('ERROR: No %s subsystem in instance.'
++                  '%s.' % (subsystem_name, instance_name))
++            sys.exit(1)
++
++        nssdb = instance.open_nssdb()
++
++        try:
++            cert = subsystem.get_subsystem_cert(cert_tag)
++
++            if not cert:
++                print('ERROR: missing %s certificate' % cert_id)
++                self.usage()
++                sys.exit(1)
++
++            if cert_file:
++
++                if self.verbose:
++                    print('Exporting %s certificate into %s.' % (cert_id, cert_file))
++
++                cert_data = cert.get('data', None)
++                if cert_data is None:
++                    print("ERROR: Unable to find certificate data for %s" % cert_id)
++                    sys.exit(1)
++
++                cert_data = pki.nssdb.convert_cert(cert_data, 'base64', 'pem')
++                with open(cert_file, 'w') as f:
++                    f.write(cert_data)
++
++            if csr_file:
++
++                if self.verbose:
++                    print('Exporting %s CSR into %s.' % (cert_id, csr_file))
++
++                cert_request = cert.get('request', None)
++                if cert_request is None:
++                    print("ERROR: Unable to find certificate request for %s" % cert_id)
++                    sys.exit(1)
++
++                csr_data = pki.nssdb.convert_csr(cert_request, 'base64', 'pem')
++                with open(csr_file, 'w') as f:
++                    f.write(csr_data)
++
++            if pkcs12_file:
++
++                if self.verbose:
++                    print('Exporting %s certificate and key into %s.' % (cert_id, pkcs12_file))
++
++                if not pkcs12_password and not pkcs12_password_file:
++                    pkcs12_password = getpass.getpass(prompt='Enter password for PKCS #12 file: ')
++
++                nicknames = []
++                nicknames.append(cert['nickname'])
++
++                nssdb.export_pkcs12(
++                    pkcs12_file=pkcs12_file,
++                    pkcs12_password=pkcs12_password,
++                    pkcs12_password_file=pkcs12_password_file,
++                    nicknames=nicknames,
++                    append=append,
++                    include_trust_flags=include_trust_flags,
++                    include_key=include_key,
++                    include_chain=include_chain,
++                    debug=debug)
++
++        finally:
++            nssdb.close()
+-- 
+1.8.3.1
+
+
+From 0f379b99a6397319962220d9fdbea8fb384db5a3 Mon Sep 17 00:00:00 2001
+From: "Endi S. Dewata" <edewata@redhat.com>
+Date: Wed, 6 Dec 2017 19:15:11 +0100
+Subject: Updated logger for Tomcat-related classes.
+
+The Tomcat-related classes have been modified to use JUL logging
+framework.
+
+https://pagure.io/dogtagpki/issue/2560
+
+Change-Id: Ifb0fb61e3018940f27cd71f584cbeae2fc9e707c
+(cherry picked from commit 9328085e1dae988f64445812af5d07027797fe92)
+---
+ .../cms/tomcat/AbstractPKIAuthenticator.java       | 35 +++++++++++-----------
+ .../cms/tomcat/ExternalAuthenticationValve.java    | 19 +++++++-----
+ .../src/com/netscape/cms/tomcat/PKIListener.java   | 27 +++++++++--------
+ 3 files changed, 43 insertions(+), 38 deletions(-)
+
+diff --git a/base/server/tomcat/src/com/netscape/cms/tomcat/AbstractPKIAuthenticator.java b/base/server/tomcat/src/com/netscape/cms/tomcat/AbstractPKIAuthenticator.java
+index f98377d..2a68a39 100644
+--- a/base/server/tomcat/src/com/netscape/cms/tomcat/AbstractPKIAuthenticator.java
++++ b/base/server/tomcat/src/com/netscape/cms/tomcat/AbstractPKIAuthenticator.java
+@@ -20,15 +20,16 @@ package com.netscape.cms.tomcat;
+ 
+ import java.io.IOException;
+ import java.security.cert.X509Certificate;
++import java.util.logging.Logger;
+ 
+ import javax.servlet.http.HttpServletRequest;
+ import javax.servlet.http.HttpServletResponse;
+ import javax.servlet.http.HttpServletResponseWrapper;
+ 
++import org.apache.catalina.Authenticator;
+ import org.apache.catalina.Container;
+ import org.apache.catalina.Globals;
+ import org.apache.catalina.LifecycleException;
+-import org.apache.catalina.Authenticator;
+ import org.apache.catalina.authenticator.AuthenticatorBase;
+ import org.apache.catalina.authenticator.BasicAuthenticator;
+ import org.apache.catalina.authenticator.FormAuthenticator;
+@@ -40,6 +41,8 @@ import org.apache.catalina.connector.Request;
+  */
+ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+ 
++    final static Logger logger = Logger.getLogger(AbstractPKIAuthenticator.class.getName());
++
+     public final static String BASIC_AUTHENTICATOR = "BASIC";
+     public final static String FORM_AUTHENTICATOR = "FORM";
+ 
+@@ -49,7 +52,7 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+     AuthenticatorBase fallbackAuthenticator = new BasicAuthenticator();
+ 
+     public AbstractPKIAuthenticator() {
+-        log("Creating SSL authenticator with fallback");
++        logger.info("PKIAuthenticator: Creating " + getClass().getSimpleName());
+     }
+ 
+     public String getFallbackMethod() {
+@@ -57,7 +60,7 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+     }
+ 
+     public void setFallbackMethod(String fallbackMethod) {
+-        log("Fallback method: "+fallbackMethod);
++        logger.info("PKIAuthenticator: Fallback method: " + fallbackMethod);
+         this.fallbackMethod = fallbackMethod;
+ 
+         if (BASIC_AUTHENTICATOR.equalsIgnoreCase(fallbackMethod)) {
+@@ -74,25 +77,25 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+         boolean result;
+ 
+         if (certs != null && certs.length > 0) {
+-            log("Authenticate with client certificate authentication");
++            logger.info("PKIAuthenticator: Authenticate with client certificate authentication");
+             HttpServletResponseWrapper wrapper = new HttpServletResponseWrapper(response) {
+                 public void setHeader(String name, String value) {
+-                    log("SSL auth header: "+name+"="+value);
++                    logger.fine("PKIAuthenticator: SSL auth header: " + name + "=" + value);
+                 };
+                 public void sendError(int code) {
+-                    log("SSL auth return code: "+code);
++                    logger.fine("PKIAuthenticator: SSL auth return code: " + code);
+                 }
+             };
+             result = doSubAuthenticate(sslAuthenticator, request, wrapper);
+ 
+         } else {
+-            log("Authenticating with "+fallbackMethod+" authentication");
++            logger.info("PKIAuthenticator: Authenticating with " + fallbackMethod + " authentication");
+             HttpServletResponseWrapper wrapper = new HttpServletResponseWrapper(response) {
+                 public void setHeader(String name, String value) {
+-                    log("Fallback auth header: "+name+"="+value);
++                    logger.fine("PKIAuthenticator: Fallback auth header: " + name + "=" + value);
+                 };
+                 public void sendError(int code) {
+-                    log("Fallback auth return code: "+code);
++                    logger.fine("PKIAuthenticator: Fallback auth return code: " + code);
+                 }
+             };
+             result = doSubAuthenticate(fallbackAuthenticator, request, wrapper);
+@@ -101,7 +104,7 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+         if (result)
+             return true;
+ 
+-        log("Result: "+result);
++        logger.info("PKIAuthenticator: Result: " + result);
+         String realmName = doGetRealmName(request);
+         response.setHeader(AUTH_HEADER_NAME,
+             "Basic realm=\"" + (realmName == null ? REALM_NAME : realmName) + "\"");
+@@ -124,7 +127,7 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+ 
+     @Override
+     public void setContainer(Container container) {
+-        log("Setting container");
++        logger.fine("PKIAuthenticator: Setting container");
+         super.setContainer(container);
+         sslAuthenticator.setContainer(container);
+         fallbackAuthenticator.setContainer(container);
+@@ -132,7 +135,7 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+ 
+     @Override
+     protected void initInternal() throws LifecycleException {
+-        log("Initializing authenticators");
++        logger.fine("PKIAuthenticator: Initializing authenticators");
+ 
+         super.initInternal();
+ 
+@@ -145,7 +148,7 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+ 
+     @Override
+     public void startInternal() throws LifecycleException {
+-        log("Starting authenticators");
++        logger.fine("PKIAuthenticator: Starting authenticators");
+         super.startInternal();
+         sslAuthenticator.start();
+         fallbackAuthenticator.start();
+@@ -153,13 +156,9 @@ public abstract class AbstractPKIAuthenticator extends AuthenticatorBase {
+ 
+     @Override
+     public void stopInternal() throws LifecycleException {
+-        log("Stopping authenticators");
++        logger.fine("PKIAuthenticator: Stopping authenticators");
+         super.stopInternal();
+         sslAuthenticator.stop();
+         fallbackAuthenticator.stop();
+     }
+-
+-    public void log(String message) {
+-        System.out.println("SSLAuthenticatorWithFallback: "+message);
+-    }
+ }
+diff --git a/base/server/tomcat/src/com/netscape/cms/tomcat/ExternalAuthenticationValve.java b/base/server/tomcat/src/com/netscape/cms/tomcat/ExternalAuthenticationValve.java
+index 6bc570b..e162840 100644
+--- a/base/server/tomcat/src/com/netscape/cms/tomcat/ExternalAuthenticationValve.java
++++ b/base/server/tomcat/src/com/netscape/cms/tomcat/ExternalAuthenticationValve.java
+@@ -21,6 +21,8 @@ package com.netscape.cms.tomcat;
+ import java.io.IOException;
+ import java.security.Principal;
+ import java.util.ArrayList;
++import java.util.logging.Logger;
++
+ import javax.servlet.ServletException;
+ 
+ import org.apache.catalina.Session;
+@@ -30,13 +32,14 @@ import org.apache.catalina.valves.ValveBase;
+ 
+ public class ExternalAuthenticationValve extends ValveBase {
+ 
++    final static Logger logger = Logger.getLogger(ExternalAuthenticationValve.class.getName());
++
+     public void invoke(Request req, Response resp)
+             throws IOException, ServletException {
+-        System.out.println("ExternalAuthenticationValve; authType: "
+-                + req.getAuthType());
+-        System.out.println("ExternalAuthenticationValve; principal: "
+-                + req.getUserPrincipal());
+-        //System.out.println(req.getCoyoteRequest().getAttributes().toString());
++
++        logger.info("ExternalAuthenticationValve: authType: " + req.getAuthType());
++        logger.info("ExternalAuthenticationValve: principal: " + req.getUserPrincipal());
++        //logger.info("ExternalAuthenticationValve: attributes: " + req.getCoyoteRequest().getAttributes());
+ 
+         org.apache.coyote.Request coyoteReq = req.getCoyoteRequest();
+         Principal principal = req.getUserPrincipal();
+@@ -49,7 +52,7 @@ public class ExternalAuthenticationValve extends ValveBase {
+                 try {
+                     numGroups = new Integer(numGroupsStr);
+                 } catch (NumberFormatException e) {
+-                    System.out.println("ExternalAuthenticationValve: invalid REMOTE_USER_GROUP_N value: " + e);
++                    logger.warning("ExternalAuthenticationValve: invalid REMOTE_USER_GROUP_N value: " + e);
+                 }
+             }
+ 
+@@ -60,13 +63,13 @@ public class ExternalAuthenticationValve extends ValveBase {
+                 if (s != null && !s.isEmpty())
+                     groups.add(s);
+                 else
+-                    System.out.println("ExternalAuthenticationValve: missing or empty attribute: " + k);
++                    logger.warning("ExternalAuthenticationValve: missing or empty attribute: " + k);
+             }
+ 
+             // replace the principal
+             principal = new ExternalPrincipal(
+                 principal.getName(), null, groups, coyoteReq.getAttributes());
+-            System.out.println("ExternalAuthenticationValve: setting new principal: " + principal);
++            logger.info("ExternalAuthenticationValve: setting new principal: " + principal);
+             req.setUserPrincipal(principal);
+ 
+             // cache principal in session
+diff --git a/base/server/tomcat/src/com/netscape/cms/tomcat/PKIListener.java b/base/server/tomcat/src/com/netscape/cms/tomcat/PKIListener.java
+index 5d1d0db..b2ed4a9 100644
+--- a/base/server/tomcat/src/com/netscape/cms/tomcat/PKIListener.java
++++ b/base/server/tomcat/src/com/netscape/cms/tomcat/PKIListener.java
+@@ -19,6 +19,7 @@
+ package com.netscape.cms.tomcat;
+ 
+ import java.io.File;
++import java.util.logging.Logger;
+ 
+ import org.apache.catalina.Context;
+ import org.apache.catalina.Engine;
+@@ -34,27 +35,29 @@ import com.redhat.nuxwdog.WatchdogClient;
+ 
+ public class PKIListener implements LifecycleListener {
+ 
++    final static Logger logger = Logger.getLogger(PKIListener.class.getName());
++
+     private boolean startedByWD = false;
+ 
+     @Override
+     public void lifecycleEvent(LifecycleEvent event) {
+ 
+         String type = event.getType();
+-        System.out.println("PKIListener: " + event.getLifecycle().getClass().getName() + "[" + type + "]");
++        logger.info("PKIListener: " + event.getLifecycle().getClass().getName() + " [" + type + "]");
+ 
+         if (type.equals(Lifecycle.BEFORE_INIT_EVENT)) {
+ 
+             String wdPipeName = System.getenv("WD_PIPE_NAME");
+             if (StringUtils.isNotEmpty(wdPipeName)) {
+                 startedByWD = true;
+-                System.out.println("PKIListener: Initializing the watchdog");
++                logger.info("PKIListener: Initializing the watchdog");
+                 WatchdogClient.init();
+             }
+ 
+         } else if (type.equals(Lifecycle.AFTER_START_EVENT)) {
+ 
+             if (startedByWD) {
+-                System.out.println("PKIListener: Sending endInit to the Watchdog");
++                logger.info("PKIListener: Sending endInit to the watchdog");
+                 WatchdogClient.sendEndInit(0);
+             }
+ 
+@@ -88,13 +91,13 @@ public class PKIListener implements LifecycleListener {
+ 
+             if (!contextXml.exists()) {
+ 
+-                System.out.println("PKIListener: Subsystem " + subsystemName.toUpperCase() + " is disabled.");
++                logger.warning("PKIListener: Subsystem " + subsystemName.toUpperCase() + " is disabled.");
+ 
+                 String selftestsLog = "/var/log/pki/" + instanceName + "/" + subsystemName + "/selftests.log";
+-                System.out.println("PKIListener: Check " + selftestsLog + " for possible errors.");
++                logger.warning("PKIListener: Check " + selftestsLog + " for possible errors.");
+ 
+-                System.out.println("PKIListener: To enable the subsystem:");
+-                System.out.println("PKIListener:   pki-server subsystem-enable -i " + instanceName + " " + subsystemName);
++                logger.warning("PKIListener: To enable the subsystem:");
++                logger.warning("PKIListener:   pki-server subsystem-enable -i " + instanceName + " " + subsystemName);
+ 
+                 continue;
+             }
+@@ -103,17 +106,17 @@ public class PKIListener implements LifecycleListener {
+ 
+             if (context == null) {
+ 
+-                System.out.println("PKIListener: " + "Subsystem " + subsystemName.toUpperCase() + " is not deployed.");
++                logger.warning("PKIListener: " + "Subsystem " + subsystemName.toUpperCase() + " is not deployed.");
+ 
+                 String catalinaLog = "/var/log/pki/" + instanceName + "/catalina.*.log";
+-                System.out.println("PKIListener: Check " + catalinaLog);
+-                System.out.println("PKIListener: and Tomcat's standard output and error for possible errors:");
+-                System.out.println("PKIListener:   journalctl -u pki-tomcatd@" + instanceName + ".service");
++                logger.warning("PKIListener: Check " + catalinaLog);
++                logger.warning("PKIListener: and Tomcat's standard output and error for possible errors:");
++                logger.warning("PKIListener:   journalctl -u pki-tomcatd@" + instanceName + ".service");
+ 
+                 continue;
+             }
+ 
+-            System.out.println("PKIListener: Subsystem " + subsystemName.toUpperCase() + " is running.");
++            logger.info("PKIListener: Subsystem " + subsystemName.toUpperCase() + " is running.");
+         }
+     }
+ }
+-- 
+1.8.3.1
+
+
+From a56579794417083cf41b05b702f66c895dc82823 Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Wed, 6 Dec 2017 16:38:33 -0700
+Subject: Set the default NSS DB type
+
+dogtagpki Pagure Issue #2862 - Create a mechanism to select the
+default NSS DB type
+
+The following changes are based upon the results of an investigation
+by jmagne in which he suggested using the NSS_DEFAULT_DB_TYPE
+environment variable to control NSS use of 'dbm' vs. 'sql'.
+
+* NSS_DEFAULT_DB_TYPE Environment Variable:
+
+  In the future, the 'pkispawn' installer, 'pkiconsole', the 'pki'
+  command-line tool, as well as all other non-'pki' command-line
+  tools will be able to select to use either 'dbm' or 'sql' as their
+  default NSS DB type based upon the value in the
+  NSS_DEFAULT_DB_TYPE environment variable; if no
+  NSS_DEFAULT_DB_TYPE is defined, 'dbm' will be utilized.
+
+  NOTE:  For this patch, everything has been rigged to use an NSS
+         default DB type of 'dbm', as 'sql' is not yet supported.
+
+* PKI Server Instances:
+
+  The selected NSS DB type will be stored as the value in the
+  NSS_DEFAULT_DB_TYPE variable within the file called
+  '/etc/sysconfig/<instance-name>' during creation of the
+  first subsystem of this PKI instance.
+
+  As a part of their 'systemctl' service management, Linux systems
+  utilize the information in this file via the 'EnvironmentFile'
+  designation within their systemctl service files,
+  'pki-tomcatd@<instance-name>.service', and
+  'pki-tomcatd-nuxwdog@<instance-name>.service'.
+
+  Finally, due to the presence of the '/etc/sysconfig/<instance-name>'
+  file, each PKI instance will always have its NSS DB type limited to a
+  single value that is common to all subsystems that co-exist within
+  this PKI instance.
+
+  Relevant files:
+  - base/server/python/pki/server/deployment/pkiparser.py
+  - base/server/etc/default.cfg
+  - base/server/share/conf/tomcat.conf
+
+* 'pki' Java Command-Line Tools
+
+  The selected NSS DB type will be computed at runtime and
+  stored as the value in the NSS_DEFAULT_DB_TYPE environment
+  variable.
+
+  Relevant files:
+  - base/common/python/pki/cli/main.py
+
+* non-'pki' Java Command-Line Tools
+
+  The selected NSS DB type will be computed at runtime and
+  stored as the value in the NSS_DEFAULT_DB_TYPE environment
+  variable.
+
+  Relevant files:
+  - base/java-tools/templates/pki_java_command_wrapper.in
+  - base/java-tools/templates/pretty_print_cert_command_wrapper.in
+  - base/java-tools/templates/pretty_print_crl_command_wrapper.in
+
+* Native Command-Line Tools
+
+  NOTE:  Although this patch does not provide out-of-box fixes for
+         native command-line tools, these should still work
+         successfully provided the environment variable
+         NSS_DEFAULT_DB_TYPE=dbm has been exported
+         into the current environment.
+
+Change-Id: I33c001e732ce0f585710c79af2ecf4ce18768d26
+(cherry picked from commit 29d23b0f027bd046d0a6547bd8292fb28f5d1c88)
+---
+ base/common/python/pki/cli/main.py                 | 34 ++++++++++++++++++
+ .../templates/pki_java_command_wrapper.in          | 34 ++++++++++++++++++
+ .../templates/pretty_print_cert_command_wrapper.in | 34 ++++++++++++++++++
+ .../templates/pretty_print_crl_command_wrapper.in  | 34 ++++++++++++++++++
+ base/server/etc/default.cfg                        |  1 +
+ .../python/pki/server/deployment/pkiparser.py      | 41 ++++++++++++++++++++++
+ base/server/share/conf/tomcat.conf                 |  3 ++
+ 7 files changed, 181 insertions(+)
+
+diff --git a/base/common/python/pki/cli/main.py b/base/common/python/pki/cli/main.py
+index f201c1d..0eb18a5 100644
+--- a/base/common/python/pki/cli/main.py
++++ b/base/common/python/pki/cli/main.py
+@@ -70,8 +70,42 @@ class PKICLI(pki.cli.CLI):
+ 
+         super(PKICLI, self).print_help()
+ 
++    def set_nss_default_db_type(self):
++        # Set default NSS DB type
++        nss_default_db_type = os.getenv('NSS_DEFAULT_DB_TYPE')
++        if nss_default_db_type is None:
++            # NSS_DEFAULT_DB_TYPE is undefined; set 'dbm' default NSS DB type
++            os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++        elif nss_default_db_type == '':
++            # NSS_DEFAULT_DB_TYPE is empty; set 'dbm' default NSS DB type
++            os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++        else:
++            nss_type = nss_default_db_type.lower()
++            if nss_type == 'dbm':
++                # Always set/reset 'dbm' default NSS DB type
++                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++            elif nss_type == 'sql':
++                # Always set/reset 'sql' default NSS DB type
++                # os.putenv('NSS_DEFAULT_DB_TYPE', 'sql')
++
++                # Warn user and set 'dbm' default NSS DB type
++                print('WARNING: NSS_DEFAULT_DB_TYPE=sql is currently ' +
++                      'unsupported!')
++                print('         Resetting to NSS_DEFAULT_DB_TYPE=dbm.')
++                # Currently override 'sql' with 'dbm' default NSS DB type
++                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++            else:
++                # NSS_DEFAULT_DB_TYPE is invalid; set 'dbm' default NSS DB type
++                print('WARNING: NSS_DEFAULT_DB_TYPE=%s is invalid!'
++                      % nss_default_db_type)
++                print('         Resetting to NSS_DEFAULT_DB_TYPE=dbm.')
++                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++        return
++
+     def execute_java(self, args, stdout=sys.stdout):
+ 
++        self.set_nss_default_db_type()
++
+         java_home = os.getenv('JAVA_HOME')
+         pki_lib = os.getenv('PKI_LIB')
+         logging_config = os.getenv('LOGGING_CONFIG')
+diff --git a/base/java-tools/templates/pki_java_command_wrapper.in b/base/java-tools/templates/pki_java_command_wrapper.in
+index 696f661..bec96bd 100644
+--- a/base/java-tools/templates/pki_java_command_wrapper.in
++++ b/base/java-tools/templates/pki_java_command_wrapper.in
+@@ -64,6 +64,38 @@ invalid_architecture() {
+     echo
+ }
+ 
++set_nss_default_db_type() {
++    if [ -z ${NSS_DEFAULT_DB_TYPE+x} ]; then
++        # NSS_DEFAULT_DB_TYPE is undefined; set 'dbm' default NSS DB type
++        NSS_DEFAULT_DB_TYPE=dbm
++    elif [ -z ${NSS_DEFAULT_DB_TYPE} ] ; then
++        # NSS_DEFAULT_DB_TYPE is empty; set 'dbm' default NSS DB type
++        NSS_DEFAULT_DB_TYPE=dbm
++    else
++        # normalize NSS_DEFAULT_DB_TYPE to all lowercase letters
++        nss_type=`echo ${NSS_DEFAULT_DB_TYPE} | tr '[:upper:]' '[:lower:]'`
++        if [ ${nss_type} = 'dbm' ] ; then
++            # Always set/reset 'dbm' default NSS DB type
++            NSS_DEFAULT_DB_TYPE=dbm
++        elif [ ${nss_type} = 'sql' ] ; then
++            # Always set/reset 'sql' default NSS DB type
++            # NSS_DEFAULT_DB_TYPE=sql
++
++            # Warn user and set 'dbm' default NSS DB type
++            echo "WARNING: NSS_DEFAULT_DB_TYPE=sql is currently unsupported!"
++            echo "         Resetting to NSS_DEFAULT_DB_TYPE=dbm."
++            NSS_DEFAULT_DB_TYPE=dbm
++        else
++            # NSS_DEFAULT_DB_TYPE is invalid; set 'dbm' default NSS DB type
++            echo -n "WARNING: NSS_DEFAULT_DB_TYPE='${NSS_DEFAULT_DB_TYPE}' is "
++            echo "invalid!"
++            echo "         Resetting to NSS_DEFAULT_DB_TYPE=dbm."
++            NSS_DEFAULT_DB_TYPE=dbm
++        fi
++    fi
++    export NSS_DEFAULT_DB_TYPE
++}
++
+ 
+ ###############################################################################
+ ##  (4) Set the LD_LIBRARY_PATH environment variable to determine the        ##
+@@ -116,6 +148,8 @@ fi
+ ##      based upon the LD_LIBRARY_PATH and PKI_LIB environment variables.    ##
+ ###############################################################################
+ 
++set_nss_default_db_type
++
+ ${JAVA} ${JAVA_OPTIONS} \
+   -Djava.ext.dirs=${PKI_LIB} \
+   -Djava.util.logging.config.file=${LOGGING_CONFIG} \
+diff --git a/base/java-tools/templates/pretty_print_cert_command_wrapper.in b/base/java-tools/templates/pretty_print_cert_command_wrapper.in
+index 882e7a1..486c023 100644
+--- a/base/java-tools/templates/pretty_print_cert_command_wrapper.in
++++ b/base/java-tools/templates/pretty_print_cert_command_wrapper.in
+@@ -64,6 +64,38 @@ invalid_architecture() {
+     echo
+ }
+ 
++set_nss_default_db_type() {
++    if [ -z ${NSS_DEFAULT_DB_TYPE+x} ]; then
++        # NSS_DEFAULT_DB_TYPE is undefined; set 'dbm' default NSS DB type
++        NSS_DEFAULT_DB_TYPE=dbm
++    elif [ -z ${NSS_DEFAULT_DB_TYPE} ] ; then
++        # NSS_DEFAULT_DB_TYPE is empty; set 'dbm' default NSS DB type
++        NSS_DEFAULT_DB_TYPE=dbm
++    else
++        # normalize NSS_DEFAULT_DB_TYPE to all lowercase letters
++        nss_type=`echo ${NSS_DEFAULT_DB_TYPE} | tr '[:upper:]' '[:lower:]'`
++        if [ ${nss_type} = 'dbm' ] ; then
++            # Always set/reset 'dbm' default NSS DB type
++            NSS_DEFAULT_DB_TYPE=dbm
++        elif [ ${nss_type} = 'sql' ] ; then
++            # Always set/reset 'sql' default NSS DB type
++            # NSS_DEFAULT_DB_TYPE=sql
++
++            # Warn user and set 'dbm' default NSS DB type
++            echo "WARNING: NSS_DEFAULT_DB_TYPE=sql is currently unsupported!"
++            echo "         Resetting to NSS_DEFAULT_DB_TYPE=dbm."
++            NSS_DEFAULT_DB_TYPE=dbm
++        else
++            # NSS_DEFAULT_DB_TYPE is invalid; set 'dbm' default NSS DB type
++            echo -n "WARNING: NSS_DEFAULT_DB_TYPE='${NSS_DEFAULT_DB_TYPE}' is "
++            echo "invalid!"
++            echo "         Resetting to NSS_DEFAULT_DB_TYPE=dbm."
++            NSS_DEFAULT_DB_TYPE=dbm
++        fi
++    fi
++    export NSS_DEFAULT_DB_TYPE
++}
++
+ 
+ ###############################################################################
+ ##  (4) Set the LD_LIBRARY_PATH environment variable to determine the        ##
+@@ -159,6 +191,8 @@ then
+     fi
+ fi
+ 
++set_nss_default_db_type
++
+ ${JAVA} ${JAVA_OPTIONS} -cp ${CP} com.netscape.cmstools.${COMMAND} "$@"
+ exit $?
+ 
+diff --git a/base/java-tools/templates/pretty_print_crl_command_wrapper.in b/base/java-tools/templates/pretty_print_crl_command_wrapper.in
+index 0c518ce..38eb810 100644
+--- a/base/java-tools/templates/pretty_print_crl_command_wrapper.in
++++ b/base/java-tools/templates/pretty_print_crl_command_wrapper.in
+@@ -64,6 +64,38 @@ invalid_architecture() {
+     echo
+ }
+ 
++set_nss_default_db_type() {
++    if [ -z ${NSS_DEFAULT_DB_TYPE+x} ]; then
++        # NSS_DEFAULT_DB_TYPE is undefined; set 'dbm' default NSS DB type
++        NSS_DEFAULT_DB_TYPE=dbm
++    elif [ -z ${NSS_DEFAULT_DB_TYPE} ] ; then
++        # NSS_DEFAULT_DB_TYPE is empty; set 'dbm' default NSS DB type
++        NSS_DEFAULT_DB_TYPE=dbm
++    else
++        # normalize NSS_DEFAULT_DB_TYPE to all lowercase letters
++        nss_type=`echo ${NSS_DEFAULT_DB_TYPE} | tr '[:upper:]' '[:lower:]'`
++        if [ ${nss_type} = 'dbm' ] ; then
++            # Always set/reset 'dbm' default NSS DB type
++            NSS_DEFAULT_DB_TYPE=dbm
++        elif [ ${nss_type} = 'sql' ] ; then
++            # Always set/reset 'sql' default NSS DB type
++            # NSS_DEFAULT_DB_TYPE=sql
++
++            # Warn user and set 'dbm' default NSS DB type
++            echo "WARNING: NSS_DEFAULT_DB_TYPE=sql is currently unsupported!"
++            echo "         Resetting to NSS_DEFAULT_DB_TYPE=dbm."
++            NSS_DEFAULT_DB_TYPE=dbm
++        else
++            # NSS_DEFAULT_DB_TYPE is invalid; set 'dbm' default NSS DB type
++            echo -n "WARNING: NSS_DEFAULT_DB_TYPE='${NSS_DEFAULT_DB_TYPE}' is "
++            echo "invalid!"
++            echo "         Resetting to NSS_DEFAULT_DB_TYPE=dbm."
++            NSS_DEFAULT_DB_TYPE=dbm
++        fi
++    fi
++    export NSS_DEFAULT_DB_TYPE
++}
++
+ 
+ ###############################################################################
+ ##  (4) Set the LD_LIBRARY_PATH environment variable to determine the        ##
+@@ -146,6 +178,8 @@ then
+     fi
+ fi
+ 
++set_nss_default_db_type
++
+ ${JAVA} ${JAVA_OPTIONS} -cp ${CP} com.netscape.cmstools.${COMMAND} "$@"
+ exit $?
+ 
+diff --git a/base/server/etc/default.cfg b/base/server/etc/default.cfg
+index ad19105..73f884f 100644
+--- a/base/server/etc/default.cfg
++++ b/base/server/etc/default.cfg
+@@ -11,6 +11,7 @@
+ ###############################################################################
+ [DEFAULT]
+ 
++NSS_DEFAULT_DB_TYPE=%(nss_default_db_type)s
+ JAVA_HOME=%(java_home)s
+ 
+ # The sensitive_parameters contains a list of parameters which may contain
+diff --git a/base/server/python/pki/server/deployment/pkiparser.py b/base/server/python/pki/server/deployment/pkiparser.py
+index e924908..8c9f1aa 100644
+--- a/base/server/python/pki/server/deployment/pkiparser.py
++++ b/base/server/python/pki/server/deployment/pkiparser.py
+@@ -259,8 +259,48 @@ class PKIConfigParser:
+                 self.arg_parser.print_help()
+                 self.arg_parser.exit(-1)
+ 
++    def set_nss_default_db_type(self):
++        # Define default NSS DB types
++        dbm = 'dbm'
++        # sql = 'sql'
++        default = dbm
++
++        # Set default NSS DB type
++        nss_default_db_type = os.getenv('NSS_DEFAULT_DB_TYPE')
++        if nss_default_db_type is None:
++            # NSS_DEFAULT_DB_TYPE is undefined; set 'dbm' default NSS DB type
++            os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++        elif nss_default_db_type == '':
++            # NSS_DEFAULT_DB_TYPE is empty; set 'dbm' default NSS DB type
++            os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++        else:
++            nss_type = nss_default_db_type.lower()
++            if nss_type == 'dbm':
++                # Always set/reset 'dbm' default NSS DB type
++                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++            elif nss_type == 'sql':
++                # Always set/reset 'sql' default NSS DB type
++                # os.putenv('NSS_DEFAULT_DB_TYPE', 'sql')
++                # default = sql
++
++                # Warn user and set 'dbm' default NSS DB type
++                print('WARNING: NSS_DEFAULT_DB_TYPE=sql is currently ' +
++                      'unsupported!')
++                print('         Resetting to NSS_DEFAULT_DB_TYPE=dbm.')
++                # Currently override 'sql' with 'dbm' default NSS DB type
++                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++            else:
++                # NSS_DEFAULT_DB_TYPE is invalid; set 'dbm' default NSS DB type
++                print('WARNING: NSS_DEFAULT_DB_TYPE=%s is invalid!'
++                      % nss_default_db_type)
++                print('         Resetting to NSS_DEFAULT_DB_TYPE=dbm.')
++                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
++        return default
++
+     def init_config(self):
+ 
++        nss_default_db_type = self.set_nss_default_db_type()
++
+         java_home = subprocess.check_output(
+             '. /usr/share/pki/etc/pki.conf && . /etc/pki/pki.conf '
+             '&& echo $JAVA_HOME',
+@@ -303,6 +343,7 @@ class PKIConfigParser:
+             'pki_subsystem': self.deployer.subsystem_name,
+             'pki_subsystem_type': self.deployer.subsystem_name.lower(),
+             'pki_root_prefix': config.pki_root_prefix,
++            'nss_default_db_type': nss_default_db_type,
+             'java_home': java_home,
+             'resteasy_lib': resteasy_lib,
+             'jni_jar_dir': jni_jar_dir,
+diff --git a/base/server/share/conf/tomcat.conf b/base/server/share/conf/tomcat.conf
+index bd2359c..c1d3900 100644
+--- a/base/server/share/conf/tomcat.conf
++++ b/base/server/share/conf/tomcat.conf
+@@ -6,6 +6,9 @@
+ 
+ # This file contains instance-specific configuration.
+ 
++# Default NSS DB type (computed at instance creation time)
++NSS_DEFAULT_DB_TYPE="[NSS_DEFAULT_DB_TYPE]"
++
+ # Where your java installation lives
+ JAVA_HOME="[JAVA_HOME]"
+ 
+-- 
+1.8.3.1
+
+
+From 043501a4b4c10fc408b4a644381c9f2782892bb3 Mon Sep 17 00:00:00 2001
+From: Matthew Harmsen <mharmsen@redhat.com>
+Date: Fri, 8 Dec 2017 17:17:34 -0700
+Subject: Fix nuxwdog to work on all platforms
+
+- dogtagpki Pagure Issue #2874 - nuxwdog won't start on Fedora
+
+Change-Id: I5ff65c75087aeb939cb58ee7cf888bbbacb57ad5
+(cherry picked from commit 19f04606cb58f7dc6e2872e39f62d3dad427ae22)
+---
+ base/server/sbin/pki-server-nuxwdog | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/base/server/sbin/pki-server-nuxwdog b/base/server/sbin/pki-server-nuxwdog
+index ead9253..cb89938 100755
+--- a/base/server/sbin/pki-server-nuxwdog
++++ b/base/server/sbin/pki-server-nuxwdog
+@@ -41,8 +41,8 @@ nux_fname="${CATALINA_BASE}/conf/nuxwdog.conf"
+ touch ${nux_fname}
+ chown pkiuser: ${nux_fname}
+ 
+-echo "ExeFile ${JAVACMD}" > $nux_fname
+-echo "ExeArgs ${JAVACMD} ${FLAGS} -classpath ${CLASSPATH} ${OPTIONS} ${MAIN_CLASS} start" >> $nux_fname
++echo "ExeFile ${JAVA_HOME}/bin/java" > $nux_fname
++echo "ExeArgs ${JAVA_HOME}/bin/java ${JAVACMD_OPTS} ${FLAGS} -classpath ${CLASSPATH} ${OPTIONS} ${MAIN_CLASS} start" >> $nux_fname
+ echo "TmpDir ${CATALINA_BASE}/logs/pids" >> $nux_fname
+ echo "ChildSecurity 1" >> $nux_fname
+ echo "ExeOut ${CATALINA_BASE}/logs/catalina.out" >> $nux_fname
+-- 
+1.8.3.1
+

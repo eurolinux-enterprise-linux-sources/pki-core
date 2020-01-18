@@ -1,0 +1,136 @@
+<!-- --- BEGIN COPYRIGHT BLOCK ---
+     This program is free software; you can redistribute it and/or modify
+     it under the terms of the GNU General Public License as published by
+     the Free Software Foundation; version 2 of the License.
+
+     This program is distributed in the hope that it will be useful,
+     but WITHOUT ANY WARRANTY; without even the implied warranty of
+     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+     GNU General Public License for more details.
+
+     You should have received a copy of the GNU General Public License along
+     with this program; if not, write to the Free Software Foundation, Inc.,
+     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+     Copyright (C) 2007 Red Hat, Inc.
+     All rights reserved.
+     --- END COPYRIGHT BLOCK --- -->
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<script src="/pki/js/jquery.js"></script>
+<script src="/pki/js/jquery.i18n.properties.js"></script>
+<script src="/pki/js/underscore.js"></script>
+<script src="/pki/js/backbone.js"></script>
+<script src="/pki/js/pki.js"></script>
+<script src="/pki/js/pki-banner.js"></script>
+
+<script type="text/javascript" language="JavaScript">
+$(function() {
+    $.i18n.properties({
+        name: 'services',
+        language: ' ', // suppress potential 404's due to .i18n.browserLang()
+        path: '/pki/kra/',
+        mode: 'map',
+        callback: function() {
+            var key;
+            for (key in $.i18n.map) {
+                var message = $.i18n.prop(key);
+                $('span.message[name='+key+']').html(message);
+            }
+        }
+    });
+});
+</script>
+
+<CMS_TEMPLATE>
+<title>DRM Services</title>
+    <link rel="shortcut icon" href="/pki/images/favicon.ico" />
+    <link rel="stylesheet" href="/pki/css/pki-base.css" type="text/css" />
+    <META http-equiv=Content-Type content="text/html; charset=UTF-8">
+
+</head>
+<body bgcolor="#FFFFFF" link="#666699" vlink="#666699" alink="#333366">
+
+<div id="header">
+    <span class="message" name="logo">
+    <a href="http://pki.fedoraproject.org/" title="Visit pki.fedoraproject.org for more information about Certificate System products and services"><img src="/pki/images/logo_header.gif" alt="Certificate System" id="myLogo" /></a>
+    </span>
+    <div id="headertitle">
+    <span class="message" name="title">
+    <a href="/" title="Certificate System">Certificate System</a>
+    </span>
+    </div>
+    <div id="account">
+          <dl><dt><span></span></dt><dd></dd></dl>
+    </div>
+</div>
+
+<div id="mainNavOuter" class="pki-ee-theme">
+<div id="mainNav">
+<div id="mainNavInner">
+                                                                                
+</div><!-- end mainNavInner -->
+</div><!-- end mainNav -->
+</div><!-- end mainNavOuter -->
+                                                                                
+                                                                                
+<div id="bar">
+                                                                                
+<div id="systembar">
+<div id="systembarinner">
+                                                                                
+<div>
+  -
+</div>
+                                                                                
+                                                                                
+</div>
+</div>
+                                                                                
+</div>
+
+
+<font size="+1" face="PrimaSans BT, Verdana, Arial, Helvetica, sans-serif">
+Certificate System DRM Services Page 
+</font><br>
+<p> 
+</font>
+<p>
+<center>
+<table border="0" cellspacing="0" cellpadding="0">
+<tr valign="TOP">
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+</tr>
+<script language=javascript>
+for (var i=0; i<result.recordSet.length; ++i) {
+    document.write('<tr valign="TOP">');
+    document.write('<td>');
+    document.write('<td>');
+    document.write('<font size=4 face="PrimaSans BT, Verdana, sans-serif">');
+    document.write('<li><a href="');
+    document.write(result.recordSet[i].prefix + "://" +
+      result.recordSet[i].host + ":" + result.recordSet[i].port + "/"+
+      result.recordSet[i].uri);
+    if (result.recordSet[i].type == "admin") {
+        document.write('">Admin Services</a></font>');
+    } else if (result.recordSet[i].type == "agent") {
+        document.write('">Agent Services</a></font>');
+    } else if (result.recordSet[i].type == "ee") {
+        document.write('">SSL End Users Services</a></font>');
+    }
+
+    document.write('</font></td></tr>');
+}
+</script>
+<tr valign="TOP">
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+</tr>
+</table>
+</center>
+<div id="footer">
+</div>
+</body>
+</html>
