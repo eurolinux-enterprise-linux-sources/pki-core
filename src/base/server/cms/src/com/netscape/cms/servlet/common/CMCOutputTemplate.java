@@ -68,6 +68,7 @@ import org.mozilla.jss.pkix.cms.SignerIdentifier;
 import org.mozilla.jss.pkix.cms.SignerInfo;
 import org.mozilla.jss.pkix.primitive.AlgorithmIdentifier;
 import org.mozilla.jss.pkix.primitive.Name;
+import org.mozilla.jss.util.Password;
 
 import com.netscape.certsrv.apps.CMS;
 import com.netscape.certsrv.authentication.IAuthManager;
@@ -78,6 +79,7 @@ import com.netscape.certsrv.base.SessionContext;
 import com.netscape.certsrv.ca.ICertificateAuthority;
 import com.netscape.certsrv.dbs.certdb.ICertRecord;
 import com.netscape.certsrv.dbs.certdb.ICertificateRepository;
+import com.netscape.certsrv.logging.AuditEvent;
 import com.netscape.certsrv.logging.AuditFormat;
 import com.netscape.certsrv.logging.ILogger;
 import com.netscape.certsrv.logging.LogEvent;
@@ -149,6 +151,7 @@ public class CMCOutputTemplate {
             OutputStream os = resp.getOutputStream();
             os.write(contentBytes);
             os.flush();
+            auditCMCResponseSent(Utils.base64encode(contentBytes, false));
         } catch (Exception e) {
             CMS.debug("CMCOutputTemplate createFullResponseWithFailedStatus Exception: " + e.toString());
             return;
@@ -479,6 +482,7 @@ public class CMCOutputTemplate {
             OutputStream os = resp.getOutputStream();
             os.write(contentBytes);
             os.flush();
+            auditCMCResponseSent(Utils.base64encode(contentBytes, false));
             CMS.debug(method + "ends");
         } catch (java.security.cert.CertificateEncodingException e) {
             CMS.debug(method + e.toString());
@@ -721,6 +725,7 @@ public class CMCOutputTemplate {
             OutputStream os = resp.getOutputStream();
             os.write(contentBytes);
             os.flush();
+            auditCMCResponseSent(Utils.base64encode(contentBytes, false));
         } catch (java.security.cert.CertificateEncodingException e) {
             CMS.debug("CMCOutputTemplate exception: " + e.toString());
         } catch (InvalidBERException e) {
@@ -966,10 +971,6 @@ public class CMCOutputTemplate {
             CMS.debug(method + "authManagerId =" + authManagerId);
         }
 
-        // in case of CMCUserSignedAuth,
-        // for matching signer and revoked cert principal
-        X500Name signerPrincipal = null;
-
         // for auditing
         String auditRequesterID = null;
         auditRequesterID = (String) context.get(SessionContext.USER_ID);
@@ -979,7 +980,14 @@ public class CMCOutputTemplate {
         } else {
             auditRequesterID = ILogger.NONROLEUSER;
         }
-        signerPrincipal = (X500Name) context.get(SessionContext.CMC_SIGNER_PRINCIPAL);
+
+        // in case of CMCUserSignedAuth,
+        // for matching signer and revoked cert principal
+        X500Name reqSignerPrincipal = (X500Name) context.get(SessionContext.CMC_SIGNER_PRINCIPAL);
+
+        // in case of shared secret revocation, for matching issuer
+        X500Name reqIssuerPrincipal = (X500Name) context.get(SessionContext.CMC_ISSUER_PRINCIPAL);
+
         String auditSubjectID = null;
         String auditRequestType = "revoke";
         String auditSerialNumber = null;
@@ -1014,7 +1022,7 @@ public class CMCOutputTemplate {
 
                     if (needVerify) {
                         if (authManagerId.equals("CMCUserSignedAuth")) {
-                            if (signerPrincipal == null) {
+                            if (reqSignerPrincipal == null) {
                                 CMS.debug(method + "missing CMC signer principal");
                                 OtherInfo otherInfo = new OtherInfo(OtherInfo.FAIL,
                                         new INTEGER(OtherInfo.BAD_MESSAGE_CHECK),
@@ -1093,10 +1101,27 @@ public class CMCOutputTemplate {
                     }
                     ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
 
-                    String sharedSecret = tokenClass.getSharedToken(revokeSerial);
+                    char[] sharedSecret = null;
+                    try {
+                        sharedSecret = tokenClass.getSharedToken(revokeSerial);
+                    } catch (Exception eShrTok) {
+                        msg = "CMCOutputTemplate: " + eShrTok.toString();
+                    }
 
                     if (sharedSecret == null) {
-                        CMS.debug("CMCOutputTemplate: shared secret not found.");
+                        if (msg.equals("")) // don't overwrite the msg
+                            msg = " shared secret not found";
+                        CMS.debug(msg);
+                        audit(new CertStatusChangeRequestProcessedEvent(
+                                auditSubjectID,
+                                ILogger.FAILURE,
+                                auditReqID,
+                                auditSerialNumber,
+                                auditRequestType,
+                                auditReasonNum,
+                                auditApprovalStatus,
+                                msg));
+
                         OtherInfo otherInfo = new OtherInfo(OtherInfo.FAIL, new INTEGER(OtherInfo.BAD_IDENTITY),
                                 null, null);
                         SEQUENCE failed_bpids = new SEQUENCE();
@@ -1110,14 +1135,24 @@ public class CMCOutputTemplate {
                     }
 
                     byte[] reqSecretb = reqSecret.toByteArray();
-                    String clientSC = new String(reqSecretb);
-                    if (clientSC.equals(sharedSecret)) {
+                    char[] reqSecretbChars = CryptoUtil.bytesToChars(reqSecretb);
+
+                    Password secret1 = new Password(sharedSecret);
+                    Password secret2 = new Password(reqSecretbChars);
+
+                    CryptoUtil.obscureChars(sharedSecret);
+                    CryptoUtil.obscureChars(reqSecretbChars);
+                    CryptoUtil.obscureBytes(reqSecretb, "random");
+
+                    if(secret1.equals(secret2)) {
                         CMS.debug(method
                                 + " Client and server shared secret are the same, can go ahead and revoke certificate.");
                         revoke = true;
+                        secret1.clear();
+                        secret2.clear();
                     } else {
-                        CMS.debug(method
-                                + " Client and server shared secret are not the same, cannot revoke certificate.");
+                        msg = " Client and server shared secret are not the same, cannot revoke certificate.";
+                        CMS.debug(method + msg);
                         OtherInfo otherInfo = new OtherInfo(OtherInfo.FAIL, new INTEGER(OtherInfo.BAD_IDENTITY),
                                 null, null);
                         SEQUENCE failed_bpids = new SEQUENCE();
@@ -1135,8 +1170,11 @@ public class CMCOutputTemplate {
                                 auditSerialNumber,
                                 auditRequestType,
                                 auditReasonNum,
-                                auditApprovalStatus));
+                                auditApprovalStatus,
+                                msg));
 
+                        secret1.clear();
+                        secret2.clear();
                         return bpid;
                     }
                 }
@@ -1152,7 +1190,18 @@ public class CMCOutputTemplate {
                     }
 
                     if (record == null) {
-                        CMS.debug(method + " The certificate is not found");
+                        msg = " The certificate is not found";
+                        CMS.debug(method + msg);
+                        audit(new CertStatusChangeRequestProcessedEvent(
+                                auditSubjectID,
+                                ILogger.FAILURE,
+                                auditReqID,
+                                auditSerialNumber,
+                                auditRequestType,
+                                auditReasonNum,
+                                auditApprovalStatus,
+                                msg));
+
                         OtherInfo otherInfo = new OtherInfo(OtherInfo.FAIL, new INTEGER(OtherInfo.BAD_CERT_ID), null, null);
                         SEQUENCE failed_bpids = new SEQUENCE();
                         failed_bpids.addElement(attrbpid);
@@ -1165,7 +1214,18 @@ public class CMCOutputTemplate {
                     }
 
                     if (record.getStatus().equals(ICertRecord.STATUS_REVOKED)) {
-                        CMS.debug("CMCOutputTemplate: The certificate is already revoked:" + auditSerialNumber);
+                        msg = " The certificate is already revoked:" + auditSerialNumber;
+                        CMS.debug( method + msg);
+                        audit(new CertStatusChangeRequestProcessedEvent(
+                                auditSubjectID,
+                                ILogger.FAILURE,
+                                auditReqID,
+                                auditSerialNumber,
+                                auditRequestType,
+                                auditReasonNum,
+                                auditApprovalStatus,
+                                msg));
+
                         SEQUENCE success_bpids = new SEQUENCE();
                         success_bpids.addElement(attrbpid);
                         cmcStatusInfoV2 = new CMCStatusInfoV2(CMCStatusInfoV2.SUCCESS,
@@ -1179,13 +1239,15 @@ public class CMCOutputTemplate {
                     X509CertImpl impl = record.getCertificate();
 
                     X500Name certPrincipal = (X500Name) impl.getSubjectDN();
+                    X500Name certIssuerPrincipal = (X500Name) impl.getIssuerDN();
                     auditSubjectID = certPrincipal.toString();
 
-                    // in case of user-signed request, check if signer
-                    // principal matches that of the revoking cert
-                    if ((reqSecret == null) && authManagerId.equals("CMCUserSignedAuth")) {
-                        if (!certPrincipal.equals(signerPrincipal)) {
-                            msg = "certificate principal and signer do not match";
+                    // for Shared Secret case, check if issuer DN matches
+                    if (reqSecret != null) {
+                        CMS.debug(method + "shared secret revocation: checking issuer DN");
+                        if ((reqIssuerPrincipal == null) ||
+                                ! reqIssuerPrincipal.equals(certIssuerPrincipal)) {
+                            msg = " certificate issuer DN and revocation request issuer DN do not match";
                             CMS.debug(method + msg);
                             OtherInfo otherInfo = new OtherInfo(OtherInfo.FAIL, new INTEGER(OtherInfo.BAD_IDENTITY),
                                     null, null);
@@ -1205,7 +1267,41 @@ public class CMCOutputTemplate {
                                     auditSerialNumber,
                                     auditRequestType,
                                     auditReasonNum,
-                                    auditApprovalStatus));
+                                    auditApprovalStatus,
+                                    msg));
+
+                            return bpid;
+                        } else {
+                            CMS.debug( method + "certificate issuer DN and revocation request issuer DN match");
+                        }
+                    }
+
+                    // in case of user-signed request, check if signer
+                    // principal matches that of the revoking cert
+                    if ((reqSecret == null) && authManagerId.equals("CMCUserSignedAuth")) {
+                        if (!certPrincipal.equals(reqSignerPrincipal)) {
+                            msg = " certificate principal and signer do not match";
+                            CMS.debug(method + msg);
+                            OtherInfo otherInfo = new OtherInfo(OtherInfo.FAIL, new INTEGER(OtherInfo.BAD_IDENTITY),
+                                    null, null);
+                            SEQUENCE failed_bpids = new SEQUENCE();
+                            failed_bpids.addElement(attrbpid);
+                            cmcStatusInfoV2 = new CMCStatusInfoV2(CMCStatusInfoV2.FAILED, failed_bpids, msg,
+                                    otherInfo);
+                            tagattr = new TaggedAttribute(
+                                    new INTEGER(bpid++),
+                                    OBJECT_IDENTIFIER.id_cmc_statusInfoV2, cmcStatusInfoV2);
+                            controlSeq.addElement(tagattr);
+
+                            audit(new CertStatusChangeRequestProcessedEvent(
+                                    auditSubjectID,
+                                    ILogger.FAILURE,
+                                    auditReqID,
+                                    auditSerialNumber,
+                                    auditRequestType,
+                                    auditReasonNum,
+                                    auditApprovalStatus,
+                                    msg));
 
                             return bpid;
                         } else {
@@ -1247,8 +1343,9 @@ public class CMCOutputTemplate {
                         Integer result = revReq.getExtDataInInteger(IRequest.RESULT);
                         CMS.debug(method + " revReq result = " + result);
                         if (result.equals(IRequest.RES_ERROR)) {
-                            CMS.debug("CMCOutputTemplate: revReq exception: " +
-                                    revReq.getExtDataInString(IRequest.ERROR));
+                            msg = " revReq exception: " +
+                                    revReq.getExtDataInString(IRequest.ERROR);
+                            CMS.debug(method + msg);
                             OtherInfo otherInfo = new OtherInfo(OtherInfo.FAIL, new INTEGER(OtherInfo.BAD_REQUEST),
                                     null, null);
                             SEQUENCE failed_bpids = new SEQUENCE();
@@ -1267,7 +1364,8 @@ public class CMCOutputTemplate {
                                     auditSerialNumber,
                                     auditRequestType,
                                     auditReasonNum,
-                                    auditApprovalStatus));
+                                    auditApprovalStatus,
+                                    msg));
 
                             return bpid;
                         }
@@ -1334,6 +1432,17 @@ public class CMCOutputTemplate {
 
     protected void audit(String msg) {
         signedAuditLogger.log(msg);
+    }
+
+    protected void auditCMCResponseSent(String response) {
+        SessionContext context = SessionContext.getContext();
+
+        String auditMessage = CMS.getLogMessage(
+            AuditEvent.CMC_RESPONSE_SENT,
+            (String) context.get(SessionContext.USER_ID),
+            ILogger.SUCCESS,
+            Utils.normalizeString(response));
+        audit(auditMessage);
     }
 
     private RevocationReason toRevocationReason(ENUMERATED n) {

@@ -1000,23 +1000,37 @@ class SubsystemCertValidateCLI(pki.cli.CLI):
         token = cert.get('token', '')
         print('  Token: %s' % token)
 
-        # get internal token password and store in temporary file
-        passwd = instance.get_token_password()
+        # normalize internal token into None
+        token = pki.nssdb.normalize_token(token)
+
+        # get token password and store in temporary file
+        passwd = instance.get_token_password(token)
 
         pwfile_handle, pwfile_path = tempfile.mkstemp()
         os.write(pwfile_handle, passwd)
         os.close(pwfile_handle)
 
         try:
-            cmd = ['pki',
-                   '-d', instance.nssdb_dir,
-                   '-C', pwfile_path,
-                   'client-cert-validate',
-                   nickname,
-                   '--certusage', usage]
+            cmd = [
+                'pki',
+                '-d', instance.nssdb_dir
+            ]
+
+            fullname = nickname
+
+            if token:
+                cmd.extend(['--token', token])
+                fullname = token + ':' + fullname
+
+            cmd.extend([
+                '-C', pwfile_path,
+                'client-cert-validate',
+                fullname,
+                '--certusage', usage
+            ])
 
             if self.verbose:
-                print('Command: %s' % cmd)
+                print('Command: %s' % ' '.join(cmd))
 
             subprocess.check_output(cmd, stderr=subprocess.STDOUT)
             print('  Status: VALID')
@@ -1024,10 +1038,11 @@ class SubsystemCertValidateCLI(pki.cli.CLI):
             return True
 
         except subprocess.CalledProcessError as e:
-            if e.returncode == 1:
-                print('  Status: INVALID')
+            if e.output:
+                status = e.output.decode('utf-8')
             else:
-                print('  Status: ERROR: %s' % e.output)
+                status = 'ERROR'
+            print('  Status: %s' % status)
             return False
 
         finally:

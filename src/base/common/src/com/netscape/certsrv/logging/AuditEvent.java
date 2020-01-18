@@ -67,6 +67,10 @@ public class AuditEvent extends LogEvent {
             "LOGGING_SIGNED_AUDIT_NON_PROFILE_CERT_REQUEST_5";
     public final static String PROFILE_CERT_REQUEST =
             "LOGGING_SIGNED_AUDIT_PROFILE_CERT_REQUEST_5";
+    public final static String CMC_REQUEST_RECEIVED =
+            "LOGGING_SIGNED_AUDIT_CMC_REQUEST_RECEIVED_3";
+    public final static String CMC_RESPONSE_SENT =
+            "LOGGING_SIGNED_AUDIT_CMC_RESPONSE_SENT_3";
     public final static String INTER_BOUNDARY =
             "LOGGING_SIGNED_AUDIT_INTER_BOUNDARY_SUCCESS_5";
     public final static String CERT_PROFILE_APPROVAL =
@@ -82,35 +86,15 @@ public class AuditEvent extends LogEvent {
             "LOGGING_SIGNED_AUDIT_CRL_RETRIEVAL_3";
     public final static String CRL_VALIDATION =
             "LOGGING_SIGNED_AUDIT_CRL_VALIDATION_2";
-    public final static String CMC_USER_SIGNED_REQUEST_SIG_VERIFY_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_CMC_USER_SIGNED_REQUEST_SIG_VERIFY_SUCCESS_5";
-    public final static String CMC_USER_SIGNED_REQUEST_SIG_VERIFY_FAILURE =
-            "LOGGING_SIGNED_AUDIT_CMC_USER_SIGNED_REQUEST_SIG_VERIFY_FAILURE_6";
 
     public final static String COMPUTE_RANDOM_DATA_REQUEST =
             "LOGGING_SIGNED_AUDIT_COMPUTE_RANDOM_DATA_REQUEST_2";
-    public final static String COMPUTE_RANDOM_DATA_REQUEST_PROCESSED_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_COMPUTE_RANDOM_DATA_REQUEST_PROCESSED_SUCCESS_3";
-    public final static String COMPUTE_RANDOM_DATA_REQUEST_PROCESSED_FAILURE =
-            "LOGGING_SIGNED_AUDIT_COMPUTE_RANDOM_DATA_REQUEST_PROCESSED_FAILURE_4";
     public final static String COMPUTE_SESSION_KEY_REQUEST =
             "LOGGING_SIGNED_AUDIT_COMPUTE_SESSION_KEY_REQUEST_4"; // AC: KDF SPEC CHANGE:  Need to log both KDD and CUID.
-    public final static String COMPUTE_SESSION_KEY_REQUEST_PROCESSED_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_COMPUTE_SESSION_KEY_REQUEST_PROCESSED_SUCCESS_13"; // AC: KDF SPEC CHANGE:  Need to log both KDD and CUID.  Also added TKSKeyset, KeyInfo_KeyVersion, NistSP800_108KdfOnKeyVersion, NistSP800_108KdfUseCuidAsKdd.
-    public final static String COMPUTE_SESSION_KEY_REQUEST_PROCESSED_FAILURE =
-            "LOGGING_SIGNED_AUDIT_COMPUTE_SESSION_KEY_REQUEST_PROCESSED_FAILURE_14"; // AC: KDF SPEC CHANGE:  Need to log both KDD and CUID.  Also added TKSKeyset, KeyInfo_KeyVersion, NistSP800_108KdfOnKeyVersion, NistSP800_108KdfUseCuidAsKdd.
     public final static String DIVERSIFY_KEY_REQUEST =
             "LOGGING_SIGNED_AUDIT_DIVERSIFY_KEY_REQUEST_6"; // AC: KDF SPEC CHANGE:  Need to log both KDD and CUID.
-    public final static String DIVERSIFY_KEY_REQUEST_PROCESSED_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_DIVERSIFY_KEY_REQUEST_PROCESSED_SUCCESS_12"; // AC: KDF SPEC CHANGE:  Need to log both KDD and CUID.  Also added TKSKeyset, OldKeyInfo_KeyVersion, NewKeyInfo_KeyVersion, NistSP800_108KdfOnKeyVersion, NistSP800_108KdfUseCuidAsKdd.
-    public final static String DIVERSIFY_KEY_REQUEST_PROCESSED_FAILURE =
-            "LOGGING_SIGNED_AUDIT_DIVERSIFY_KEY_REQUEST_PROCESSED_FAILURE_13"; // AC: KDF SPEC CHANGE:  Need to log both KDD and CUID.  Also added TKSKeyset, OldKeyInfo_KeyVersion, NewKeyInfo_KeyVersion, NistSP800_108KdfOnKeyVersion, NistSP800_108KdfUseCuidAsKdd.
     public final static String ENCRYPT_DATA_REQUEST =
             "LOGGING_SIGNED_AUDIT_ENCRYPT_DATA_REQUEST_5"; // AC: KDF SPEC CHANGE:  Need to log both KDD and CUID.
-    public final static String ENCRYPT_DATA_REQUEST_PROCESSED_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_ENCRYPT_DATA_REQUEST_PROCESSED_SUCCESS_12";
-    public final static String ENCRYPT_DATA_REQUEST_PROCESSED_FAILURE =
-            "LOGGING_SIGNED_AUDIT_ENCRYPT_DATA_REQUEST_PROCESSED_FAILURE_13";
 
     public final static String SECURITY_DOMAIN_UPDATE =
             "LOGGING_SIGNED_AUDIT_SECURITY_DOMAIN_UPDATE_1";
@@ -127,30 +111,11 @@ public class AuditEvent extends LogEvent {
             "LOGGING_SIGNED_AUDIT_TOKEN_KEY_RECOVERY_10";
     public final static String TOKEN_CERT_STATUS_CHANGE_REQUEST =
             "LOGGING_SIGNED_AUDIT_TOKEN_CERT_STATUS_CHANGE_REQUEST_10";
-    public final static String TOKEN_PIN_RESET_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_TOKEN_PIN_RESET_SUCCESS_6";
-    public final static String TOKEN_PIN_RESET_FAILURE =
-            "LOGGING_SIGNED_AUDIT_TOKEN_PIN_RESET_FAILURE_6";
     public final static String TOKEN_OP_REQUEST =
             "LOGGING_SIGNED_AUDIT_TOKEN_OP_REQUEST_6";
-    public final static String TOKEN_FORMAT_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_TOKEN_FORMAT_SUCCESS_9";
-    public final static String TOKEN_FORMAT_FAILURE =
-            "LOGGING_SIGNED_AUDIT_TOKEN_FORMAT_FAILURE_9";
-    public final static String TOKEN_APPLET_UPGRADE_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_TOKEN_APPLET_UPGRADE_SUCCESS_9";
-    public final static String TOKEN_APPLET_UPGRADE_FAILURE =
-            "LOGGING_SIGNED_AUDIT_TOKEN_APPLET_UPGRADE_FAILURE_9";
     public final static String TOKEN_KEY_CHANGEOVER_REQUIRED =
             "LOGGING_SIGNED_AUDIT_TOKEN_KEY_CHANGEOVER_REQUIRED_10";
-    public final static String TOKEN_KEY_CHANGEOVER_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_TOKEN_KEY_CHANGEOVER_SUCCESS_10";
-    public final static String TOKEN_KEY_CHANGEOVER_FAILURE =
-            "LOGGING_SIGNED_AUDIT_TOKEN_KEY_CHANGEOVER_FAILURE_10";
-    public final static String TOKEN_AUTH_FAILURE =
-            "LOGGING_SIGNED_AUDIT_TOKEN_AUTH_FAILURE_9";
-    public final static String TOKEN_AUTH_SUCCESS =
-            "LOGGING_SIGNED_AUDIT_TOKEN_AUTH_SUCCESS_9";
+
     public final static String CONFIG_TOKEN_GENERAL =
             "LOGGING_SIGNED_AUDIT_CONFIG_TOKEN_GENERAL_5";
     public final static String CONFIG_TOKEN_PROFILE =
@@ -169,7 +134,7 @@ public class AuditEvent extends LogEvent {
             "LOGGING_SIGNED_AUDIT_AUTHORITY_CONFIG_3";
 
     public final static String AUDIT_LOG_SIGNING =
-            "LOGGING_SIGNED_AUDIT_SIGNING_3";
+            "LOGGING_SIGNED_AUDIT_AUDIT_LOG_SIGNING_3";
 
     private static final long serialVersionUID = -844306657733902324L;
 

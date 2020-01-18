@@ -401,12 +401,19 @@ public class SystemConfigService extends PKIService implements SystemConfigResou
         cert.setSubsystem(subsystem);
         cert.setType(cs.getString("preop.cert." + tag + ".type"));
 
+        String fullName;
+        if (!CryptoUtil.isInternalToken(tokenName)) {
+            fullName = tokenName + ":" + nickname;
+        } else {
+            fullName = nickname;
+        }
+
         CMS.debug("SystemConfigService: checking " + tag + " cert in NSS database");
 
         CryptoManager cm = CryptoManager.getInstance();
         X509Certificate x509Cert;
         try {
-            x509Cert = cm.findCertByNickname(nickname);
+            x509Cert = cm.findCertByNickname(fullName);
         } catch (ObjectNotFoundException e) {
             x509Cert = null;
         }
@@ -414,11 +421,12 @@ public class SystemConfigService extends PKIService implements SystemConfigResou
         // For external/existing CA case, some/all system certs may be provided.
         // The SSL server cert will always be generated for the current host.
 
-        // For standalone KRA/OCSP case, all system certs will be provided.
+        // For external/standalone KRA/OCSP case, all system certs will be provided.
         // No system certs will be generated including the SSL server cert.
 
-        if (request.isExternal() && !tag.equals("sslserver") && x509Cert != null
-                || request.getStandAlone()) {
+        if (request.isExternal() && "ca".equals(subsystem) && !tag.equals("sslserver") && x509Cert != null
+                || request.getStandAlone()
+                || request.isExternal() && ("kra".equals(subsystem) || "ocsp".equals(subsystem))) {
 
             CMS.debug("SystemConfigService: loading existing " + tag + " cert");
             byte[] bytes = x509Cert.getEncoded();
@@ -516,15 +524,28 @@ public class SystemConfigService extends PKIService implements SystemConfigResou
             nickname = cdata.getNickname();
         }
 
+        boolean isECC = false;
+        String keyType = cdata.getKeyType();
+
+        CMS.debug("SystemConfigService:updateCloneConfiguration: keyType: " + keyType);
+        if("ecc".equalsIgnoreCase(keyType)) {
+            isECC = true;
+        }
         X509Certificate cert = cryptoManager.findCertByNickname(nickname);
         PublicKey pubk = cert.getPublicKey();
-        byte[] exponent = CryptoUtil.getPublicExponent(pubk);
-        byte[] modulus = CryptoUtil.getModulus(pubk);
+        byte[] exponent = null;
+        byte[] modulus = null;
+
+        if (isECC == false) {
+            exponent = CryptoUtil.getPublicExponent(pubk);
+            modulus = CryptoUtil.getModulus(pubk);
+            cs.putString("preop.cert." + tag + ".pubkey.modulus", CryptoUtil.byte2string(modulus));
+            cs.putString("preop.cert." + tag + ".pubkey.exponent", CryptoUtil.byte2string(exponent));
+        }
+
         PrivateKey privk = cryptoManager.findPrivKeyByCert(cert);
 
-        cs.putString("preop.cert." + tag + ".pubkey.modulus", CryptoUtil.byte2string(modulus));
-        cs.putString("preop.cert." + tag + ".pubkey.exponent", CryptoUtil.byte2string(exponent));
-        cs.putString("preop.cert." + tag + ".privkey.id", CryptoUtil.byte2string(privk.getUniqueID()));
+        cs.putString("preop.cert." + tag + ".privkey.id", CryptoUtil.encodeKeyID(privk.getUniqueID()));
         cs.putString("preop.cert." + tag + ".keyalgorithm", cdata.getKeyAlgorithm());
         cs.putString("preop.cert." + tag + ".keytype", cdata.getKeyType());
     }
@@ -598,6 +619,8 @@ public class SystemConfigService extends PKIService implements SystemConfigResou
                     ca_hostname = cs.getString("securitydomain.host", "");
                     ca_port = cs.getInteger("securitydomain.httpseeport");
                 }
+
+                CMS.debug("Calculated admin cert profile: " + data.getAdminProfileID());
                 String b64 = ConfigurationUtils.submitAdminCertRequest(ca_hostname, ca_port,
                         data.getAdminProfileID(), data.getAdminCertRequestType(),
                         data.getAdminCertRequest(), adminSubjectDN);
@@ -851,7 +874,7 @@ public class SystemConfigService extends PKIService implements SystemConfigResou
             cs.putString("preop.securitydomain.select", "existing");
             cs.putString("securitydomain.select", "existing");
             cs.putString("preop.cert.subsystem.type", "remote");
-            cs.putString("preop.cert.subsystem.profile", "caInternalAuthSubsystemCert");
+            cs.putString("preop.cert.subsystem.profile", data.getSystemCertProfileID("subsystem", "caInternalAuthSubsystemCert"));
             String securityDomainURL = data.getSecurityDomainUri();
             domainXML = logIntoSecurityDomain(data, securityDomainURL);
         }

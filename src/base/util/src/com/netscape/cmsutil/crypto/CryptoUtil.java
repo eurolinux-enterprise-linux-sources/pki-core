@@ -24,6 +24,9 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.math.BigInteger;
 import java.net.SocketException;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.Charset;
 import java.security.GeneralSecurityException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -44,10 +47,15 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.Vector;
 
+import org.apache.commons.codec.binary.Hex;
+import org.apache.commons.lang.ArrayUtils;
 import org.apache.commons.lang.StringUtils;
 import org.mozilla.jss.CryptoManager;
 import org.mozilla.jss.CryptoManager.NotInitializedException;
@@ -114,6 +122,8 @@ import org.mozilla.jss.ssl.SSLSocket.SSLProtocolVariant;
 import org.mozilla.jss.ssl.SSLSocket.SSLVersionRange;
 import org.mozilla.jss.util.Base64OutputStream;
 import org.mozilla.jss.util.Password;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.netscape.cmsutil.util.Cert;
 import com.netscape.cmsutil.util.Utils;
@@ -155,6 +165,8 @@ import netscape.security.x509.X509Key;
 @SuppressWarnings("serial")
 public class CryptoUtil {
 
+    private static Logger logger = LoggerFactory.getLogger(CryptoUtil.class);
+
     public static enum SSLVersion {
         SSL_3_0(SSLVersionRange.ssl3),
         TLS_1_0(SSLVersionRange.tls1_0),
@@ -168,19 +180,29 @@ public class CryptoUtil {
         }
     }
 
+    public final static int KEY_ID_LENGTH = 20;
+
     public final static String INTERNAL_TOKEN_NAME = "internal";
     public final static String INTERNAL_TOKEN_FULL_NAME = "Internal Key Storage Token";
 
     public static final int LINE_COUNT = 76;
 
     static public final Integer[] clientECCiphers = {
+/*
         SSLSocket.TLS_ECDH_RSA_WITH_AES_128_CBC_SHA,
         SSLSocket.TLS_ECDH_RSA_WITH_AES_256_CBC_SHA,
+*/
         SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
         SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
         SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
-        SSLSocket.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
-        SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+//        SSLSocket.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+        SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384,
+        SSLSocket.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+/*
+        SSLSocket.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384,
+        SSLSocket.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+*/
     };
     static public List<Integer> clientECCipherList = new ArrayList<Integer>(Arrays.asList(clientECCiphers));
 
@@ -1187,15 +1209,7 @@ public class CryptoUtil {
         // grammar defined at https://tools.ietf.org/html/rfc7468#section-3
         s = s.replaceAll("-----(BEGIN|END) [\\p{Print}&&[^- ]]([- ]?[\\p{Print}&&[^- ]])*-----", "");
 
-        StringBuffer sb = new StringBuffer();
-        StringTokenizer st = new StringTokenizer(s, "\r\n ");
-
-        while (st.hasMoreTokens()) {
-            String nextLine = st.nextToken();
-            nextLine = nextLine.trim();
-            sb.append(nextLine);
-        }
-        return sb.toString();
+        return Utils.normalizeString(s);
     }
 
     public static String normalizeCertStr(String s) {
@@ -1214,6 +1228,126 @@ public class CryptoUtil {
             val.append(s.charAt(i));
         }
         return val.toString();
+    }
+    /**
+     * Sorts certificate chain from root to leaf.
+     *
+     * This method sorts an array of certificates (e.g. from a PKCS #7
+     * data) that represents a certificate chain from root to leaf
+     * according to the subject DNs and issuer DNs.
+     *
+     * The input array is a set of certificates that are part of a
+     * chain but not in specific order.
+     *
+     * The result is a new array that contains the certificate chain
+     * sorted from root to leaf. The input array is unchanged.
+     *
+     * @param certs input array of certificates
+     * @return new array containing sorted certificates
+     */
+    public static java.security.cert.X509Certificate[] sortCertificateChain(java.security.cert.X509Certificate[] certs) throws Exception {
+
+        // lookup map: subject DN -> cert
+        Map<String, java.security.cert.X509Certificate> certMap = new LinkedHashMap<>();
+
+        // hierarchy map: subject DN -> issuer DN
+        Map<String, String> parentMap = new HashMap<>();
+
+        // reverse hierarchy map: issuer DN -> subject DN
+        Map<String, String> childMap = new HashMap<>();
+
+        // build maps
+        for (java.security.cert.X509Certificate cert : certs) {
+
+            String subjectDN = cert.getSubjectDN().toString();
+            String issuerDN = cert.getIssuerDN().toString();
+
+            if (certMap.containsKey(subjectDN)) {
+                throw new Exception("Duplicate certificate: " + subjectDN);
+            }
+
+            certMap.put(subjectDN, cert);
+
+            // ignore self-signed certificate
+            if (subjectDN.equals(issuerDN)) continue;
+
+            if (childMap.containsKey(issuerDN)) {
+                throw new Exception("Branched chain: " + issuerDN);
+            }
+
+            parentMap.put(subjectDN, issuerDN);
+            childMap.put(issuerDN, subjectDN);
+        }
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Certificates:");
+            for (String subjectDN : certMap.keySet()) {
+                logger.debug(" - " + subjectDN);
+
+                String parent = parentMap.get(subjectDN);
+                if (parent != null) logger.debug("   parent: " + parent);
+
+                String child = childMap.get(subjectDN);
+                if (child != null) logger.debug("   child: " + child);
+            }
+        }
+
+        // find leaf cert
+        List<String> leafCerts = new ArrayList<>();
+
+        for (String subjectDN : certMap.keySet()) {
+
+            // if cert has a child, skip
+            if (childMap.containsKey(subjectDN)) continue;
+
+            // found leaf cert
+            leafCerts.add(subjectDN);
+        }
+
+        if (leafCerts.isEmpty()) {
+            throw new Exception("Unable to find leaf certificate");
+        }
+
+        if (leafCerts.size() > 1) {
+            StringBuilder sb = new StringBuilder();
+            for (String subjectDN : leafCerts) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append("[" + subjectDN + "]");
+            }
+            throw new Exception("Multiple leaf certificates: " + sb);
+        }
+
+        // build sorted chain
+        LinkedList<java.security.cert.X509Certificate> chain = new LinkedList<>();
+
+        // start from leaf
+        String current = leafCerts.get(0);
+
+        while (current != null) {
+
+            java.security.cert.X509Certificate cert = certMap.get(current);
+
+            // add to the beginning of chain
+            chain.addFirst(cert);
+
+            // follow parent to root
+            current = parentMap.get(current);
+        }
+
+        return chain.toArray(new java.security.cert.X509Certificate[chain.size()]);
+    }
+
+    public static java.security.cert.X509Certificate[] sortCertificateChain(
+            java.security.cert.X509Certificate[] certs,
+            boolean reverse) throws Exception {
+
+        certs = sortCertificateChain(certs);
+
+        if (reverse) {
+            ArrayUtils.reverse(certs);
+        }
+
+        return certs;
     }
 
     public static void importCertificateChain(byte[] bytes)
@@ -1256,6 +1390,9 @@ public class CryptoUtil {
 
     public static SEQUENCE parseCRMFMsgs(byte cert_request[])
                throws IOException, InvalidBERException {
+        if (cert_request == null) {
+            throw new IOException("invalid certificate requests: cert_request null");
+        }
         ByteArrayInputStream crmfBlobIn =
                 new ByteArrayInputStream(cert_request);
         SEQUENCE crmfMsgs = (SEQUENCE)
@@ -1267,12 +1404,21 @@ public class CryptoUtil {
     public static X509Key getX509KeyFromCRMFMsgs(SEQUENCE crmfMsgs)
               throws IOException, NoSuchAlgorithmException,
                   InvalidKeyException, InvalidKeyFormatException {
+        if (crmfMsgs == null) {
+            throw new IOException("invalid certificate requests: crmfMsgs null");
+        }
         int nummsgs = crmfMsgs.size();
         if (nummsgs <= 0) {
             throw new IOException("invalid certificate requests");
         }
         CertReqMsg msg = (CertReqMsg) crmfMsgs.elementAt(0);
-        CertRequest certreq = msg.getCertReq();
+        return getX509KeyFromCRMFMsg(msg);
+    }
+
+    public static X509Key getX509KeyFromCRMFMsg(CertReqMsg crmfMsg)
+              throws IOException, NoSuchAlgorithmException,
+                  InvalidKeyException, InvalidKeyFormatException {
+        CertRequest certreq = crmfMsg.getCertReq();
         CertTemplate certTemplate = certreq.getCertTemplate();
         SubjectPublicKeyInfo spkinfo = certTemplate.getPublicKey();
         PublicKey pkey = spkinfo.toPublicKey();
@@ -1778,9 +1924,11 @@ public class CryptoUtil {
                      System.out.println(method + "extension found");
                      try {
                        if (jssOID.equals(SKIoid)) {
+                         System.out.println(method + "SKIoid == jssOID");
                          extn =
                              new SubjectKeyIdentifierExtension(false, jssext.getExtnValue().toByteArray());
                        } else {
+                         System.out.println(method + "SKIoid != jssOID");
                          extn =
                              new netscape.security.x509.Extension(csOID, false, jssext.getExtnValue().toByteArray());
                        }
@@ -1923,12 +2071,70 @@ public class CryptoUtil {
         return false;
     }
 
+    /**
+     * Converts any length byte array into a signed, variable-length
+     * hexadecimal number.
+     */
     public static String byte2string(byte id[]) {
         return new BigInteger(id).toString(16);
     }
 
+    /**
+     * Converts a signed, variable-length hexadecimal number into a byte
+     * array, which may not be identical to the original byte array.
+     */
     public static byte[] string2byte(String id) {
-        return (new BigInteger(id, 16)).toByteArray();
+        return new BigInteger(id, 16).toByteArray();
+    }
+
+    /**
+     * Converts NSS key ID from a 20 byte array into a signed, variable-length
+     * hexadecimal number (to maintain compatibility with byte2string()).
+     */
+    public static String encodeKeyID(byte[] keyID) {
+
+        if (keyID.length != KEY_ID_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Unable to encode Key ID: " + Hex.encodeHexString(keyID));
+        }
+
+        return new BigInteger(keyID).toString(16);
+    }
+
+    /**
+     * Converts NSS key ID from a signed, variable-length hexadecimal number
+     * into a 20 byte array, which will be identical to the original byte array.
+     */
+    public static byte[] decodeKeyID(String id) {
+
+        BigInteger value = new BigInteger(id, 16);
+        byte[] array = value.toByteArray();
+
+        if (array.length > KEY_ID_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Unable to decode Key ID: " + id);
+        }
+
+        if (array.length < KEY_ID_LENGTH) {
+
+            // extend the array with most significant bit
+            byte[] tmp = array;
+            array = new byte[KEY_ID_LENGTH];
+
+            // calculate the extension
+            int p = KEY_ID_LENGTH - tmp.length;
+
+            // create filler byte based op the most significant bit
+            byte b = (byte)(value.signum() >= 0 ? 0x00 : 0xff);
+
+            // fill the extension with the filler byte
+            Arrays.fill(array, 0, p, b);
+
+            // copy the original array
+            System.arraycopy(tmp, 0, array, p, tmp.length);
+        }
+
+        return array;
     }
 
     /**
@@ -1948,6 +2154,52 @@ public class CryptoUtil {
             bytes[b] = (byte) Integer.parseInt(nextByte, 0x10);
         }
         return bytes;
+    }
+
+    public static char[] bytesToChars(byte[] bytes) {
+        if(bytes == null)
+            return null;
+
+        Charset charset = Charset.forName("UTF-8");
+        CharBuffer charBuffer = charset.decode(ByteBuffer.wrap(bytes));
+        char[] result = Arrays.copyOf(charBuffer.array(), charBuffer.limit());
+
+        //Clear up the CharBuffer we just created
+        if (charBuffer.hasArray()) {
+            char[] contentsToBeErased = charBuffer.array();
+            CryptoUtil.obscureChars(contentsToBeErased);
+        }
+        return result;
+    }
+
+    public static byte[] charsToBytes(char[] chars) {
+        if(chars == null)
+            return null;
+
+        Charset charset = Charset.forName("UTF-8");
+        ByteBuffer byteBuffer = charset.encode(CharBuffer.wrap(chars));
+        byte[] result = Arrays.copyOf(byteBuffer.array(), byteBuffer.limit());
+
+        if(byteBuffer.hasArray()) {
+            byte[] contentsToBeErased = byteBuffer.array();
+            CryptoUtil.obscureBytes(contentsToBeErased, "random");
+        }
+        return result;
+    }
+
+    /**
+     * Create a jss Password object from a provided byte array.
+     */
+    public static Password createPasswordFromBytes(byte[] bytes ) {
+
+        if(bytes == null)
+            return null;
+
+        char[] pwdChars = bytesToChars(bytes);
+        Password password = new Password(pwdChars);
+        obscureChars(pwdChars);
+
+        return password;
     }
 
     /**
@@ -2176,6 +2428,34 @@ public class CryptoUtil {
 
     }
 
+    public static void obscureChars(char[] memory) {
+        if (memory == null || memory.length == 0) {
+            //in case we want to log
+            return;
+        }
+        Arrays.fill(memory, (char) 0);
+    }
+
+    public static void obscureBytes(byte[] memory, String method) {
+        if (memory == null || memory.length == 0) {
+            //in case we want to log
+            return;
+        }
+
+        SecureRandom rnd;
+        try {
+            rnd = getRandomNumberGenerator();
+        } catch (GeneralSecurityException e) {
+            throw new RuntimeException(e);
+        }
+
+        if ("zeroes".equals(method)) {
+            Arrays.fill(memory, (byte)0);
+        } else {
+            rnd.nextBytes(memory);
+        }
+    }
+
     public static byte[] unwrapUsingPassphrase(byte[] wrappedRecoveredKey, String recoveryPassphrase)
             throws IOException, InvalidBERException, InvalidKeyException, IllegalStateException,
             NoSuchAlgorithmException, InvalidAlgorithmParameterException, NotInitializedException, TokenException,
@@ -2259,7 +2539,7 @@ public class CryptoUtil {
     public static PKIArchiveOptions createPKIArchiveOptions(
             CryptoToken token,
             PublicKey wrappingKey,
-            String data,
+            char[] data,
             WrappingParams params,
             AlgorithmIdentifier aid) throws Exception {
         return createPKIArchiveOptionsInternal(
@@ -2269,7 +2549,7 @@ public class CryptoUtil {
     public static byte[] createEncodedPKIArchiveOptions(
             CryptoToken token,
             PublicKey wrappingKey,
-            String data,
+            char []data,
             WrappingParams params,
             AlgorithmIdentifier aid) throws Exception {
         PKIArchiveOptions opts = createPKIArchiveOptionsInternal(
@@ -2280,7 +2560,7 @@ public class CryptoUtil {
     private static PKIArchiveOptions createPKIArchiveOptionsInternal(
             CryptoToken token,
             PublicKey wrappingKey,
-            String passphraseData,
+            char[] passphraseData,
             PrivateKey privKeyData,
             SymmetricKey symKeyData,
             WrappingParams params,
@@ -2295,7 +2575,7 @@ public class CryptoUtil {
 
         if (passphraseData != null) {
 
-            byte[] secret = passphraseData.getBytes("UTF-8");
+            byte[] secret =  CryptoUtil.charsToBytes(passphraseData);
             key_data = encryptSecret(
                     token,
                     secret,

@@ -31,8 +31,6 @@ import org.mozilla.jss.crypto.Signature;
 import org.mozilla.jss.crypto.SignatureAlgorithm;
 import org.mozilla.jss.crypto.TokenException;
 import org.mozilla.jss.crypto.X509Certificate;
-import org.mozilla.jss.util.IncorrectPasswordException;
-import org.mozilla.jss.util.PasswordCallback;
 
 import com.netscape.certsrv.apps.CMS;
 import com.netscape.certsrv.base.EBaseException;
@@ -41,10 +39,11 @@ import com.netscape.certsrv.base.ISubsystem;
 import com.netscape.certsrv.ca.CAMissingCertException;
 import com.netscape.certsrv.ca.CAMissingKeyException;
 import com.netscape.certsrv.ca.ECAException;
+import com.netscape.certsrv.logging.ConsoleError;
 import com.netscape.certsrv.logging.ILogger;
+import com.netscape.certsrv.logging.SystemEvent;
 import com.netscape.certsrv.security.ISigningUnit;
 import com.netscape.cms.logging.Logger;
-import com.netscape.cmscore.security.JssSubsystem;
 import com.netscape.cmsutil.crypto.CryptoUtil;
 import com.netscape.cmsutil.util.Cert;
 
@@ -163,10 +162,6 @@ public final class SigningUnit implements ISigningUnit {
                 setNewNickName(mNickname);
             }
 
-            CMS.debug("SigningUnit: Logging into token " + tokenname);
-            PasswordCallback cb = JssSubsystem.getInstance().getPWCB();
-            mToken.login(cb); // ONE_TIME by default.
-
             try {
                 CMS.debug("SigningUnit: Loading certificate " + mNickname);
                 mCert = mManager.findCertByNickname(mNickname);
@@ -188,7 +183,7 @@ public final class SigningUnit implements ISigningUnit {
                 throw new CAMissingKeyException(CMS.getUserMessage("CMS_CA_CERT_OBJECT_NOT_FOUND"), e);
             }
 
-            String privateKeyID = CryptoUtil.byte2string(mPrivk.getUniqueID());
+            String privateKeyID = CryptoUtil.encodeKeyID(mPrivk.getUniqueID());
             CMS.debug("SigningUnit: private key ID: " + privateKeyID);
 
             mPubk = mCert.getPublicKey();
@@ -207,10 +202,6 @@ public final class SigningUnit implements ISigningUnit {
         } catch (CryptoManager.NotInitializedException e) {
             log(ILogger.LL_FAILURE, CMS.getLogMessage("CMSCORE_CA_SIGNING_TOKEN_INIT", e.toString()));
             throw new ECAException(CMS.getUserMessage("CMS_CA_CRYPTO_NOT_INITIALIZED"), e);
-
-        } catch (IncorrectPasswordException e) {
-            log(ILogger.LL_FAILURE, CMS.getLogMessage("CMSCORE_CA_SIGNING_WRONG_PWD", e.toString()));
-            throw new ECAException(CMS.getUserMessage("CMS_CA_INVALID_PASSWORD"), e);
 
         } catch (NoSuchTokenException e) {
             log(ILogger.LL_FAILURE, CMS.getLogMessage("CMSCORE_CA_SIGNING_TOKEN_NOT_FOUND", tokenname, e.toString()));
@@ -274,6 +265,7 @@ public final class SigningUnit implements ISigningUnit {
         if (!mInited) {
             throw new EBaseException("CASigningUnit not initialized!");
         }
+        boolean testSignatureFailure = false;
         try {
             // XXX for now do this mapping until James changes the names
             // to match JCA names and provide a getAlgorithm method.
@@ -303,6 +295,13 @@ public final class SigningUnit implements ISigningUnit {
 
             // XXX add something more descriptive.
             CMS.debug("Signing Certificate");
+
+            testSignatureFailure = mConfig.getBoolean("testSignatureFailure",false);
+
+            if(testSignatureFailure == true) {
+                throw new SignatureException("Signature Exception forced for testing purposes.");
+            }
+
             return signer.sign();
         } catch (NoSuchAlgorithmException e) {
             log(ILogger.LL_FAILURE, CMS.getLogMessage("OPERATION_ERROR", e.toString()));
@@ -319,6 +318,12 @@ public final class SigningUnit implements ISigningUnit {
         } catch (SignatureException e) {
             log(ILogger.LL_FAILURE, CMS.getLogMessage("OPERATION_ERROR", e.toString()));
             CMS.debug("SigningUnit.sign: " + e.toString());
+
+            //For this one case, show the eventual erorr message that will be written to the system error
+            //log in case of a Signature failure.
+            if (testSignatureFailure == true) {
+                ConsoleError.send(new SystemEvent(CMS.getUserMessage("CMS_CA_SIGNING_OPERATION_FAILED", e.toString())));
+            }
             CMS.checkForAndAutoShutdown();
             // XXX fix this exception later.
             throw new EBaseException(e);

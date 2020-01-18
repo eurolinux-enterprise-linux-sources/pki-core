@@ -50,8 +50,8 @@ import com.netscape.certsrv.dbs.keydb.KeyId;
 import com.netscape.certsrv.kra.IKeyRecoveryAuthority;
 import com.netscape.certsrv.logging.ILogger;
 import com.netscape.certsrv.logging.LogEvent;
-import com.netscape.certsrv.logging.event.SecurityDataArchivalRequestEvent;
 import com.netscape.certsrv.logging.event.SecurityDataArchivalProcessedEvent;
+import com.netscape.certsrv.logging.event.SecurityDataArchivalRequestEvent;
 import com.netscape.certsrv.logging.event.SecurityDataExportEvent;
 import com.netscape.certsrv.logging.event.ServerSideKeyGenEvent;
 import com.netscape.certsrv.logging.event.ServerSideKeyGenProcessedEvent;
@@ -65,7 +65,6 @@ import com.netscape.cms.logging.SignedAuditLogger;
 import com.netscape.cms.servlet.key.KeyRecordParser;
 import com.netscape.cmscore.dbs.KeyRecord;
 import com.netscape.cmscore.security.JssSubsystem;
-import com.netscape.cmscore.util.Debug;
 import com.netscape.cmsutil.crypto.CryptoUtil;
 import com.netscape.cmsutil.util.Utils;
 
@@ -279,8 +278,10 @@ public class NetkeyKeygenService implements IService {
 
                 return false;
             }
+
             CMS.debug("NetkeyKeygenService: finished generate key pair for " + rCUID + ":" + rUserid);
 
+            java.security.PrivateKey privKey;
             try {
                 publicKeyData = keypair.getPublic().getEncoded();
                 if (publicKeyData == null) {
@@ -309,8 +310,7 @@ public class NetkeyKeygenService implements IService {
                         PubKey));
 
                 //...extract the private key handle (not privatekeydata)
-                java.security.PrivateKey privKey =
-                        keypair.getPrivate();
+                privKey = keypair.getPrivate();
 
                 if (privKey == null) {
                     request.setExtData(IRequest.RESULT, Integer.valueOf(4));
@@ -386,6 +386,13 @@ public class NetkeyKeygenService implements IService {
                 iv_s = /*base64Encode(iv);*/com.netscape.cmsutil.util.Utils.SpecialEncode(iv);
                 request.setExtData("iv_s", iv_s);
 
+            } catch (Exception e) {
+                CMS.debug(e);
+                request.setExtData(IRequest.RESULT, Integer.valueOf(4));
+                return false;
+            }
+
+            try {
                 /*
                  * archival - option flag "archive" controllable by the caller - TPS
                  */
@@ -417,10 +424,10 @@ public class NetkeyKeygenService implements IService {
                         params.setPayloadEncryptionIV(params.getPayloadWrappingIV());
 
                         privateKeyData = mStorageUnit.wrap((org.mozilla.jss.crypto.PrivateKey) privKey, params);
+
                     } catch (Exception e) {
                         request.setExtData(IRequest.RESULT, Integer.valueOf(4));
-                        CMS.debug("NetkeyKeygenService: privatekey encryption by storage unit failed");
-                        return false;
+                        throw new Exception("Unable to wrap private key with storage key", e);
                     }
 
                     CMS.debug("NetkeyKeygenService: privatekey encryption by storage unit successful");
@@ -436,13 +443,13 @@ public class NetkeyKeygenService implements IService {
                     if (rKeytype.equals("RSA")) {
                         try {
                             RSAPublicKey rsaPublicKey = new RSAPublicKey(publicKeyData);
-
                             rec.setKeySize(Integer.valueOf(rsaPublicKey.getKeySize()));
+
                         } catch (InvalidKeyException e) {
                             request.setExtData(IRequest.RESULT, Integer.valueOf(11));
-                            CMS.debug("NetkeyKeygenService: failed:InvalidKeyException");
-                            return false;
+                            throw new Exception("Invalid RSA public key", e);
                         }
+
                     } else if (rKeytype.equals("EC")) {
                         CMS.debug("NetkeyKeygenService: alg is EC");
                         String oidDescription = "UNDETERMINED";
@@ -483,8 +490,7 @@ public class NetkeyKeygenService implements IService {
 
                     if (serialNo == null) {
                         request.setExtData(IRequest.RESULT, Integer.valueOf(11));
-                        CMS.debug("NetkeyKeygenService: serialNo null");
-                        return false;
+                        throw new Exception("Unable to generate next serial number");
                     }
 
                     rec.setWrappingParams(params, allowEncDecrypt_archival);
@@ -495,40 +501,43 @@ public class NetkeyKeygenService implements IService {
                     storage.addKeyRecord(rec);
                     CMS.debug("NetkeyKeygenService: key archived for " + rCUID + ":" + rUserid);
 
-                    audit(new SecurityDataArchivalProcessedEvent(
+                    audit(SecurityDataArchivalProcessedEvent.createSuccessEvent(
                             agentId,
-                            ILogger.SUCCESS,
                             auditSubjectID,
                             request.getRequestId(),
                             null,
                             new KeyId(serialNo),
-                            null,
                             PubKey));
                 } //if archive
 
                 request.setExtData(IRequest.RESULT, Integer.valueOf(1));
+
             } catch (Exception e) {
-                CMS.debug("NetKeyKeygenService: " + e.toString());
-                Debug.printStackTrace(e);
-                request.setExtData(IRequest.RESULT, Integer.valueOf(4));
+                CMS.debug(e);
+
+                audit(SecurityDataArchivalProcessedEvent.createFailureEvent(
+                        agentId,
+                        auditSubjectID,
+                        request.getRequestId(),
+                        null,
+                        null,
+                        e.toString(),
+                        PubKey));
+
+                Integer result = request.getExtDataInInteger(IRequest.RESULT);
+                if (result == null) {
+                    // set default RESULT code
+                    request.setExtData(IRequest.RESULT, Integer.valueOf(4));
+                }
+
+                return false;
             }
+
         } else
             request.setExtData(IRequest.RESULT, Integer.valueOf(2));
 
         return true;
     } //serviceRequest
-
-    /**
-     * Signed Audit Log
-     * y
-     * This method is called to store messages to the signed audit log.
-     * <P>
-     *
-     * @param msg signed audit log message
-     */
-    private void audit(String msg) {
-        signedAuditLogger.log(msg);
-    }
 
     protected void audit(LogEvent event) {
         signedAuditLogger.log(event);

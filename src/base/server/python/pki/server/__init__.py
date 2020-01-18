@@ -21,13 +21,11 @@
 from __future__ import absolute_import
 
 import codecs
-from lxml import etree
 import functools
 import getpass
 import grp
 import io
-import ldap
-import ldap.filter
+import logging
 import operator
 import os
 import pwd
@@ -36,9 +34,15 @@ import shutil
 import subprocess
 import tempfile
 
+import ldap
+import ldap.filter
 import pki
+import pki.account
+import pki.cert
+import pki.client as client
 import pki.nssdb
 import pki.util
+from lxml import etree
 
 INSTANCE_BASE_DIR = '/var/lib/pki'
 CONFIG_BASE_DIR = '/etc/pki'
@@ -49,6 +53,10 @@ SUBSYSTEM_TYPES = ['ca', 'kra', 'ocsp', 'tks', 'tps']
 SUBSYSTEM_CLASSES = {}
 
 SELFTEST_CRITICAL = 'critical'
+
+logger = logging.LoggerAdapter(
+    logging.getLogger(__name__),
+    extra={'indent': ''})
 
 
 class PKIServer(object):
@@ -67,6 +75,235 @@ class PKIServer(object):
             instances.append(instance)
 
         return instances
+
+    @staticmethod
+    def split_cert_id(cert_id):
+        """
+        Utility method to return cert_tag and corresponding subsystem details from cert_id
+
+        :param cert_id: Cert ID
+        :type cert_id: str
+        :returns: (subsystem_name, cert_tag)
+        :rtype: (str, str)
+        """
+        if cert_id == 'sslserver' or cert_id == 'subsystem':
+            subsystem_name = None
+            cert_tag = cert_id
+        else:
+            parts = cert_id.split('_', 1)
+            subsystem_name = parts[0]
+            cert_tag = parts[1]
+        return subsystem_name, cert_tag
+
+    @staticmethod
+    def setup_password_authentication(username, password, subsystem_name='ca'):
+        """Return a PKIConnection, logged in using username and password."""
+        connection = client.PKIConnection(
+            'https', os.environ['HOSTNAME'], '8443', subsystem_name)
+        connection.authenticate(username, password)
+        account_client = pki.account.AccountClient(connection)
+        account_client.login()
+        return connection
+
+    @staticmethod
+    def setup_cert_authentication(
+            client_nssdb_pass, client_nssdb_pass_file, client_cert,
+            client_nssdb, tmpdir, subsystem_name):
+        """
+        Utility method to set up a secure authenticated connection with a
+        subsystem of PKI Server through PKI client
+
+        :param client_nssdb_pass: Client NSS db plain password
+        :type client_nssdb_pass: str
+        :param client_nssdb_pass_file: File containing client NSS db password
+        :type client_nssdb_pass_file: str
+        :param client_cert: Client Cert nick name
+        :type client_cert: str
+        :param client_nssdb: Client NSS db path
+        :type client_nssdb: str
+        :param tmpdir: Absolute path of temp dir to store p12 and pem files
+        :type tmpdir: str
+        :param subsystem_name: Name of the subsystem
+        :type subsystem_name: str
+        :return: Authenticated secure connection to PKI server
+        """
+        temp_auth_p12 = os.path.join(tmpdir, 'auth.p12')
+        temp_auth_cert = os.path.join(tmpdir, 'auth.pem')
+
+        if not client_cert:
+            raise PKIServerException('Client cert nickname is required.')
+
+        # Create a PKIConnection object that stores the details of subsystem.
+        connection = client.PKIConnection('https', os.environ['HOSTNAME'], '8443',
+                                          subsystem_name)
+
+        # Create a p12 file using
+        # pk12util -o <p12 file name> -n <cert nick name> -d <NSS db path>
+        # -W <pkcs12 password> -K <NSS db pass>
+        cmd_generate_pk12 = [
+            'pk12util',
+            '-o', temp_auth_p12,
+            '-n', client_cert,
+            '-d', client_nssdb
+        ]
+
+        # The pem file used for authentication. Created from a p12 file using the
+        # command:
+        # openssl pkcs12 -in <p12_file_path> -out /tmp/auth.pem -nodes
+        cmd_generate_pem = [
+            'openssl',
+            'pkcs12',
+            '-in', temp_auth_p12,
+            '-out', temp_auth_cert,
+            '-nodes',
+
+        ]
+
+        if client_nssdb_pass_file:
+            # Use the same password file for the generated pk12 file
+            cmd_generate_pk12.extend(['-k', client_nssdb_pass_file,
+                                      '-w', client_nssdb_pass_file])
+            cmd_generate_pem.extend(['-passin', 'file:' + client_nssdb_pass_file])
+        else:
+            # Use the same password for the generated pk12 file
+            cmd_generate_pk12.extend(['-K', client_nssdb_pass,
+                                      '-W', client_nssdb_pass])
+            cmd_generate_pem.extend(['-passin', 'pass:' + client_nssdb_pass])
+
+        # Generate temp_auth_p12 file
+        res_pk12 = subprocess.check_output(cmd_generate_pk12,
+                                           stderr=subprocess.STDOUT).decode('utf-8')
+        logger.debug('Result of pk12 generation: %s', res_pk12)
+
+        # Use temp_auth_p12 generated in previous step to
+        # to generate temp_auth_cert PEM file
+        res_pem = subprocess.check_output(cmd_generate_pem,
+                                          stderr=subprocess.STDOUT).decode('utf-8')
+        logger.debug('Result of pem generation: %s', res_pem)
+
+        # Bind the authentication with the connection object
+        connection.set_authentication_cert(temp_auth_cert)
+
+        return connection
+
+    @staticmethod
+    def renew_certificate(connection, output, serial):
+        """
+        Renew cert associated with the provided serial
+        :param connection: Secure authenticated connection to PKI Server
+        :type connection: PKIConnection
+        :param output: Location of the new cert file to be written to
+        :type output: str
+        :param serial: Serial number of the cert to be renewed
+        :type serial: str
+        :return: None
+        :rtype: None
+        """
+
+        # Instantiate the CertClient
+        cert_client = pki.cert.CertClient(connection)
+
+        inputs = dict()
+        inputs['serial_num'] = serial
+
+        # request: CertRequestInfo object for request generated.
+        # cert: CertData object for certificate generated (if any)
+        ret = cert_client.enroll_cert(inputs=inputs, profile_id='caManualRenewal')
+
+        request_data = ret[0].request
+        cert_data = ret[0].cert
+
+        logger.info('Request ID: %s', request_data.request_id)
+        logger.info('Request Status: %s', request_data.request_status)
+        logger.debug('request_data: %s', request_data)
+        logger.debug('cert_data: %s', cert_data)
+
+        if not cert_data:
+            raise PKIServerException('Unable to renew system '
+                                     'certificate for serial: %s' % serial)
+
+        # store cert_id for usage later
+        cert_serial_number = cert_data.serial_number
+        if not cert_serial_number:
+            raise PKIServerException('Unable to retrieve serial number of '
+                                     'renewed certificate.')
+
+        logger.info('Serial Number: %s', cert_serial_number)
+        logger.info('Issuer: %s', cert_data.issuer_dn)
+        logger.info('Subject: %s', cert_data.subject_dn)
+        logger.debug('Pretty Print:')
+        logger.debug(cert_data.pretty_repr)
+
+        new_cert_data = cert_client.get_cert(cert_serial_number=cert_serial_number)
+        with open(output, 'w') as f:
+            f.write(new_cert_data.encoded)
+
+    @staticmethod
+    def load_audit_events(filename):
+        '''
+        This method loads audit event info from audit-events.properties
+        and return it as a map of objects.
+        '''
+
+        logger.info('Loading %s', filename)
+
+        with open(filename) as f:
+            lines = f.read().splitlines()
+
+        events = {}
+
+        event_pattern = re.compile(r'# Event: (\S+)')
+        subsystems_pattern = re.compile(r'# Applicable subsystems: (.*)')
+        enabled_pattern = re.compile(r'# Enabled by default: (.*)')
+
+        event = None
+
+        for line in lines:
+
+            logger.debug('Parsing: %s', line)
+
+            event_match = event_pattern.match(line)
+            if event_match:
+
+                name = event_match.group(1)
+                logger.info('Found event %s', name)
+
+                event = {}
+                event['name'] = name
+                event['subsystems'] = []
+                event['enabled_by_default'] = False
+
+                events[name] = event
+                continue
+
+            subsystems_match = subsystems_pattern.match(line)
+            if subsystems_match:
+
+                subsystems = subsystems_match.group(1)
+                logger.info('Found subsystems %s', subsystems)
+
+                subsystems = subsystems.replace(' ', '').split(',')
+                event['subsystems'] = subsystems
+
+            enabled_match = enabled_pattern.match(line)
+            if enabled_match:
+
+                enabled = enabled_match.group(1)
+                logger.info('Found enabled by default %s', enabled)
+
+                if enabled == 'Yes':
+                    event['enabled_by_default'] = True
+                else:
+                    event['enabled_by_default'] = False
+
+        logger.info('Events:')
+
+        for name, event in events.items():
+            logger.info('- %s', name)
+            logger.info('  Applicable subsystems: %s', event['subsystems'])
+            logger.info('  Enabled by default: %s', event['enabled_by_default'])
+
+        return events
 
 
 @functools.total_ordering
@@ -97,7 +334,7 @@ class PKISubsystem(object):
             instance.conf_dir, 'Catalina', 'localhost', self.name + '.xml')
 
         self.config = {}
-        self.type = None    # e.g. CA, KRA
+        self.type = None  # e.g. CA, KRA
         self.prefix = None  # e.g. ca, kra
 
         # custom subsystem location
@@ -130,43 +367,47 @@ class PKISubsystem(object):
     def load(self):
         self.config.clear()
 
-        lines = open(self.cs_conf).read().splitlines()
+        if os.path.exists(self.cs_conf):
 
-        for index, line in enumerate(lines):
-            if not line or line.startswith('#'):
-                continue
-            parts = line.split('=', 1)
-            if len(parts) < 2:
-                raise Exception('Missing delimiter in %s line %d' % (self.cs_conf, index + 1))
-            name = parts[0]
-            value = parts[1]
-            self.config[name] = value
+            lines = open(self.cs_conf).read().splitlines()
 
-        self.type = self.config['cs.type']
-        self.prefix = self.type.lower()
+            for index, line in enumerate(lines):
+
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = line.split('=', 1)
+                if len(parts) < 2:
+                    raise Exception('Missing delimiter in %s line %d' % (self.cs_conf, index + 1))
+
+                name = parts[0]
+                value = parts[1]
+                self.config[name] = value
+
+            self.type = self.config['cs.type']
+            self.prefix = self.type.lower()
 
     def find_system_certs(self):
-        certs = []
 
         cert_ids = self.config['%s.cert.list' % self.name].split(',')
-        for cert_id in cert_ids:
-            cert = self.create_subsystem_cert_object(cert_id)
-            certs.append(cert)
 
-        return certs
+        for cert_id in cert_ids:
+            yield self.get_subsystem_cert(cert_id)
 
     def get_subsystem_cert(self, cert_id):
         return self.create_subsystem_cert_object(cert_id)
 
     def create_subsystem_cert_object(self, cert_id):
 
+        logger.info('Getting %s cert info for %s', cert_id, self.name)
+
         nickname = self.config.get('%s.%s.nickname' % (self.name, cert_id))
+        token = self.config.get('%s.%s.tokenname' % (self.name, cert_id))
 
         cert = {}
         cert['id'] = cert_id
         cert['nickname'] = nickname
-        cert['token'] = self.config.get(
-            '%s.%s.tokenname' % (self.name, cert_id), None)
+        cert['token'] = token
         cert['data'] = self.config.get(
             '%s.%s.cert' % (self.name, cert_id), None)
         cert['request'] = self.config.get(
@@ -177,10 +418,11 @@ class PKISubsystem(object):
         if not nickname:
             return cert
 
-        nssdb = self.instance.open_nssdb()
+        nssdb = self.instance.open_nssdb(token)
         try:
             cert_info = nssdb.get_cert_info(nickname)
-            cert.update(cert_info)
+            if cert_info:
+                cert.update(cert_info)
         finally:
             nssdb.close()
 
@@ -206,6 +448,8 @@ class PKISubsystem(object):
         if cert_id:
             cmd.append(cert_id)
 
+        logger.debug('Command: %s', ' '.join(cmd))
+
         subprocess.check_output(
             cmd,
             stderr=subprocess.STDOUT)
@@ -219,10 +463,7 @@ class PKISubsystem(object):
 
         cert = self.get_subsystem_cert(cert_id)
         nickname = cert['nickname']
-        token = cert['token']
-
-        if token and token.lower() in ['internal', 'internal key storage token']:
-            token = None
+        token = pki.nssdb.normalize_token(cert['token'])
 
         nssdb_password = self.instance.get_token_password(token)
 
@@ -256,6 +497,8 @@ class PKISubsystem(object):
                 nickname
             ])
 
+            logger.debug('Command: %s', ' '.join(cmd))
+
             subprocess.check_call(cmd)
 
         finally:
@@ -269,10 +512,7 @@ class PKISubsystem(object):
         # use subsystem certificate to get certificate chain
         cert = self.get_subsystem_cert('subsystem')
         nickname = cert['nickname']
-        token = cert['token']
-
-        if token and token.lower() in ['internal', 'internal key storage token']:
-            token = None
+        token = pki.nssdb.normalize_token(cert['token'])
 
         nssdb_password = self.instance.get_token_password(token)
 
@@ -300,6 +540,8 @@ class PKISubsystem(object):
                 nickname
             ])
 
+            logger.debug('Command: %s', ' '.join(cmd))
+
             subprocess.check_call(cmd)
 
             # remove the certificate and key, but keep the chain
@@ -318,6 +560,8 @@ class PKISubsystem(object):
                 '--pkcs12-password-file', pkcs12_password_file,
                 nickname
             ])
+
+            logger.debug('Command: %s', ' '.join(cmd))
 
             subprocess.check_call(cmd)
 
@@ -398,7 +642,8 @@ class PKISubsystem(object):
                 client_cert_nickname=self.config[
                     '%s.ldapauth.clientCertNickname' % name],
                 # TODO: remove hard-coded token name
-                nssdb_password=self.instance.get_token_password('internal')
+                nssdb_password=self.instance.get_token_password(
+                    pki.nssdb.INTERNAL_TOKEN_NAME)
             )
 
         else:
@@ -418,6 +663,177 @@ class PKISubsystem(object):
         }
 
         pki.util.customize_file(input_file, output_file, params)
+
+    def enable_audit_event(self, event_name):
+
+        if not event_name:
+            raise ValueError("Please specify the Event name")
+
+        if event_name not in self.get_audit_events():
+            raise PKIServerException('Invalid audit event: %s' % event_name)
+
+        value = self.config['log.instance.SignedAudit.events']
+        events = set(value.replace(' ', '').split(','))
+
+        if event_name in events:
+            return False
+
+        events.add(event_name)
+        event_list = ','.join(sorted(events))
+        self.config['log.instance.SignedAudit.events'] = event_list
+
+        return True
+
+    def update_audit_event_filter(self, event_name, event_filter):
+
+        if not event_name:
+            raise ValueError("Please specify the Event name")
+
+        if event_name not in self.get_audit_events():
+            raise PKIServerException('Invalid audit event: %s' % event_name)
+
+        name = 'log.instance.SignedAudit.filters.%s' % event_name
+
+        if event_filter:
+            self.config[name] = event_filter
+        else:
+            self.config.pop(name, None)
+
+    def disable_audit_event(self, event_name):
+
+        if not event_name:
+            raise ValueError("Please specify the Event name")
+
+        if event_name not in self.get_audit_events():
+            raise PKIServerException('Invalid audit event: %s' % event_name)
+
+        value = self.config['log.instance.SignedAudit.events']
+        events = set(value.replace(' ', '').split(','))
+
+        if event_name not in events:
+            return False
+
+        events.remove(event_name)
+        event_list = ','.join(sorted(events))
+        self.config['log.instance.SignedAudit.events'] = event_list
+
+        return True
+
+    def find_audit_event_configs(self, enabled=None, enabled_by_default=None):
+        '''
+        This method returns current audit configuration based on the specified
+        filters.
+        '''
+
+        events = self.get_audit_events()
+        enabled_events = set(self.get_enabled_audit_events())
+
+        # apply "enabled_by_default" filter
+        if enabled_by_default is None:
+            # return all events
+            names = set(events.keys())
+
+        else:
+            # return events enabled by default
+            names = set()
+            for name, event in events.items():
+                if enabled_by_default is event['enabled_by_default']:
+                    names.add(name)
+
+        # apply "enabled" filter
+        if enabled is None:
+            # return all events
+            pass
+
+        elif enabled:  # enabled == True
+            # return currently enabled events
+            names = names.intersection(enabled_events)
+
+        else:  # enabled == False
+            # return currently disabled events
+            names = names.difference(enabled_events)
+
+        results = []
+
+        # get event properties
+        for name in sorted(names):
+            event = {}
+            event['name'] = name
+            event['enabled'] = name in enabled_events
+            event['filter'] = self.config.get('log.instance.SignedAudit.filters.%s' % name)
+            results.append(event)
+
+        return results
+
+    def get_audit_event_config(self, name):
+
+        if name not in self.get_audit_events():
+            raise PKIServerException('Invalid audit event: %s' % name)
+
+        enabled_event_names = self.get_enabled_audit_events()
+
+        event = {}
+        event['name'] = name
+        event['enabled'] = name in enabled_event_names
+        event['filter'] = self.config.get('log.instance.SignedAudit.filters.%s' % name)
+
+        return event
+
+    def get_audit_events(self):
+        '''
+        This method returns audit events applicable to this subsystem
+        as a map of objects.
+        '''
+
+        # get the list of audit events from audit-events.properties
+
+        tmpdir = tempfile.mkdtemp()
+
+        try:
+            # export audit-events.properties from cmsbundle.jar
+            cmsbundle_jar = \
+                '/usr/share/pki/%s/webapps/%s/WEB-INF/lib/pki-cmsbundle.jar' \
+                % (self.name, self.name)
+
+            cmd = [
+                'jar',
+                'xf',
+                cmsbundle_jar,
+                'audit-events.properties'
+            ]
+
+            logger.debug('Command: %s', ' '.join(cmd))
+
+            subprocess.check_output(
+                cmd,
+                cwd=tmpdir,
+                stderr=subprocess.STDOUT)
+
+            # load audit-events.properties
+            filename = os.path.join(tmpdir, 'audit-events.properties')
+            events = PKIServer.load_audit_events(filename)
+
+        finally:
+            shutil.rmtree(tmpdir)
+
+        # get audit events for this subsystem
+        results = {}
+        subsystem = self.name.upper()
+
+        for name, event in events.items():
+            if subsystem in event['subsystems']:
+                logger.info('Returning %s', name)
+                results[name] = event
+
+        return results
+
+    def get_enabled_audit_events(self):
+
+        # parse enabled audit events
+        value = self.config['log.instance.SignedAudit.events']
+        events = set(value.replace(' ', '').split(','))
+
+        return sorted(events)
 
     def get_audit_log_dir(self):
 
@@ -459,9 +875,172 @@ class PKISubsystem(object):
 
     def set_startup_tests(self, target_tests):
         # Remove unnecessary space, curly braces
-        self.config['selftests.container.order.startup'] = ", "\
+        self.config['selftests.container.order.startup'] = ", " \
             .join([(key + ':' + SELFTEST_CRITICAL if val else key)
                    for key, val in target_tests.items()])
+
+    def set_startup_test_criticality(self, critical, test=None):
+        # Assume action to be taken on ALL available startup tests
+        target_tests = self.get_startup_tests()
+
+        # If just one test is provided, take action on ONLY that test
+        if test:
+            if test not in target_tests:
+                raise PKIServerException('No such self test available for %s' % self.name)
+            target_tests[test] = critical
+        else:
+            for testID in target_tests:
+                target_tests[testID] = critical
+        self.set_startup_tests(target_tests)
+
+    def setup_temp_renewal(self, tmpdir, cert_tag):
+        """
+        Retrieve CA's cert, Subject Key Identifier (SKI aka AKI) and CSR for
+        the *cert_id* provided
+
+        :param tmpdir: Path to temp dir to write cert's .csr and CA's .crt file
+        :type tmpdir: str
+        :param cert_tag: Cert for which CSR is requested
+        :type cert_tag: str
+        :return: (ca_signing_cert, aki, csr_file)
+        """
+
+        csr_file = os.path.join(tmpdir, cert_tag + '.csr')
+        ca_cert_file = os.path.join(tmpdir, 'ca_certificate.crt')
+
+        logger.debug('Exporting CSR for %s cert', cert_tag)
+
+        # Retrieve CSR for cert_id
+        cert_request = self.get_subsystem_cert(cert_tag).get('request', None)
+        if cert_request is None:
+            raise PKIServerException('Unable to find CSR for %s cert' % cert_tag)
+
+        logger.debug('Retrieved CSR: %s', cert_request)
+
+        csr_data = pki.nssdb.convert_csr(cert_request, 'base64', 'pem')
+        with open(csr_file, 'w') as f:
+            f.write(csr_data)
+        logger.info('CSR for %s has been written to %s', cert_tag, csr_file)
+
+        logger.debug('Extracting SKI from CA cert')
+        # TODO: Support remote CA.
+
+        # Retrieve Subject Key Identifier from CA cert
+        ca_signing_cert = self.instance.get_subsystem('ca').get_subsystem_cert('signing')
+
+        ca_cert_data = ca_signing_cert.get('data', None)
+        if ca_cert_data is None:
+            raise PKIServerException('Unable to find certificate data for CA signing certificate.')
+
+        logger.debug('Retrieved CA cert details: %s', ca_cert_data)
+
+        ca_cert = pki.nssdb.convert_cert(ca_cert_data, 'base64', 'pem')
+        with open(ca_cert_file, 'w') as f:
+            f.write(ca_cert)
+        logger.info('CA cert written to %s', ca_cert_file)
+
+        ca_cert_retrieve_cmd = [
+            'openssl',
+            'x509',
+            '-in', ca_cert_file,
+            '-noout',
+            '-text'
+        ]
+
+        logger.debug('Command: %s', ' '.join(ca_cert_retrieve_cmd))
+        ca_cert_details = subprocess.check_output(ca_cert_retrieve_cmd).decode('utf-8')
+
+        aki = re.search(r'Subject Key Identifier.*\n.*?(.*?)\n', ca_cert_details).group(1)
+
+        # Add 0x to represent this as a Hex
+        aki = '0x' + aki.strip().replace(':', '')
+        logger.info('AKI: %s', aki)
+
+        return ca_signing_cert, aki, csr_file
+
+    def temp_cert_create(self, nssdb, tmpdir, cert_tag, serial, new_cert_file):
+        """
+        Generates temp cert with validity of 3 months by default
+
+        **Note**: Currently, supports only *sslserver* cert
+
+        :param nssdb: NSS db instance
+        :type nssdb: NSSDatabase
+        :param tmpdir: Path to temp dir to write cert's csr and ca's cert file
+        :type tmpdir: str
+        :param cert_tag: Cert for which temp cert needs to be created
+        :type cert_tag: str
+        :param serial: Serial number to be assigned to new cert
+        :type serial: str
+        :param new_cert_file: Path where the new temp cert needs to be written to
+        :type new_cert_file: str
+        :return: None
+        :rtype: None
+        """
+        logger.info('Generate temp SSL certificate')
+
+        if cert_tag != 'sslserver':
+            raise PKIServerException('Temp cert for %s is not supported yet.' % cert_tag)
+
+        ca_signing_cert, aki, csr_file = \
+            self.setup_temp_renewal(tmpdir=tmpdir, cert_tag=cert_tag)
+
+        # --keyUsage
+        key_usage_ext = {
+            'digitalSignature': True,
+            'nonRepudiation': True,
+            'keyEncipherment': True,
+            'dataEncipherment': True,
+            'critical': True
+        }
+
+        # -3
+        aki_ext = {
+            'auth_key_id': aki
+        }
+
+        # --extKeyUsage
+        ext_key_usage_ext = {
+            'serverAuth': True
+        }
+
+        logger.debug('Creating temp cert')
+
+        rc = nssdb.create_cert(
+            issuer=ca_signing_cert['nickname'],
+            request_file=csr_file,
+            cert_file=new_cert_file,
+            serial=serial,
+            key_usage_ext=key_usage_ext,
+            aki_ext=aki_ext,
+            ext_key_usage_ext=ext_key_usage_ext)
+        if rc:
+            raise PKIServerException('Failed to generate CA-signed temp SSL '
+                                     'certificate. RC: %d' % rc)
+
+    def get_db_config(self):
+        """Return DB configuration as dict."""
+        shortkeys = [
+            'ldapconn.host', 'ldapconn.port', 'ldapconn.secureConn',
+            'ldapauth.authtype', 'ldapauth.bindDN', 'ldapauth.bindPWPrompt',
+            'ldapauth.clientCertNickname', 'database', 'basedn',
+            'multipleSuffix.enable', 'maxConns', 'minConns',
+        ]
+        db_keys = ['internaldb.{}'.format(x) for x in shortkeys]
+        return {k: v for k, v in self.config.items() if k in db_keys}
+
+    def set_db_config(self, new_config):
+        """Write the dict of DB configuration to subsystem config.
+
+        Right now this does not perform sanity checks; it just calls
+        ``update`` on the config dict.  Fields that are ``None`` will
+        overwrite the existing key.  So if you do not want to reset a
+        field, ensure the key is absent.
+
+        Likewise, extraneous fields will be set into the main config.
+
+        """
+        self.config.update(new_config)
 
 
 class CASubsystem(PKISubsystem):
@@ -637,10 +1216,7 @@ class PKIInstance(object):
                     self.group = m.group(1)
                     self.gid = grp.getgrnam(self.group).gr_gid
 
-        # load passwords
-        self.passwords.clear()
-        if os.path.exists(self.password_conf):
-            pki.util.load_properties(self.password_conf, self.passwords)
+        self.load_passwords()
 
         self.load_external_certs(self.external_certs_conf)
 
@@ -691,11 +1267,11 @@ class PKIInstance(object):
 
         return password
 
-    def get_token_password(self, token='internal'):
+    def get_token_password(self, token=pki.nssdb.INTERNAL_TOKEN_NAME):
 
         # determine the password name for the token
-        if not token or token.lower() in ['internal', 'internal key storage token']:
-            name = 'internal'
+        if not pki.nssdb.normalize_token(token):
+            name = pki.nssdb.INTERNAL_TOKEN_NAME
 
         else:
             name = 'hardware-%s' % token
@@ -710,7 +1286,7 @@ class PKIInstance(object):
 
         return password
 
-    def open_nssdb(self, token='internal'):
+    def open_nssdb(self, token=pki.nssdb.INTERNAL_TOKEN_NAME):
         return pki.nssdb.NSSDatabase(
             directory=self.nssdb_dir,
             token=token,
@@ -747,10 +1323,7 @@ class PKIInstance(object):
                               new_file=False):
         for cert in self.external_certs:
             nickname = cert.nickname
-            token = cert.token
-
-            if token and token.lower() in ['internal', 'internal key storage token']:
-                token = None
+            token = pki.nssdb.normalize_token(cert.token)
 
             nssdb_password = self.get_token_password(token)
 
@@ -788,6 +1361,19 @@ class PKIInstance(object):
 
             finally:
                 shutil.rmtree(tmpdir)
+
+    def load_passwords(self):
+
+        self.passwords.clear()
+
+        if os.path.exists(self.password_conf):
+            logger.info('Loading password config: %s', self.password_conf)
+            pki.util.load_properties(self.password_conf, self.passwords)
+
+    def store_passwords(self):
+
+        pki.util.store_properties(self.password_conf, self.passwords)
+        pki.util.chown(self.password_conf, self.uid, self.gid)
 
     def get_subsystem(self, name):
         for subsystem in self.subsystems:
@@ -856,6 +1442,285 @@ class PKIInstance(object):
             return "Dogtag 9 " + self.name
         return self.name
 
+    def cert_del(self, cert_id, remove_key=False):
+        """
+        Delete a cert from NSS db
+
+        :param cert_id: Cert ID
+        :type cert_id: str
+        :param remove_key: Remove associate private key
+        :type remove_key: bool
+        """
+
+        subsystem_name, cert_tag = PKIServer.split_cert_id(cert_id)
+
+        if not subsystem_name:
+            subsystem_name = self.subsystems[0].name
+
+        subsystem = self.get_subsystem(subsystem_name)
+
+        cert = subsystem.get_subsystem_cert(cert_tag)
+        nssdb = self.open_nssdb()
+
+        try:
+            logger.debug('Removing %s certificate from NSS database from '
+                         'subsystem %s in instance %s', cert_tag, subsystem.name, self.name)
+            nssdb.remove_cert(
+                nickname=cert['nickname'],
+                token=cert['token'],
+                remove_key=remove_key)
+        finally:
+            nssdb.close()
+
+    def cert_update_config(self, cert_id, cert):
+        """
+        Update corresponding subsystem's CS.cfg with the new cert details
+        passed.
+
+        **Note:**
+        *subsystem* param is ignored when `(cert_id == sslserver ||
+        cert_id == subsystem)` since these 2 certs are used by all subsystems
+
+        :param cert_id: Cert ID to update
+        :type cert_id: str
+        :param cert: Cert details to store in CS.cfg
+        :type cert: dict
+        :rtype: None
+        :raises PKIServerException
+        """
+        # store cert data and request in CS.cfg
+        if cert_id == 'sslserver' or cert_id == 'subsystem':
+            # Update for all subsystems
+            for subsystem in self.subsystems:
+                subsystem.update_subsystem_cert(cert)
+                subsystem.save()
+        else:
+            # Extract subsystem_name from cert_id
+            subsystem_name = cert_id.split('_', 1)[0]
+
+            # Load the corresponding subsystem
+            subsystem = self.get_subsystem(subsystem_name)
+
+            if subsystem:
+                subsystem.update_subsystem_cert(cert)
+                subsystem.save()
+            else:
+                raise PKIServerException('No subsystem can be loaded for %s in '
+                                         'instance %s.' % (cert_id, self.name))
+
+    @property
+    def cert_folder(self):
+        return os.path.join(pki.CONF_DIR, self.name, 'certs')
+
+    def cert_file(self, cert_id):
+        """Compute name of certificate under instance cert folder."""
+        return os.path.join(self.cert_folder, cert_id + '.crt')
+
+    def nssdb_import_cert(self, cert_id, cert_file=None):
+        """
+        Add cert from cert_file to NSS db with appropriate trust flags
+
+        :param cert_id: Cert ID
+        :type cert_id: str
+        :param cert_file: Cert file to be imported into NSS db
+        :type cert_file: str
+        :return: New cert data loaded into nssdb
+        :rtype: dict
+
+        :raises PKIServerException
+        """
+
+        subsystem_name, cert_tag = PKIServer.split_cert_id(cert_id)
+
+        if not subsystem_name:
+            subsystem_name = self.subsystems[0].name
+
+        subsystem = self.get_subsystem(subsystem_name)
+
+        # audit and CA signing cert require special flags set in NSSDB
+        trust_attributes = None
+        if subsystem_name == 'ca' and cert_tag == 'signing':
+            trust_attributes = 'CT,C,C'
+        elif cert_tag == 'audit_signing':
+            trust_attributes = ',,P'
+
+        nssdb = self.open_nssdb()
+
+        try:
+            # If cert_file is not provided, load the cert from /etc/pki/certs/<cert_id>.crt
+            if not cert_file:
+                cert_file = self.cert_file(cert_id)
+
+            if not os.path.isfile(cert_file):
+                raise PKIServerException('%s does not exist.' % cert_file)
+
+            cert = subsystem.get_subsystem_cert(cert_tag)
+
+            logger.debug('Checking existing %s certificate in NSS database'
+                         ' for subsystem: %s, instance: %s',
+                         cert_tag, subsystem_name, self.name)
+
+            if nssdb.get_cert(
+                    nickname=cert['nickname'],
+                    token=cert['token']):
+                raise PKIServerException('Certificate already exists: %s in'
+                                         'subsystem %s' % (cert_tag, self.name))
+
+            logger.debug('Importing new %s certificate into NSS database'
+                         ' for subsys %s, instance %s',
+                         cert_tag, subsystem_name, self.name)
+
+            nssdb.add_cert(
+                nickname=cert['nickname'],
+                token=cert['token'],
+                cert_file=cert_file,
+                trust_attributes=trust_attributes)
+
+            logger.info('Updating CS.cfg with the new certificate')
+            data = nssdb.get_cert(
+                nickname=cert['nickname'],
+                token=cert['token'],
+                output_format='base64')
+
+            # Store the cert data retrieved from NSS db
+            cert['data'] = data
+
+            return cert
+
+        finally:
+            nssdb.close()
+
+    def cert_import(self, cert_id, cert_file=None):
+        """
+        Import cert from cert_file into NSS db with appropriate trust flags and update
+        all corresponding subsystem's CS.cfg
+
+        :param cert_id: Cert ID
+        :type cert_id: str
+        :param cert_file: Cert file to be imported into NSS db
+        :type cert_file: str
+        :return: None
+        :rtype: None
+        """
+        updated_cert = self.nssdb_import_cert(cert_id, cert_file)
+        self.cert_update_config(cert_id, updated_cert)
+
+    def cert_create(
+            self, cert_id=None,
+            username=None, password=None,
+            client_cert=None, client_nssdb=None,
+            client_nssdb_pass=None, client_nssdb_pass_file=None,
+            serial=None, temp_cert=False, renew=False, output=None):
+        """
+        Create a new cert for the cert_id provided
+
+        :param cert_id: New cert's ID
+        :type cert_id: str
+        :param username: Username (must also supply password)
+        :type username: str
+        :param password: Password (must also supply username)
+        :type password: str
+        :param client_cert: Client cert nickname
+        :type client_cert: str
+        :param client_nssdb: Path to nssdb
+        :type client_nssdb: str
+        :param client_nssdb_pass: Password to the nssdb
+        :type client_nssdb_pass: str
+        :param client_nssdb_pass_file: File containing nssdb's password
+        :type client_nssdb_pass_file: str
+        :param serial: Serial number of the cert to be renewed.  If creating
+                       a temporary certificate (temp_cert == True), the serial
+                       number will be reused.  If not supplied, the cert_id is
+                       used to look it up.
+        :type serial: str
+        :param temp_cert: Whether new cert is a temporary cert
+        :type temp_cert: bool
+        :param renew: Whether to place a renewal request to ca
+        :type renew: bool
+        :param output: Path to which new cert needs to be written to
+        :type output: str
+        :return: None
+        :rtype: None
+        :raises PKIServerException
+
+        Either supply both username and password, or supply
+        client_nssdb and client_cert and
+        (client_nssdb_pass or client_nssdb_pass_file).
+
+        """
+        nssdb = self.open_nssdb()
+        tmpdir = tempfile.mkdtemp()
+        subsystem = None  # used for system certs
+
+        try:
+            if cert_id:
+                new_cert_file = output if output else self.cert_file(cert_id)
+
+                subsystem_name, cert_tag = PKIServer.split_cert_id(cert_id)
+                if not subsystem_name:
+                    subsystem_name = self.subsystems[0].name
+                subsystem = self.get_subsystem(subsystem_name)
+
+                if serial is None:
+                    # If admin doesn't provide a serial number, set the serial to
+                    # the same serial number available in the nssdb
+                    serial = subsystem.get_subsystem_cert(cert_tag)["serial_number"]
+
+            else:
+                if serial is None:
+                    raise PKIServerException("Must provide either 'cert_id' or 'serial'")
+                if output is None:
+                    raise PKIServerException("Must provide 'output' when renewing by serial")
+                if temp_cert:
+                    raise PKIServerException("'temp_cert' must be used with 'cert_id'")
+                new_cert_file = output
+
+            if not os.path.exists(self.cert_folder):
+                os.makedirs(self.cert_folder)
+
+            if temp_cert:
+                assert subsystem is not None  # temp_cert only supported with cert_id
+
+                logger.info('Trying to create a new temp cert for %s.', cert_id)
+
+                # Create Temp Cert and write it to new_cert_file
+                subsystem.temp_cert_create(nssdb, tmpdir, cert_tag, serial, new_cert_file)
+
+                logger.info('Temp cert for %s is available at %s.', cert_id, new_cert_file)
+
+            else:
+                # Create permanent certificate
+                if not renew:
+                    # TODO: Support rekey
+                    raise PKIServerException('Rekey is not supported yet.')
+
+                logger.info('Trying to setup a secure connection to CA subsystem.')
+                if username and password:
+                    connection = PKIServer.setup_password_authentication(
+                        username, password, subsystem_name='ca')
+                else:
+                    if not client_cert:
+                        raise PKIServerException('Client cert nick name required.')
+                    if not client_nssdb_pass and not client_nssdb_pass_file:
+                        raise PKIServerException('NSS db password required.')
+                    connection = PKIServer.setup_cert_authentication(
+                        client_nssdb_pass=client_nssdb_pass,
+                        client_cert=client_cert,
+                        client_nssdb_pass_file=client_nssdb_pass_file,
+                        client_nssdb=client_nssdb,
+                        tmpdir=tmpdir,
+                        subsystem_name='ca'
+                    )
+                logger.info('Secure connection with CA is established.')
+
+                logger.info('Placing cert creation request for serial: %s', serial)
+                PKIServer.renew_certificate(connection, new_cert_file, serial)
+                logger.info('New cert is available at: %s', new_cert_file)
+
+        finally:
+            nssdb.close()
+            shutil.rmtree(tmpdir)
+
 
 class PKIDatabaseConnection(object):
 
@@ -889,11 +1754,9 @@ class PKIDatabaseConnection(object):
         self.temp_dir = tempfile.mkdtemp()
 
         if self.nssdb_dir:
-
             ldap.set_option(ldap.OPT_X_TLS_CACERTDIR, self.nssdb_dir)
 
         if self.client_cert_nickname:
-
             password_file = os.path.join(self.temp_dir, 'password.txt')
             with open(password_file, 'w') as f:
                 f.write(self.nssdb_password)
@@ -919,7 +1782,6 @@ class PKIServerException(pki.PKIException):
 
     def __init__(self, message, exception=None,
                  instance=None, subsystem=None):
-
         pki.PKIException.__init__(self, message, exception)
 
         self.instance = instance

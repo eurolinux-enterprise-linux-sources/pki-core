@@ -13,9 +13,8 @@
 %global package_rhel_packages 1
 # Package RHCS-specific RPMS Only
 %global package_rhcs_packages 0
-%define pki_core_rhel_version 10.5.1
+%define pki_core_rhel_version 10.5.16
 %else
-# 0%{?fedora}
 # Fedora always packages all RPMS
 %global package_fedora_packages 1
 %endif
@@ -65,14 +64,14 @@
 
 Name:             pki-core
 %if 0%{?rhel}
-Version:                10.5.1
-%define redhat_release  15
+Version:                10.5.16
+%define redhat_release  3
 %define redhat_stage    0
 #%define default_release %{redhat_release}.%{redhat_stage}
 %define default_release %{redhat_release}
 %else
-Version:                10.5.12
-%define fedora_release  1
+Version:                10.5.16
+%define fedora_release  4
 %define fedora_stage    0
 #%define default_release %{fedora_release}.%{fedora_stage}
 %define default_release %{fedora_release}
@@ -110,9 +109,9 @@ BuildRequires:    nspr-devel
 BuildRequires:    nss-devel >= 3.28.3
 
 %if 0%{?rhel} && 0%{?rhel} <= 7
-BuildRequires:    nuxwdog-client-java >= 1.0.3-7
+BuildRequires:    nuxwdog-client-java >= 1.0.3-8
 %else
-BuildRequires:    nuxwdog-client-java >= 1.0.3-13
+BuildRequires:    nuxwdog-client-java >= 1.0.3-14
 %endif
 
 BuildRequires:    openldap-devel
@@ -167,12 +166,11 @@ BuildRequires:    policycoreutils-python-utils
 BuildRequires:    python-ldap
 BuildRequires:    junit
 BuildRequires:    jpackage-utils >= 0:1.7.5-10
+BuildRequires:    jss >= 4.4.6-1
 %if 0%{?rhel} && 0%{?rhel} <= 7
-BuildRequires:    jss >= 4.4.0-13
-BuildRequires:    tomcatjss >= 7.2.1-7
+BuildRequires:    tomcatjss >= 7.2.1-8
 %else
-BuildRequires:    jss >= 4.4.4-3
-BuildRequires:    tomcatjss >= 7.2.4-3
+BuildRequires:    tomcatjss >= 7.2.4-4
 %endif
 BuildRequires:    systemd-units
 
@@ -208,19 +206,8 @@ Source0:          http://pki.fedoraproject.org/pki/sources/%{name}/%{version}/%{
 Source0:          http://pki.fedoraproject.org/pki/sources/%{name}/%{version}/%{release}/%{name}-%{version}%{?prerel}.tar.gz
 %endif
 
-Patch0:           pki-core-10.5.1-alpha.patch
-Patch1:           pki-core-10.5.1-beta.patch
-Patch2:           pki-core-10.5.1-snapshot-1.patch
-Patch3:           pki-core-10.5.1-snapshot-2.patch
-Patch4:           pki-core-10.5.1-snapshot-3.patch
-Patch5:           pki-core-10.5.1-snapshot-4.patch
-Patch6:           pki-core-10.5.1-snapshot-5.patch
-Patch7:           pki-core-10.5.1-batch-1.0.patch
-Patch8:           pki-core-10.5.1-batch-1.1.patch
-Patch9:           pki-core-10.5.1-batch-2.0.patch
-Patch10:          pki-core-10.5.1-batch-2.1.patch
-Patch11:          pki-core-10.5.1-batch-3.0.patch
-Patch12:          pki-core-10.5.1-batch-4.0.patch
+Patch0:  pki-core-Add-Subject-Key-ID-to-CSR.patch
+Patch1:  pki-core-PKI-startup-init-LDAP-operation-attr-independence.patch
 
 # Obtain version phase number (e. g. - used by "alpha", "beta", etc.)
 #
@@ -320,11 +307,7 @@ Group:            System Environment/Libraries
 
 Requires:         java-1.8.0-openjdk-headless
 Requires:         jpackage-utils >= 0:1.7.5-10
-%if 0%{?rhel} && 0%{?rhel} <= 7
-Requires:         jss >= 4.4.0-13
-%else
-Requires:         jss >= 4.4.4-3
-%endif
+Requires:         jss >= 4.4.6-1
 Requires:         nss >= 3.28.3
 
 Provides:         symkey = %{version}-%{release}
@@ -403,11 +386,7 @@ Requires:         slf4j-jdk14
 %endif
 Requires:         javassist
 Requires:         jpackage-utils >= 0:1.7.5-10
-%if 0%{?rhel} && 0%{?rhel} <= 7
-Requires:         jss >= 4.4.0-13
-%else
-Requires:         jss >= 4.4.4-3
-%endif
+Requires:         jss >= 4.4.6-1
 Requires:         ldapjdk >= 4.19-5
 Requires:         pki-base = %{version}-%{release}
 
@@ -518,9 +497,9 @@ Requires:         hostname
 Requires:         net-tools
 
 %if 0%{?rhel} && 0%{?rhel} <= 7
-Requires:    nuxwdog-client-java >= 1.0.3-7
+Requires:    nuxwdog-client-java >= 1.0.3-8
 %else
-Requires:    nuxwdog-client-java >= 1.0.3-13
+Requires:    nuxwdog-client-java >= 1.0.3-14
 %endif
 
 Requires:         policycoreutils
@@ -560,9 +539,9 @@ Requires(preun):  systemd-units
 Requires(postun): systemd-units
 Requires(pre):    shadow-utils
 %if 0%{?rhel} && 0%{?rhel} <= 7
-Requires:         tomcatjss >= 7.2.1-7
+Requires:         tomcatjss >= 7.2.1-8
 %else
-Requires:         tomcatjss >= 7.2.4-3
+Requires:         tomcatjss >= 7.2.4-4
 %endif
 
 %if 0%{?rhel} && 0%{?rhel} <= 7
@@ -821,19 +800,9 @@ This package is a part of the PKI Core used by the Certificate System.
 
 %prep
 %setup -q -n %{name}-%{version}%{?prerel}
+
 %patch0 -p1
 %patch1 -p1
-%patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
-%patch7 -p1
-%patch8 -p1
-%patch9 -p1
-%patch10 -p1
-%patch11 -p1
-%patch12 -p1
 
 %clean
 %{__rm} -rf %{buildroot}
@@ -841,7 +810,9 @@ This package is a part of the PKI Core used by the Certificate System.
 %build
 %{__mkdir_p} build
 cd build
-%cmake -DVERSION=%{version}-%{release} \
+%cmake \
+    --no-warn-unused-cli \
+    -DVERSION=%{version}-%{release} \
 	-DVAR_INSTALL_DIR:PATH=/var \
 	-DBUILD_PKI_CORE:BOOL=ON \
 	-DJAVA_HOME=%{java_home} \
@@ -868,13 +839,19 @@ cd build
 	-DWITH_JAVADOC:BOOL=OFF \
 %endif
 	..
-%{__make} VERBOSE=1 %{?_smp_mflags} -j 1 all unit-test
-
 
 %install
-%{__rm} -rf %{buildroot}
+
 cd build
-%{__make} install DESTDIR=%{buildroot} INSTALL="install -p"
+
+# Do not use _smp_mflags to preserve build order
+%{__make} \
+    VERBOSE=%{?_verbose} \
+    CMAKE_NO_VERBOSE=1 \
+    DESTDIR=%{buildroot} \
+    INSTALL="install -p" \
+    --no-print-directory \
+     all unit-test install
 
 # Create symlinks for admin console (TPS does not use admin console)
 for subsystem in ca kra ocsp tks; do
@@ -888,21 +865,6 @@ ln -s %{_bindir}/KRATool %{buildroot}%{_bindir}/DRMTool
 ln -s %{_datadir}/pki/java-tools/KRATool.cfg %{buildroot}%{_datadir}/pki/java-tools/DRMTool.cfg
 # Create compatibility symlink for DRMTool.1.gz -> KRATool.1.gz
 ln -s %{_mandir}/man1/KRATool.1.gz %{buildroot}%{_mandir}/man1/DRMTool.1.gz
-
-# Customize system upgrade scripts in /usr/share/pki/upgrade
-%if 0%{?rhel} && 0%{?rhel} <= 7
-
-# merge newer upgrade scripts into 10.3.3 for RHEL
-/bin/rm -rf %{buildroot}%{_datadir}/pki/upgrade/10.3.4
-/bin/rm -rf %{buildroot}%{_datadir}/pki/upgrade/10.3.5
-
-# merge newer upgrade scripts into 10.4.1 for RHEL
-/bin/rm -rf %{buildroot}%{_datadir}/pki/upgrade/10.4.2
-/bin/rm -rf %{buildroot}%{_datadir}/pki/upgrade/10.4.3
-/bin/rm -rf %{buildroot}%{_datadir}/pki/upgrade/10.4.4
-/bin/rm -rf %{buildroot}%{_datadir}/pki/upgrade/10.4.5
-/bin/rm -rf %{buildroot}%{_datadir}/pki/upgrade/10.4.6
-%endif
 
 # Customize client library links in /usr/share/pki/lib
 %if 0%{?fedora} || 0%{?rhel} > 7
@@ -938,10 +900,10 @@ mv %{buildroot}%{_datadir}/pki/server/upgrade/10.3.5/01-FixServerLibrary \
    %{buildroot}%{_datadir}/pki/server/upgrade/10.3.3/02-FixServerLibrary
 mv %{buildroot}%{_datadir}/pki/server/upgrade/10.3.5/02-FixDeploymentDescriptor \
    %{buildroot}%{_datadir}/pki/server/upgrade/10.3.3/03-FixDeploymentDescriptor
-/bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.3.4
 /bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.3.5
 
 # merge newer upgrade scripts into 10.4.1 for RHEL
+%{__mkdir_p} %{buildroot}%{_datadir}/pki/server/upgrade/10.4.1
 mv %{buildroot}%{_datadir}/pki/server/upgrade/10.4.2/01-AddSessionAuthenticationPlugin \
    %{buildroot}%{_datadir}/pki/server/upgrade/10.4.1/01-AddSessionAuthenticationPlugin
 mv %{buildroot}%{_datadir}/pki/server/upgrade/10.4.2/02-AddKRAWrappingParams \
@@ -949,16 +911,19 @@ mv %{buildroot}%{_datadir}/pki/server/upgrade/10.4.2/02-AddKRAWrappingParams \
 mv %{buildroot}%{_datadir}/pki/server/upgrade/10.4.6/01-UpdateKeepAliveTimeout \
    %{buildroot}%{_datadir}/pki/server/upgrade/10.4.1/03-UpdateKeepAliveTimeout
 /bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.4.2
-/bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.4.3
-/bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.4.4
-/bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.4.5
 /bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.4.6
 
-# merge newer upgrade script into 10.5.1 for RHEL
+# merge newer upgrade scripts into 10.5.1 for RHEL 7.5
+%{__mkdir_p} %{buildroot}%{_datadir}/pki/server/upgrade/10.5.1
 mv %{buildroot}%{_datadir}/pki/server/upgrade/10.5.5/01-AddTPSExternalRegISEtokenParams \
    %{buildroot}%{_datadir}/pki/server/upgrade/10.5.1/01-AddTPSExternalRegISEtokenParams
-
 /bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.5.5
+
+# merge newer upgrade scripts into 10.5.9 for RHEL 7.6
+%{__mkdir_p} %{buildroot}%{_datadir}/pki/server/upgrade/10.5.9
+mv %{buildroot}%{_datadir}/pki/server/upgrade/10.5.14/01-UpdateAuditEvents \
+   %{buildroot}%{_datadir}/pki/server/upgrade/10.5.9/01-UpdateAuditEvents
+/bin/rm -rf %{buildroot}%{_datadir}/pki/server/upgrade/10.5.14
 
 %endif
 
@@ -1207,6 +1172,7 @@ fi
 %{_bindir}/OCSPClient
 %{_bindir}/PKCS10Client
 %{_bindir}/PKCS12Export
+%{_bindir}/PKICertImport
 %{_bindir}/PrettyPrintCert
 %{_bindir}/PrettyPrintCrl
 %{_bindir}/TokenInfo
@@ -1241,6 +1207,7 @@ fi
 %{_mandir}/man1/pki-user-cert.1.gz
 %{_mandir}/man1/pki-user-membership.1.gz
 %{_mandir}/man1/PKCS10Client.1.gz
+%{_mandir}/man1/PKICertImport.1.gz
 %endif
 
 %if %{with server}
@@ -1372,55 +1339,254 @@ fi
 %endif # %{with server}
 
 %changelog
-* Mon Aug 13 2018 Dogtag Team <pki-devel@redhat.com> 10.5.1-15
+* Thu Jun 20 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-3
 - ##########################################################################
-- # RHEL 7.5:
+- # RHEL 7.7:
 - ##########################################################################
-- Bugzilla Bug #1600905 - pki console configurations that involves ldap
-  passwords leave the plain text password in signed audit logs
-  [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1611245 - Certificate generation happens with partial
-  attributes in CMCRequest file [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1611250 - Better understanding of
-  NSS_USE_DECODED_CKA_EC_POINT for ECC [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1612880 - CMC Revocations throws exception with
-  same reqIssuer & certissuer [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1614837 - ipa-replica-install --setup-kra broken on
-  DL0 with latest version [rhel-7.5.z] (abokovoy)
-- Bugzilla Bug #1614839 - CC: Enable all config audit events
-  [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1615266 - ECC keys not supported for signing audit
-  logs [rhel-7.5.z] (cfu)
+- Bugzilla Bug #1638379 - PKI startup initialization process should not
+  depend on LDAP operational attributes [ftweedal]
 - ##########################################################################
-- # RHCS 9.3:
+- # RHCS 9.5:
 - ##########################################################################
-- # Bugzilla Bug #1539933 - keyGen fails when only Identity
-  # certificate exists. [rhcs-9.3.z] (jmagne)
+- Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
+  pki-console to 10.5.16 in RHCS 9.5
 
-* Mon Jul  2 2018 Dogtag Team <pki-devel@redhat.com> 10.5.1-14
-- Updated "jss" build and runtime requirements (mharmsen)
-- Updated "tomcatjss" build and runtime requirements (mharmsen)
+* Thu Apr  4 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-2
 - ##########################################################################
-- # RHEL 7.5:
+- # RHEL 7.7:
 - ##########################################################################
-- Bugzilla Bug #1574848 - servlet profileSubmitCMCSimple throws NPE
-  [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1593585 - Need proper default subjectDN for CMC request
-  authenticated through SharedToken [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1594128 - CMC: Audit Events needed for failures in
-  SharedToken scenario's [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1595606 - AuditVerify failure due to line breaks
-  [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1596525 - Address ECC profile overrides [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1596551 - X500Name.directoryStringEncodingOrder overridden
-  by CSR encoding [rhel-7.5.z] (cfu)
-- Bugzilla Bug #1553068 - Using a Netmask produces an odd entry in a
-  certifcate [rhel-7.5.z] (ftweedal)
+- Bugzilla Bug #1491453 - Need Method to Include SKI in CA Signing
+  Certificate Request [ftweedal]
 - ##########################################################################
-- # RHCS 9.3:
+- # RHCS 9.5:
 - ##########################################################################
-- # Bugzilla Bug #1471303 - Rebase redhat-pki, redhat-pki-theme, pki-core,
-  # and pki-console to 10.5.x in RHCS 9.3
+- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
+  # pki-console to 10.5.16 in RHCS 9.5
+
+* Mon Mar 18 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-1
+- Updated jss dependencies
+- ##########################################################################
+- # RHEL 7.7:
+- ##########################################################################
+- Bugzilla Bug #1633422 - Rebase pki-core from 10.5.1 to 10.5.16 (RHEL) 
+- ##########################################################################
+- # RHCS 9.5:
+- ##########################################################################
+- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
+  # pki-console to 10.5.6 in RHCS 9.5
+
+* Fri Feb 15 2019 Dogtag Team <pki-devel@redhat.com> 10.5.9-13
+- Updated jss dependencies
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1671245 - CC: unable to verify cert before import
+  [rhel-7.6.z] [manpage] (ascheel)
+- Bugzilla Bug #1671303 - CC: Upgrade scripts for audit event names (RHEL)
+  [rhel-7.6.z] (edewata)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1671586 - CC: Upgrade scripts for audit event names (RHCS)
+  # [rhcs-9.4.z] (edewata)
+
+* Fri Feb  1 2019 Dogtag Team <pki-devel@redhat.com> 10.5.9-12
+- Updated jss dependencies
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1671245 - CC: unable to verify cert before import
+  [rhel-7.6.z] (ascheel)
+- Bugzilla Bug #1671303 - CC: Upgrade scripts for audit event names (RHEL)
+  [rhel-7.6.z] (edewata)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1671586 - CC: Upgrade scripts for audit event names (RHCS)
+  # [rhcs-9.4.z] (edewata)
+
+* Thu Jan 31 2019 Dogtag Team <pki-devel@redhat.com> 10.5.9-11
+- Updated jss dependencies
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1671245 - CC: unable to verify cert before import
+  [rhel-7.6.z] (ascheel)
+- Bugzilla Bug #1671303 - CC: Upgrade scripts for audit event names (RHEL)
+  [rhel-7.6.z] (edewata)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1671586 - CC: Upgrade scripts for audit event names (RHCS)
+  # [rhcs-9.4.z] (edewata)
+
+* Mon Dec 17 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-10
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1659939 - CC: Simplifying Web UI session timeout
+  configuration [rhel-7.6.z] (edewata)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1639836 - CC: Identify RHCS version of CA, KRA,
+  # OCSP, and TKS using browser [RHCS] (mharmsen)
+- # Added Batch Update Information to Product Version (mharmsen)
+
+* Mon Dec 10 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-9
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1657922 - CC: CA/OCSP startup fail on SystemCertsVerification
+  if enableOCSP is true [rhel-7.6.z] (jmagne)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1639836 - CC: Identify RHCS version of CA, KRA,
+  # OCSP, and TKS using browser [RHCS] (mharmsen)
+
+* Wed Dec  5 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-8
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1645262 - pkidestroy may not remove all files [rhel-7.6.z]
+  (dmoluguw)
+- Bugzilla Bug #1645263 - Auth plugins leave passwords in the access
+  log and audit log using REST [rhel-7.6.z] (dmoluguw)
+- Bugzilla Bug #1645429 - pkispawn fails due to name collision with
+  /var/log/pki/<instance> [rhel-7.6.z] (dmoluguw)
+- Bugzilla Bug #1655951 - CC: tools supporting CMC requests output
+  keyID needs to be captured in file [rhel-7.6.z] (cfu)
+- Bugzilla Bug #1656297 - Unable to install with admin-generated keys
+  [rhel-7.6.z] (edewata)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1639836 - CC: Identify RHCS version of CA, KRA,
+  # OCSP, and TKS using browser [RHCS] (mharmsen)
+
+* Mon Oct 29 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-7
+- Require "tomcatjss >= 7.2.1-8" as a build and runtime requirement
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1632116 - CC: missing audit event for CS acting as
+  TLS client [rhel-7.6.z] (cfu)
+- Bugzilla Bug #1632120 - Unsupported RSA_ ciphers should be
+  removed from the default ciphers list [rhel-7.6.z] (cfu)
+- Bugzilla Bug #1632615 - Permit certain SHA384 FIPS ciphers to be
+  enabled by default for RSA and ECC . . . [rhel-7.6.z] (cfu)
+- Bugzilla Bug #1632616 - X500Name.directoryStringEncodingOrder
+  overridden by CSR encoding (coverity changes) [rhel-7.6.z] (mharmsen)
+- Bugzilla Bug #1633104 - CMC: add config to allow non-clientAuth
+  [rhel-7.6.z] (cfu)
+- Bugzilla Bug #1636490 - Installation of CA using an existing CA fails
+  [rhel-7.6.z] (edewata)
+- Bugzilla Bug #1643878 - pki cli command for RHCS doesn't prompt for
+  a password [rhel-7.6.z] (edewata)
+- Bugzilla Bug #1643879 - CC: Identify version/release of pki-ca, pki-kra,
+  pki-ocsp, pki-tks, and pki-tps remotely [RHEL] [rhel-7.6.z] (cfu, jmagne)
+- Bugzilla Bug #1643880 - PKI subsystem process is not shutdown when
+  there is no space on the disk to write logs [rhel-7.6.z] (edewata)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1639836 - CC: Identify RHCS version of CA, KRA,
+  # OCSP, and TKS using browser [RHCS] (mharmsen)
+
+* Tue Aug 21 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-6
+- Updated nuxwdog dependencies
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #673182 - ECC keys not supported for signing
+  audit logs (cfu)
+- Bugzilla Bug #1593805 - Better understanding of
+  NSS_USE_DECODED_CKA_EC_POINT for ECC (cfu)
+- Bugzilla Bug #1601071 - Certificate generation happens with
+  partial attributes in CMCRequest file (cfu)
+- Bugzilla Bug #1601569 - CC: Enable all config audit events
+  (cfu)
+- Bugzilla Bug #1608375 - CMC Revocations throws exception
+  with same reqIssuer & certissuer (cfu)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1557570 - Re-base pki-core from 10.5.1 to
+  # latest upstream 10.5.x (RHCS) (mharmsen)
+
+* Thu Aug  9 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-5
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1596629 - ipa-replica-install --setup-kra broken on DL0
+  with latest version (abokovoy)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1557570 - Re-base pki-core from 10.5.1 to
+  # latest upstream 10.5.x (RHCS) (mharmsen)
+
+* Tue Jul 31 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-4
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1548203 - pki console configurations that involves ldap
+  passwords leave the plain text password in signed audit logs (cfu)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1494591 - keyGen fails when only Identity
+  # certificate exists (jmagne)
+
+* Mon Jul 23 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-3
+- Re-spin alpha builds
+
+* Thu Jul  5 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-2
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1471935 - X500Name.directoryStringEncodingOrder overridden
+  by CSR encoding (cfu)
+- Bugzilla Bug #1538311 - Using a Netmask produces an odd entry in a
+  certificate (ftweedal)
+- Bugzilla Bug #1540440 - CMC: Audit Events needed for failures in
+  SharedToken scenario's (cfu)
+- Bugzilla Bug #1550742 - Address ECC profile overrides (cfu)
+- Bugzilla Bug #1562841 - servlet profileSubmitCMCSimple throws NPE (cfu)
+- Bugzilla Bug #1572432 - AuditVerify failure due to line breaks (cfu)
+- Bugzilla Bug #1592961 - Need proper default subjectDN for CMC request
+  authenticated through SharedToken (cfu)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1557570 - Re-base pki-core from 10.5.1 to
+  # latest upstream 10.5.x (RHCS) (mharmsen)
+
+* Mon Jun 11 2018 Dogtag Team <pki-devel@redhat.com> 10.5.9-1
+- ##########################################################################
+- # RHEL 7.6:
+- ##########################################################################
+- Bugzilla Bug #1538311 - Using a Netmask produces an odd
+  entry in a certifcate (ftweedal)
+- Bugzilla Bug #1544843 - ExternalCA: Installation failed during
+  csr generation with ecc (rrelyea, gkapoor)
+- Bugzilla Bug #1557569 - Re-base pki-core from 10.5.1 to latest
+  upstream 10.5.x (RHEL) (mharmsen)
+- Bugzilla Bug #1580394 - CMC CRMF requests result in
+  InvalidKeyFormatException when signing algorithm is ECC (cfu)
+- Bugzilla Bug #1580527 - CVE-2018-1080 pki-core: Mishandled
+  ACL configuration in AAclAuthz.java reverses rules that allow
+  and deny access (ftweedal, cfu)
+- Bugzilla Bug #1585866 - CRMFPopClient tool - should allow
+  option to do no key archival (cfu)
+- Bugzilla Bug #1588655 - Cert validation for installation with
+  external CA cert (edewata)
+- ##########################################################################
+- # RHCS 9.4:
+- ##########################################################################
+- # Bugzilla Bug #1557570 - Re-base pki-core from 10.5.1 to
+  # latest upstream 10.5.x (RHCS) (mharmsen)
 
 * Sat Jun  9 2018 Dogtag Team <pki-devel@redhat.com> 10.5.1-13.1
 - Rebuild due to build system database problem

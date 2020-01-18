@@ -36,8 +36,6 @@ import org.dogtagpki.legacy.policy.ISubjAltNameConfig;
 import org.mozilla.jss.CryptoManager.CertificateUsage;
 import org.mozilla.jss.util.PasswordCallback;
 
-import com.netscape.certsrv.acls.EACLsException;
-import com.netscape.certsrv.acls.IACL;
 import com.netscape.certsrv.authentication.ISharedToken;
 import com.netscape.certsrv.authority.IAuthority;
 import com.netscape.certsrv.base.EBaseException;
@@ -312,174 +310,13 @@ public interface ICMSEngine extends ISubsystem {
     public String getUserMessage(Locale locale, String msgID, String p1, String p2, String p3);
 
     /**
-     * Retrieves the centralized log message from LogMessages.properties.
+     * Retrieves log message from LogMessages.properties or audit-evenst.properties.
      *
-     * @param msgID message id defined in LogMessages.properties
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
+     * @param msgID message ID defined in LogMessages.properties or audit-evenst.properties
      * @param p an array of parameters
      * @return localized log message
      */
     public String getLogMessage(String msgID, Object p[]);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @param p4 4th parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @param p4 4th parameter
-     * @param p5 5th parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @param p4 4th parameter
-     * @param p5 5th parameter
-     * @param p6 6th parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @param p4 4th parameter
-     * @param p5 5th parameter
-     * @param p6 6th parameter
-     * @param p7 7th parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @param p4 4th parameter
-     * @param p5 5th parameter
-     * @param p6 6th parameter
-     * @param p7 7th parameter
-     * @param p8 8th parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7, String p8);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @param p4 4th parameter
-     * @param p5 5th parameter
-     * @param p6 6th parameter
-     * @param p7 7th parameter
-     * @param p8 8th parameter
-     * @param p9 9th parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7, String p8, String p9);
-
-    /**
-     * Retrieves the centralized log message from LogMessages.properties.
-     *
-     * @param msgID message id defined in LogMessages.properties
-     * @param p1 1st parameter
-     * @param p2 2nd parameter
-     * @param p3 3rd parameter
-     * @param p4 4th parameter
-     * @param p5 5th parameter
-     * @param p6 6th parameter
-     * @param p7 7th parameter
-     * @param p8 8th parameter
-     * @param p9 9th parameter
-     * @param p10 10th parameter
-     * @return localized log message
-     */
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7, String p8, String p9, String p10);
-
-    /**
-     * Parse ACL resource attributes
-     *
-     * @param resACLs same format as the resourceACLs attribute:
-     *
-     *            <PRE>
-     *     <resource name>:<permission1,permission2,...permissionn>:
-     *     <allow|deny> (<subset of the permission set>) <evaluator expression>
-     * </PRE>
-     * @exception EACLsException ACL related parsing errors for resACLs
-     * @return an ACL instance built from the parsed resACLs
-     */
-    public IACL parseACL(String resACLs) throws EACLsException;
 
     /**
      * Creates an issuing poing record.

@@ -52,6 +52,7 @@ import java.util.concurrent.CountDownLatch;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 
+import org.apache.commons.lang.StringUtils;
 import org.dogtagpki.legacy.ca.CAPolicy;
 import org.dogtagpki.legacy.policy.IPolicyProcessor;
 import org.mozilla.jss.CryptoManager;
@@ -662,7 +663,10 @@ public class CertificateAuthority
             }
             throw e;
         }
+    }
 
+    private void generateSigningInfoAuditEvents()
+            throws EBaseException {
         try {
 
             if (isHostAuthority()) {
@@ -1600,25 +1604,30 @@ public class CertificateAuthority
     }
 
     public X509CertImpl getCACert() throws EBaseException {
+
         if (mCaCert != null) {
             return mCaCert;
         }
-        // during configuration
-        try {
-            String cert = mConfig.getString("signing.cert", null);
-            if (cert != null) {
-                return new X509CertImpl(Utils.base64decode(cert));
-            }
 
-        } catch (EBaseException e) {
-            CMS.debug(e);
-            throw e;
+        String cert = mConfig.getString("signing.cert");
+        CMS.debug("CertificateAuthority: CA signing cert: " + cert);
 
-        } catch (CertificateException e) {
-            throw new EBaseException(e);
+        if (StringUtils.isEmpty(cert)) {
+            CMS.debug("CertificateAuthority: Missing CA signing certificate");
+            throw new EBaseException("Missing CA signing certificate");
         }
 
-        return null;
+        byte[] bytes = Utils.base64decode(cert);
+        CMS.debug("CertificateAuthority: size: " + bytes.length + " bytes");
+
+        try {
+            return new X509CertImpl(bytes);
+
+        } catch (CertificateException e) {
+            CMS.debug("Unable to parse CA signing cert: " + e.getMessage());
+            CMS.debug(e);
+            throw new EBaseException(e);
+        }
     }
 
     public org.mozilla.jss.crypto.X509Certificate getCaX509Cert() {
@@ -1852,6 +1861,8 @@ public class CertificateAuthority
             throw new ECAException(
                     CMS.getUserMessage("CMS_CA_BUILD_CA_CHAIN_FAILED", e.toString()));
         }
+
+        generateSigningInfoAuditEvents();
     }
 
     /**
@@ -2571,7 +2582,6 @@ public class CertificateAuthority
 
         CertStatus certStatus = null;
         GeneralizedTime thisUpdate = new GeneralizedTime(CMS.getCurrentDate());
-        GeneralizedTime nextUpdate = null;
 
         byte[] nameHash = null;
         String digestName = cid.getDigestName();
@@ -2608,6 +2618,12 @@ public class CertificateAuthority
             }
             CRLIssuingPoint point = (CRLIssuingPoint)
                     getCRLIssuingPoint(issuingPointId);
+
+            /* set nextUpdate to the nextUpdate time of the CRL */
+            GeneralizedTime nextUpdate = null;
+            Date crlNextUpdate = point.getNextUpdate();
+            if (crlNextUpdate != null)
+                nextUpdate = new GeneralizedTime(crlNextUpdate);
 
             if (point.isCRLCacheEnabled()) {
                 // only do this if cache is enabled
@@ -2660,7 +2676,12 @@ public class CertificateAuthority
             certStatus = new UnknownInfo(); // not issued not all
         }
 
-        return new SingleResponse(cid, certStatus, thisUpdate, nextUpdate);
+        return new SingleResponse(
+            cid, certStatus, thisUpdate,
+            /* We are not using a CRL cache for generating OCSP
+             * responses, so there is no reasonable value for
+             * nextUpdate. */
+            null /* nextUpdate */);
     }
 
     /**

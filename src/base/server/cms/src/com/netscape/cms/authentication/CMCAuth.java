@@ -29,7 +29,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
-import java.security.cert.X509Certificate;
 import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.security.cert.X509Certificate;
@@ -127,6 +126,7 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
 
     /* authentication plug-in configuration store */
     private IConfigStore mConfig;
+    private boolean mBypassClientAuth = false;
     private static final String HEADER = "-----BEGIN NEW CERTIFICATE REQUEST-----";
     private static final String TRAILER = "-----END NEW CERTIFICATE REQUEST-----";
     public static final String TOKEN_CERT_SERIAL = "certSerialToRevoke";
@@ -213,6 +213,8 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
         mName = name;
         mImplName = implName;
         mConfig = config;
+        mBypassClientAuth =
+                CMS.getConfigStore().getBoolean("cmc.bypassClientAuth", false);
 
         log(ILogger.LL_INFO, "Initialization complete!");
     }
@@ -882,28 +884,33 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
                             X509Certificate clientCert =
                                     (X509Certificate) auditContext.get(SessionContext.SSL_CLIENT_CERT);
                             if (clientCert == null) {
-                            //    createAuditSubjectFromCert(auditContext, x509Certs[0]);
-                                msg = "missing SSL client authentication certificate;";
-                                CMS.debug(method + msg);
-                                s.close();
-                                throw new EMissingCredential(
-                                        CMS.getUserMessage("CMS_AUTHENTICATION_NO_CERT"));
-                            }
-                            netscape.security.x509.X500Name clientPrincipal =
-                                    (X500Name) clientCert.getSubjectDN();
-
-                            netscape.security.x509.X500Name cmcPrincipal =
-                                    (X500Name) x509Certs[0].getSubjectDN();
-
-                            // check ssl client cert against cmc signer
-                            if (!clientPrincipal.equals(cmcPrincipal)) {
-                                msg = "SSL client authentication certificate and CMC signer do not match";
-                                CMS.debug(method + msg);
-                                s.close();
-                                throw new EInvalidCredentials(
-                                        CMS.getUserMessage("CMS_AUTHENTICATION_INVALID_CREDENTIAL") + ":" + msg);
+                                if (mBypassClientAuth) {
+                                    msg = "missing SSL client authentication certificate; allowed";
+                                    CMS.debug(method + msg);
+                                } else {
+                                    msg = "missing SSL client authentication certificate;";
+                                    CMS.debug(method + msg);
+                                    s.close();
+                                    throw new EMissingCredential(
+                                            CMS.getUserMessage("CMS_AUTHENTICATION_NO_CERT"));
+                                }
                             } else {
-                                CMS.debug(method + "ssl client cert principal and cmc signer principal match");
+                                netscape.security.x509.X500Name clientPrincipal =
+                                        (X500Name) clientCert.getSubjectDN();
+
+                                netscape.security.x509.X500Name cmcPrincipal =
+                                        (X500Name) x509Certs[0].getSubjectDN();
+
+                                // check ssl client cert against cmc signer
+                                if (!clientPrincipal.equals(cmcPrincipal)) {
+                                    msg = "SSL client authentication certificate and CMC signer do not match";
+                                    CMS.debug(method + msg);
+                                    s.close();
+                                    throw new EInvalidCredentials(
+                                            CMS.getUserMessage("CMS_AUTHENTICATION_INVALID_CREDENTIAL") + ":" + msg);
+                                } else {
+                                    CMS.debug(method + "ssl client cert principal and cmc signer principal match");
+                                }
                             }
 
                             PublicKey signKey = cert.getPublicKey();
@@ -945,9 +952,6 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
                             si.verify(digest, id, pubK);
                         }
                         CMS.debug("CMCAuth: finished checking signature");
-                        // verify signer's certificate using the revocator
-                        if (!cm.isCertValid(certByteArray, true, CryptoManager.CertUsage.SSLClient))
-                            throw new EInvalidCredentials(CMS.getUserMessage("CMS_AUTHENTICATION_INVALID_CREDENTIAL"));
 
                         // authenticate signer's certificate using the userdb
                         IAuthSubsystem authSS = (IAuthSubsystem) CMS.getSubsystem(CMS.SUBSYSTEM_AUTH);
@@ -962,8 +966,9 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
 
                         IAuthToken tempToken = agentAuth.authenticate(agentCred);
                         netscape.security.x509.X500Name tempPrincipal = (X500Name) x509Certs[0].getSubjectDN();
-                        String ID = tempPrincipal.toString();
+                        String ID = tempPrincipal.getName();
                         CMS.debug(method + " Principal name = " + ID);
+                        authToken.set(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT, ID);
 
                         BigInteger agentCertSerial = x509Certs[0].getSerialNumber();
                         authToken.set(IAuthManager.CRED_SSL_CLIENT_CERT, agentCertSerial.toString());
@@ -1050,7 +1055,7 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
     public void populate(IAuthToken token, IRequest request)
             throws EProfileException {
         request.setExtData(IProfileAuthenticator.AUTHENTICATED_NAME,
-                token.getInString(AuthToken.TOKEN_CERT_SUBJECT));
+                token.getInString(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT));
     }
 
     public boolean isSSLClientRequired() {

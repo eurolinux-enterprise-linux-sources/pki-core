@@ -19,6 +19,7 @@
 #
 
 from __future__ import absolute_import
+import pki
 
 # PKI Deployment Imports
 from .. import pkiconfig as config
@@ -36,6 +37,32 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
                             deployer.mdict['pki_subsystem'],
                             deployer.mdict['pki_instance_name'],
                             extra=config.PKI_INDENTATION_LEVEL_0)
+
+        instance = pki.server.PKIInstance(deployer.mdict['pki_instance_name'])
+        instance.load()
+
+        internal_token = deployer.mdict['pki_self_signed_token']
+
+        # if instance already exists and has password, reuse the password
+        if internal_token in instance.passwords:
+            deployer.mdict['pki_server_database_password'] = instance.passwords.get(internal_token)
+
+        # otherwise, use user-provided password if specified
+        elif deployer.mdict['pki_server_database_password']:
+            pass
+
+        # otherwise, use user-provided pin if specified
+        elif deployer.mdict['pki_pin']:
+            deployer.mdict['pki_server_database_password'] = deployer.mdict['pki_pin']
+
+        # otherwise, generate a random password
+        else:
+            deployer.mdict['pki_server_database_password'] = pki.generate_password()
+
+        # generate random password for client database if not specified
+        if not deployer.mdict['pki_client_database_password']:
+            deployer.mdict['pki_client_database_password'] = pki.generate_password()
+
         # ALWAYS initialize 'uid' and 'gid'
         deployer.identity.add_uid_and_gid(deployer.mdict['pki_user'],
                                           deployer.mdict['pki_group'])
@@ -86,45 +113,54 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
         deployer.configuration_file.verify_ds_secure_connection_data()
 
     def destroy(self, deployer):
+        try:
+            # begin official logging
+            config.pki_log.info(log.PKIDESTROY_BEGIN_MESSAGE_2,
+                                deployer.mdict['pki_subsystem'],
+                                deployer.mdict['pki_instance_name'],
+                                extra=config.PKI_INDENTATION_LEVEL_0)
+            config.pki_log.info(log.INITIALIZATION_DESTROY_1, __name__,
+                                extra=config.PKI_INDENTATION_LEVEL_1)
+            # verify that this type of "subsystem" currently EXISTS
+            # for this "instance"
+            deployer.instance.verify_subsystem_exists()
+            # verify that the command-line parameters match the values
+            # that are present in the corresponding configuration file
+            deployer.configuration_file.verify_command_matches_configuration_file()
+            # establish 'uid' and 'gid'
+            deployer.identity.set_uid(deployer.mdict['pki_user'])
+            deployer.identity.set_gid(deployer.mdict['pki_group'])
+            # get ports to remove selinux context
+            deployer.configuration_file.populate_non_default_ports()
 
-        # begin official logging
-        config.pki_log.info(log.PKIDESTROY_BEGIN_MESSAGE_2,
-                            deployer.mdict['pki_subsystem'],
-                            deployer.mdict['pki_instance_name'],
-                            extra=config.PKI_INDENTATION_LEVEL_0)
-        config.pki_log.info(log.INITIALIZATION_DESTROY_1, __name__,
-                            extra=config.PKI_INDENTATION_LEVEL_1)
-        # verify that this type of "subsystem" currently EXISTS
-        # for this "instance"
-        deployer.instance.verify_subsystem_exists()
-        # verify that the command-line parameters match the values
-        # that are present in the corresponding configuration file
-        deployer.configuration_file.verify_command_matches_configuration_file()
-        # establish 'uid' and 'gid'
-        deployer.identity.set_uid(deployer.mdict['pki_user'])
-        deployer.identity.set_gid(deployer.mdict['pki_group'])
-        # get ports to remove selinux context
-        deployer.configuration_file.populate_non_default_ports()
+            # remove kra connector from CA if this is a KRA
+            deployer.kra_connector.deregister()
 
-        # remove kra connector from CA if this is a KRA
-        deployer.kra_connector.deregister()
+            # remove tps connector from TKS if this is a TPS
+            deployer.tps_connector.deregister()
 
-        # remove tps connector from TKS if this is a TPS
-        deployer.tps_connector.deregister()
+            # de-register instance from its Security Domain
+            #
+            #     NOTE:  Since the security domain of an instance must be up
+            #            and running in order to be de-registered, this step
+            #            must be done PRIOR to instance shutdown because this
+            #            instance's security domain may be a part of a
+            #            tightly-coupled shared instance.
+            #
 
-        # de-register instance from its Security Domain
-        #
-        #     NOTE:  Since the security domain of an instance must be up
-        #            and running in order to be de-registered, this step
-        #            must be done PRIOR to instance shutdown because this
-        #            instance's security domain may be a part of a
-        #            tightly-coupled shared instance.
-        #
+            # Previously we obtained the token through a command line interface
+            # no longer supported. Thus we assume no token and the deregister op will
+            # take place without the token using an alternate method.
 
-        # Previously we obtained the token through a command line interface
-        # no longer supported. Thus we assume no token and the deregister op will
-        # take place without the token using an alternate method.
+            deployer.security_domain.deregister(None)
 
-        deployer.security_domain.deregister(None)
-        # ALWAYS Stop this Tomcat PKI Process
-        deployer.systemd.stop()
+        except Exception as e:  # pylint: disable=broad-except
+            config.pki_log.error(log.PKI_OSERROR_1, e,
+                                 extra=config.PKI_INDENTATION_LEVEL_0)
+            # If it is a normal destroy, pass any exception
+            if not deployer.mdict['pki_force_destroy']:
+                raise
+
+        finally:
+            # ALWAYS Stop this Tomcat PKI Process
+            deployer.systemd.stop()

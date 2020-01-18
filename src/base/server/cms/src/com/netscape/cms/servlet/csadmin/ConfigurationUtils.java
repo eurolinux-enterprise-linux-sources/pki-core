@@ -54,34 +54,6 @@ import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.Response;
 import javax.xml.parsers.ParserConfigurationException;
 
-import netscape.ldap.LDAPAttribute;
-import netscape.ldap.LDAPAttributeSet;
-import netscape.ldap.LDAPConnection;
-import netscape.ldap.LDAPDN;
-import netscape.ldap.LDAPEntry;
-import netscape.ldap.LDAPException;
-import netscape.ldap.LDAPModification;
-import netscape.ldap.LDAPSearchConstraints;
-import netscape.ldap.LDAPSearchResults;
-import netscape.ldap.LDAPv3;
-import netscape.security.pkcs.ContentInfo;
-import netscape.security.pkcs.PKCS10;
-import netscape.security.pkcs.PKCS12;
-import netscape.security.pkcs.PKCS12Util;
-import netscape.security.pkcs.PKCS7;
-import netscape.security.pkcs.SignerInfo;
-import netscape.security.util.DerOutputStream;
-import netscape.security.util.ObjectIdentifier;
-import netscape.security.x509.AlgorithmId;
-import netscape.security.x509.BasicConstraintsExtension;
-import netscape.security.x509.CertificateChain;
-import netscape.security.x509.Extension;
-import netscape.security.x509.Extensions;
-import netscape.security.x509.KeyUsageExtension;
-import netscape.security.x509.X500Name;
-import netscape.security.x509.X509CertImpl;
-import netscape.security.x509.X509Key;
-
 import org.apache.commons.lang.StringUtils;
 import org.apache.velocity.context.Context;
 import org.mozilla.jss.CryptoManager;
@@ -217,18 +189,28 @@ public class ConfigurationUtils {
         Password password = null;
         password = new Password(tokPwd.toCharArray());
 
-        if (token.passwordIsInitialized()) {
-            CMS.debug("loginToken():token password is initialized");
-            if (!token.isLoggedIn()) {
-                CMS.debug("loginToken():Token is not logged in, try it");
-                token.login(password);
+        try {
+            if (token.passwordIsInitialized()) {
+                CMS.debug("loginToken():token password is initialized");
+                if (!token.isLoggedIn()) {
+                    CMS.debug("loginToken():Token is not logged in, try it");
+                    token.login(password);
+                } else {
+                    CMS.debug("loginToken():Token has already logged on");
+                }
             } else {
-                CMS.debug("loginToken():Token has already logged on");
+                CMS.debug("loginToken():Token password not initialized");
+                rv = false;
             }
-        } else {
-            CMS.debug("loginToken():Token password not initialized");
-            rv = false;
+
+        } catch (TokenException | IncorrectPasswordException e) {
+            throw e;
+        } finally {
+            if (password != null) {
+                password.clear();
+            }
         }
+
         return rv;
     }
 
@@ -877,74 +859,38 @@ public class ConfigurationUtils {
         StringBuffer reason = new StringBuffer();
         Password password = new Password(p12Pass.toCharArray());
 
-        PFX pfx = (PFX) (new PFX.Template()).decode(bis);
-        boolean verifypfx = pfx.verifyAuthSafes(password, reason);
+        try {
 
-        if (!verifypfx) {
-            throw new IOException("PKCS #12 password is incorrect");
-        }
+            PFX pfx = (PFX) (new PFX.Template()).decode(bis);
+            boolean verifypfx = pfx.verifyAuthSafes(password, reason);
 
-        AuthenticatedSafes safes = pfx.getAuthSafes();
-        Vector<Vector<Object>> pkeyinfo_collection = new Vector<Vector<Object>>();
-        Vector<Vector<Object>> cert_collection = new Vector<Vector<Object>>();
+            if (!verifypfx) {
+                throw new IOException("PKCS #12 password is incorrect");
+            }
 
-        CMS.debug("Importing PKCS #12 data");
+            AuthenticatedSafes safes = pfx.getAuthSafes();
+            Vector<Vector<Object>> pkeyinfo_collection = new Vector<Vector<Object>>();
+            Vector<Vector<Object>> cert_collection = new Vector<Vector<Object>>();
 
-        for (int i = 0; i < safes.getSize(); i++) {
+            CMS.debug("Importing PKCS #12 data");
 
-            CMS.debug("- Safe #" + i + ":");
-            SEQUENCE scontent = safes.getSafeContentsAt(null, i);
+            for (int i = 0; i < safes.getSize(); i++) {
 
-            for (int j = 0; j < scontent.size(); j++) {
+                CMS.debug("- Safe #" + i + ":");
+                SEQUENCE scontent = safes.getSafeContentsAt(null, i);
 
-                SafeBag bag = (SafeBag) scontent.elementAt(j);
-                OBJECT_IDENTIFIER oid = bag.getBagType();
+                for (int j = 0; j < scontent.size(); j++) {
 
-                if (oid.equals(SafeBag.PKCS8_SHROUDED_KEY_BAG)) {
+                    SafeBag bag = (SafeBag) scontent.elementAt(j);
+                    OBJECT_IDENTIFIER oid = bag.getBagType();
 
-                    CMS.debug("  - Bag #" + j + ": key");
-                    byte[] epki = bag.getBagContent().getEncoded();
+                    if (oid.equals(SafeBag.PKCS8_SHROUDED_KEY_BAG)) {
 
-                    SET bagAttrs = bag.getBagAttributes();
-                    String subjectDN = null;
+                        CMS.debug("  - Bag #" + j + ": key");
+                        byte[] epki = bag.getBagContent().getEncoded();
 
-                    for (int k = 0; k < bagAttrs.size(); k++) {
-
-                        Attribute attrs = (Attribute) bagAttrs.elementAt(k);
-                        OBJECT_IDENTIFIER aoid = attrs.getType();
-
-                        if (aoid.equals(SafeBag.FRIENDLY_NAME)) {
-                            SET val = attrs.getValues();
-                            ANY ss = (ANY) val.elementAt(0);
-
-                            ByteArrayInputStream bbis = new ByteArrayInputStream(ss.getEncoded());
-                            BMPString sss = (BMPString) new BMPString.Template().decode(bbis);
-                            subjectDN = sss.toString();
-                            CMS.debug("    Subject DN: " + subjectDN);
-                            break;
-                        }
-                    }
-
-                    // pkeyinfo_v stores EncryptedPrivateKeyInfo
-                    // (byte[]) and subject DN (String)
-                    Vector<Object> pkeyinfo_v = new Vector<Object>();
-                    pkeyinfo_v.addElement(epki);
-                    if (subjectDN != null)
-                        pkeyinfo_v.addElement(subjectDN);
-
-                    pkeyinfo_collection.addElement(pkeyinfo_v);
-
-                } else if (oid.equals(SafeBag.CERT_BAG)) {
-
-                    CMS.debug("  - Bag #" + j + ": certificate");
-                    CertBag cbag = (CertBag) bag.getInterpretedBagContent();
-                    OCTET_STRING str = (OCTET_STRING) cbag.getInterpretedCert();
-                    byte[] x509cert = str.toByteArray();
-
-                    SET bagAttrs = bag.getBagAttributes();
-                    String nickname = null;
-
-                    if (bagAttrs != null) {
+                        SET bagAttrs = bag.getBagAttributes();
+                        String subjectDN = null;
 
                         for (int k = 0; k < bagAttrs.size(); k++) {
 
@@ -956,38 +902,83 @@ public class ConfigurationUtils {
                                 ANY ss = (ANY) val.elementAt(0);
 
                                 ByteArrayInputStream bbis = new ByteArrayInputStream(ss.getEncoded());
-                                BMPString sss = (BMPString) (new BMPString.Template()).decode(bbis);
-                                nickname = sss.toString();
-                                CMS.debug("    Nickname: " + nickname);
+                                BMPString sss = (BMPString) new BMPString.Template().decode(bbis);
+                                subjectDN = sss.toString();
+                                CMS.debug("    Subject DN: " + subjectDN);
                                 break;
                             }
                         }
+
+                        // pkeyinfo_v stores EncryptedPrivateKeyInfo
+                        // (byte[]) and subject DN (String)
+                        Vector<Object> pkeyinfo_v = new Vector<Object>();
+                        pkeyinfo_v.addElement(epki);
+                        if (subjectDN != null)
+                            pkeyinfo_v.addElement(subjectDN);
+
+                        pkeyinfo_collection.addElement(pkeyinfo_v);
+
+                    } else if (oid.equals(SafeBag.CERT_BAG)) {
+
+                        CMS.debug("  - Bag #" + j + ": certificate");
+                        CertBag cbag = (CertBag) bag.getInterpretedBagContent();
+                        OCTET_STRING str = (OCTET_STRING) cbag.getInterpretedCert();
+                        byte[] x509cert = str.toByteArray();
+
+                        SET bagAttrs = bag.getBagAttributes();
+                        String nickname = null;
+
+                        if (bagAttrs != null) {
+
+                            for (int k = 0; k < bagAttrs.size(); k++) {
+
+                                Attribute attrs = (Attribute) bagAttrs.elementAt(k);
+                                OBJECT_IDENTIFIER aoid = attrs.getType();
+
+                                if (aoid.equals(SafeBag.FRIENDLY_NAME)) {
+                                    SET val = attrs.getValues();
+                                    ANY ss = (ANY) val.elementAt(0);
+
+                                    ByteArrayInputStream bbis = new ByteArrayInputStream(ss.getEncoded());
+                                    BMPString sss = (BMPString) (new BMPString.Template()).decode(bbis);
+                                    nickname = sss.toString();
+                                    CMS.debug("    Nickname: " + nickname);
+                                    break;
+                                }
+                            }
+                        }
+
+                        X509CertImpl certImpl = new X509CertImpl(x509cert);
+                        CMS.debug("    Serial number: " + certImpl.getSerialNumber());
+
+                        try {
+                            certImpl.checkValidity();
+                            CMS.debug("    Status: valid");
+
+                        } catch (CertificateExpiredException | CertificateNotYetValidException e) {
+                            CMS.debug("    Status: " + e);
+                            continue;
+                        }
+
+                        // cert_v stores certificate (byte[]) and nickname (String)
+                        Vector<Object> cert_v = new Vector<Object>();
+                        cert_v.addElement(x509cert);
+                        if (nickname != null)
+                            cert_v.addElement(nickname);
+
+                        cert_collection.addElement(cert_v);
                     }
-
-                    X509CertImpl certImpl = new X509CertImpl(x509cert);
-                    CMS.debug("    Serial number: " + certImpl.getSerialNumber());
-
-                    try {
-                        certImpl.checkValidity();
-                        CMS.debug("    Status: valid");
-
-                    } catch (CertificateExpiredException | CertificateNotYetValidException e) {
-                        CMS.debug("    Status: " + e);
-                        continue;
-                    }
-
-                    // cert_v stores certificate (byte[]) and nickname (String)
-                    Vector<Object> cert_v = new Vector<Object>();
-                    cert_v.addElement(x509cert);
-                    if (nickname != null)
-                        cert_v.addElement(nickname);
-
-                    cert_collection.addElement(cert_v);
                 }
             }
-        }
 
-        importKeyCert(password, pkeyinfo_collection, cert_collection);
+            importKeyCert(password, pkeyinfo_collection, cert_collection);
+        } catch (Exception e) {
+            throw e;
+        } finally {
+            if (password != null) {
+                password.clear();
+            }
+        }
     }
 
     public static void verifySystemCertificates() throws Exception {
@@ -2034,7 +2025,7 @@ public class ConfigurationUtils {
             }
 
             String status = replicationStatus(replicadn, masterConn, masterAgreementName);
-            if (!status.startsWith("0 ")) {
+            if (!(status.startsWith("Error (0) ") || status.startsWith("0 "))) {
                 CMS.debug("setupReplication: consumer initialization failed. " + status);
                 throw new IOException("consumer initialization failed. " + status);
             }
@@ -2360,7 +2351,7 @@ public class ConfigurationUtils {
 
         PrivateKey privateKey = (PrivateKey) pair.getPrivate();
         byte id[] = privateKey.getUniqueID();
-        String kid = CryptoUtil.byte2string(id);
+        String kid = CryptoUtil.encodeKeyID(id);
         config.putString(PCERT_PREFIX + tag + ".privkey.id", kid);
 
         String keyAlgo = config.getString(PCERT_PREFIX + tag + ".signingalgorithm");
@@ -2420,10 +2411,10 @@ public class ConfigurationUtils {
 
             // XXX - store curve , w
             byte id[] = ((org.mozilla.jss.crypto.PrivateKey) pair.getPrivate()).getUniqueID();
-            String kid = CryptoUtil.byte2string(id);
+            String kid = CryptoUtil.encodeKeyID(id);
 
             // try to locate the private key
-            org.mozilla.jss.crypto.PrivateKey privk = CryptoUtil.findPrivateKeyFromID(CryptoUtil.string2byte(kid));
+            org.mozilla.jss.crypto.PrivateKey privk = CryptoUtil.findPrivateKeyFromID(CryptoUtil.decodeKeyID(kid));
             if (privk == null) {
                 CMS.debug("Found bad ECC key id " + kid);
                 pair = null;
@@ -2442,11 +2433,11 @@ public class ConfigurationUtils {
         do {
             pair = CryptoUtil.generateRSAKeyPair(token, keysize);
             byte id[] = ((org.mozilla.jss.crypto.PrivateKey) pair.getPrivate()).getUniqueID();
-            String kid = CryptoUtil.byte2string(id);
+            String kid = CryptoUtil.encodeKeyID(id);
 
             // try to locate the private key
             org.mozilla.jss.crypto.PrivateKey privk =
-                    CryptoUtil.findPrivateKeyFromID(CryptoUtil.string2byte(kid));
+                    CryptoUtil.findPrivateKeyFromID(CryptoUtil.decodeKeyID(kid));
 
             if (privk == null) {
                 CMS.debug("Found bad RSA key id " + kid);
@@ -2549,7 +2540,9 @@ public class ConfigurationUtils {
             config.putString("preop.cert.signing.type", "remote");
             config.putString("preop.cert.signing.profile", "caInstallCACert");
             config.putString("preop.cert.sslserver.type", "remote");
-            config.putString("preop.cert.sslserver.profile", "caInternalAuthServerCert");
+
+            config.putString("preop.cert.sslserver.profile",
+                   request.getSystemCertProfileID("sslserver", "caInternalAuthServerCert"));
 
             // store original caType
             original_caType = caType;
@@ -2631,6 +2624,8 @@ public class ConfigurationUtils {
         String v = config.getString("preop.ca.type", "");
 
         CMS.debug("configCert: remote CA");
+        CMS.debug("confgCert: tag: " + certTag);
+
         PKCS10 pkcs10 = CertUtil.getPKCS10(config, PCERT_PREFIX, certObj, context);
         byte[] binRequest = pkcs10.toByteArray();
         String b64Request = CryptoUtil.base64Encode(binRequest);
@@ -2652,7 +2647,10 @@ public class ConfigurationUtils {
 
             MultivaluedMap<String, String> content = new MultivaluedHashMap<String, String>();
             content.putSingle("requestor_name", sysType + "-" + machineName + "-" + securePort);
-            content.putSingle("profileId", profileId);
+            CMS.debug("configRemoteCert: subsystemCert: setting profileId to: " + profileId);
+            String actualProfileId = request.getSystemCertProfileID(certTag, profileId);
+            CMS.debug("configRemoteCert: subsystemCert: calculated profileId: " + actualProfileId);
+            content.putSingle("profileId", actualProfileId);
             content.putSingle("cert_request_type", "pkcs10");
             content.putSingle("cert_request", b64Request);
             content.putSingle("xmlOutput", "true");
@@ -2697,7 +2695,12 @@ public class ConfigurationUtils {
 
             MultivaluedMap<String, String> content = new MultivaluedHashMap<String, String>();
             content.putSingle("requestor_name", sysType + "-" + machineName + "-" + securePort);
-            content.putSingle("profileId", profileId);
+            //Get the correct profile id to send in case it's sslserver type:
+            CMS.debug("configRemoteCert: tag: " + certTag + " : setting profileId to: " + profileId);
+            String actualProfileId = request.getSystemCertProfileID(certTag, profileId);
+            CMS.debug("configRemoteCert: tag: " + certTag + " calculated profileId: " + actualProfileId);
+
+            content.putSingle("profileId", actualProfileId);
             content.putSingle("cert_request_type", "pkcs10");
             content.putSingle("cert_request", b64Request);
             content.putSingle("xmlOutput", "true");
@@ -2955,14 +2958,9 @@ public class ConfigurationUtils {
 
         CMS.debug("ConfigurationUtils.loadCertRequest(" + tag + ")");
 
-        try {
-            String certreq = config.getString(subsystem + "." + tag + ".certreq");
-            return CryptoUtil.base64Decode(certreq);
-
-        } catch (EPropertyNotFound e) {
-            // The CSR is optional for existing CA case.
-            return null;
-        }
+        // the CSR must exist in the second step of external CA scenario
+        String certreq = config.getString(subsystem + "." + tag + ".certreq");
+        return CryptoUtil.base64Decode(certreq);
     }
 
     public static void generateCertRequest(IConfigStore config, String certTag, Cert cert) throws Exception {
@@ -2990,7 +2988,7 @@ public class ConfigurationUtils {
         String privKeyID = config.getString(PCERT_PREFIX + certTag + ".privkey.id");
 
         CMS.debug("generateCertRequest: private key ID: " + privKeyID);
-        byte[] keyIDb = CryptoUtil.string2byte(privKeyID);
+        byte[] keyIDb = CryptoUtil.decodeKeyID(privKeyID);
 
         PrivateKey privk = CryptoUtil.findPrivateKeyFromID(keyIDb);
         if (privk == null) {
@@ -3248,53 +3246,62 @@ public class ConfigurationUtils {
 
         Password pass = new org.mozilla.jss.util.Password(pwd.toCharArray());
 
-        PKCS12Util util = new PKCS12Util();
-        PKCS12 pkcs12 = new PKCS12();
+        try {
 
-        // load system certificate (with key but without chain)
-        while (st.hasMoreTokens()) {
+            PKCS12Util util = new PKCS12Util();
+            PKCS12 pkcs12 = new PKCS12();
 
-            String t = st.nextToken();
-            if (t.equals("sslserver"))
-                continue;
+            // load system certificate (with key but without chain)
+            while (st.hasMoreTokens()) {
 
-            String nickname = cs.getString("preop.cert." + t + ".nickname");
-            String modname = cs.getString("preop.module.token");
+                String t = st.nextToken();
+                if (t.equals("sslserver"))
+                    continue;
 
-            if (!CryptoUtil.isInternalToken(modname))
-                nickname = modname + ":" + nickname;
+                String nickname = cs.getString("preop.cert." + t + ".nickname");
+                String modname = cs.getString("preop.module.token");
 
-            util.loadCertFromNSS(pkcs12, nickname, true, false);
-        }
+                if (!CryptoUtil.isInternalToken(modname))
+                    nickname = modname + ":" + nickname;
 
-        // load CA certificates (without keys or chains)
-        for (X509Certificate caCert : cm.getCACerts()) {
-            util.loadCertFromNSS(pkcs12, caCert, false, false);
-        }
+                util.loadCertFromNSS(pkcs12, nickname, true, false);
+            }
 
-        PFX pfx = util.generatePFX(pkcs12, pass);
+            // load CA certificates (without keys or chains)
+            for (X509Certificate caCert : cm.getCACerts()) {
+                util.loadCertFromNSS(pkcs12, caCert, false, false);
+            }
 
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        pfx.encode(bos);
-        byte[] output = bos.toByteArray();
+            PFX pfx = util.generatePFX(pkcs12, pass);
 
-        cs.putString("preop.pkcs12", CryptoUtil.byte2string(output));
-        pass.clear();
-        cs.commit(false);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            pfx.encode(bos);
+            byte[] output = bos.toByteArray();
 
-        if (fname != null) {
-            FileOutputStream fout = null;
-            try {
-                fout = new FileOutputStream(fname);
-                fout.write(output);
+            cs.putString("preop.pkcs12", CryptoUtil.byte2string(output));
+            cs.commit(false);
 
-            } catch (Exception e) {
-                throw new IOException("Failed to store keys in backup file " + e, e);
+            if (fname != null) {
+                FileOutputStream fout = null;
+                try {
+                    fout = new FileOutputStream(fname);
+                    fout.write(output);
 
-            } finally {
-                if (fout != null) {
-                    fout.close();
+                } catch (Exception e) {
+                    throw new IOException("Failed to store keys in backup file " + e, e);
+
+                } finally {
+                    if (fout != null) {
+                        fout.close();
+                    }
                 }
+            }
+
+        } catch (Exception e) {
+            throw e;
+        } finally {
+            if (pass != null) {
+                pass.clear();
             }
         }
     }

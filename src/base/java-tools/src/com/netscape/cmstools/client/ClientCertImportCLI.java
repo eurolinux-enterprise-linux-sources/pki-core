@@ -19,7 +19,6 @@
 package com.netscape.cmstools.client;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.net.URI;
@@ -27,10 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
@@ -46,6 +42,9 @@ import com.netscape.certsrv.client.PKIClient;
 import com.netscape.certsrv.dbs.certdb.CertId;
 import com.netscape.cmstools.cli.CLI;
 import com.netscape.cmstools.cli.MainCLI;
+import com.netscape.cmsutil.crypto.CryptoUtil;
+import com.netscape.cmsutil.util.Cert;
+import com.netscape.cmsutil.util.Utils;
 
 import netscape.security.pkcs.PKCS12;
 import netscape.security.pkcs.PKCS7;
@@ -180,10 +179,13 @@ public class ClientCertImportCLI extends CLI {
 
             if (verbose) System.out.println("Importing CA certificate from " + caCertPath + ".");
 
+            // initialize JSS
+            mainCLI.init();
+
             if (trustAttributes == null)
                 trustAttributes = "CT,C,C";
 
-            importCert(
+            importCACert(
                     mainCLI.certDatabase,
                     nssdbPasswordFile,
                     caCertPath,
@@ -248,8 +250,11 @@ public class ClientCertImportCLI extends CLI {
             File certFile = File.createTempFile("pki-client-cert-import-", ".crt");
             certFile.deleteOnExit();
 
-            try (FileOutputStream out = new FileOutputStream(certFile)) {
-                out.write(bytes);
+            try (FileWriter fw = new FileWriter(certFile);
+                    PrintWriter out = new PrintWriter(fw)) {
+                out.println(PKCS7.HEADER);
+                out.print(Utils.base64encode(bytes, true));
+                out.println(PKCS7.FOOTER);
             }
 
             if (trustAttributes == null)
@@ -300,13 +305,6 @@ public class ClientCertImportCLI extends CLI {
         } else {
             throw new Exception("Missing certificate to import");
         }
-
-        if (nickname == null) {
-            MainCLI.printMessage("Imported certificates from PKCS #12 file");
-
-        } else {
-            MainCLI.printMessage("Imported certificate \"" + nickname + "\"");
-        }
     }
 
     public void setTrustAttributes(X509Certificate cert, String trustAttributes)
@@ -343,6 +341,9 @@ public class ClientCertImportCLI extends CLI {
             command.add(dbPasswordFile.getAbsolutePath());
         }
 
+        // accept PEM or PKCS #7 certificate
+        command.add("-a");
+
         command.add("-i");
         command.add(certFile);
         command.add("-n");
@@ -355,107 +356,32 @@ public class ClientCertImportCLI extends CLI {
         } catch (Exception e) {
             throw new Exception("Unable to import certificate file", e);
         }
+
+        MainCLI.printMessage("Imported certificate \"" + nickname + "\"");
     }
 
-    /**
-     * Sorts certificate chain from leaf to root.
-     *
-     * This method sorts an array of certificates (e.g. from a PKCS #7
-     * data) that represents a certificate chain from leaf to root
-     * according to the subject DNs and issuer DNs.
-     *
-     * The array must contain exactly one unbranched certificate chain
-     * with one leaf and one root. The subject DNs must be unique.
-     *
-     * The result is returned in a new array. The input array is unchanged.
-     *
-     * @param certs array of certificates
-     * @return new array containing sorted certificates
-     */
-    public java.security.cert.X509Certificate[] sort(java.security.cert.X509Certificate[] certs) throws Exception {
+    public void importCACert(
+            File dbPath,
+            File dbPasswordFile,
+            String certFile,
+            String nickname,
+            String trustAttributes) throws Exception {
 
-        // lookup map: subject DN -> cert
-        Map<String, java.security.cert.X509Certificate> certMap = new LinkedHashMap<>();
-
-        // hierarchy map: subject DN -> issuer DN
-        Map<String, String> parentMap = new HashMap<>();
-
-        // reverse hierarchy map: issuer DN -> subject DN
-        Map<String, String> childMap = new HashMap<>();
-
-        // build maps
-        for (java.security.cert.X509Certificate cert : certs) {
-
-            String subjectDN = cert.getSubjectDN().toString();
-            String issuerDN = cert.getIssuerDN().toString();
-
-            if (certMap.containsKey(subjectDN)) {
-                throw new Exception("Duplicate certificate: " + subjectDN);
-            }
-
-            certMap.put(subjectDN, cert);
-
-            // ignore self-signed certificate when building hierarchy maps
-            if (subjectDN.equals(issuerDN)) continue;
-
-            if (childMap.containsKey(issuerDN)) {
-                throw new Exception("Branched chain: " + issuerDN);
-            }
-
-            parentMap.put(subjectDN, issuerDN);
-            childMap.put(issuerDN, subjectDN);
+        if (nickname != null) {
+            // import a single CA certificate with the provided nickname
+            importCert(dbPath, dbPasswordFile, certFile, nickname, trustAttributes);
+            return;
         }
 
-        if (verbose) {
-            System.out.println("Certificates:");
-            for (String subjectDN : certMap.keySet()) {
-                System.out.println(" - " + subjectDN);
+        // import CA certificate chain with auto-generated nicknames
+        String pemCert = new String(Files.readAllBytes(Paths.get(certFile))).trim();
+        byte[] binCert = Cert.parseCertificate(pemCert);
 
-                String parent = parentMap.get(subjectDN);
-                if (parent != null) System.out.println("   parent: " + parent);
+        CryptoManager manager = CryptoManager.getInstance();
+        X509Certificate cert = manager.importCACertPackage(binCert);
+        setTrustAttributes(cert, trustAttributes);
 
-                String child = childMap.get(subjectDN);
-                if (child != null) System.out.println("   child: " + child);
-            }
-        }
-
-        // find leaf cert
-        List<String> leafCerts = new ArrayList<>();
-
-        for (String subjectDN : certMap.keySet()) {
-
-            // if cert has a child, skip
-            if (childMap.containsKey(subjectDN)) continue;
-
-            // found leaf cert
-            leafCerts.add(subjectDN);
-        }
-
-        if (leafCerts.isEmpty()) {
-            throw new Exception("Unable to find leaf certificate");
-
-        } else if (leafCerts.size() > 1) {
-            StringBuilder sb = new StringBuilder();
-            for (String subjectDN : leafCerts) {
-                if (sb.length() > 0) sb.append(", ");
-                sb.append("[" + subjectDN + "]");
-            }
-            throw new Exception("Multiple leaf certificates: " + sb);
-        }
-
-        // build cert chain from leaf cert
-        List<java.security.cert.X509Certificate> chain = new ArrayList<>();
-        String current = leafCerts.get(0);
-
-        while (current != null) {
-
-            java.security.cert.X509Certificate cert = certMap.get(current);
-            chain.add(cert);
-
-            current = parentMap.get(current);
-        }
-
-        return chain.toArray(new java.security.cert.X509Certificate[chain.size()]);
+        MainCLI.printMessage("Imported certificate \"" + cert.getNickname() + "\"");
     }
 
     public void importPKCS7(
@@ -478,7 +404,7 @@ public class ClientCertImportCLI extends CLI {
         }
 
         // sort certs from leaf to root
-        certs = sort(certs);
+        certs = CryptoUtil.sortCertificateChain(certs, true);
 
         CryptoManager manager = CryptoManager.getInstance();
 
@@ -532,6 +458,8 @@ public class ClientCertImportCLI extends CLI {
                     "Setting trust attributes to CT,C,C");
         }
         setTrustAttributes(root, "CT,C,C");
+
+        MainCLI.printMessage("Imported certificate \"" + nickname + "\"");
     }
 
     public void importPKCS12(
@@ -560,5 +488,7 @@ public class ClientCertImportCLI extends CLI {
         } catch (Exception e) {
             throw new Exception("Unable to import PKCS #12 file", e);
         }
+
+        MainCLI.printMessage("Imported certificates from PKCS #12 file");
     }
 }

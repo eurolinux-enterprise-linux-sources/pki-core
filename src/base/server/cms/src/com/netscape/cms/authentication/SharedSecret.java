@@ -21,7 +21,6 @@ import java.math.BigInteger;
 // ldap java sdk
 import java.util.Enumeration;
 
-import org.mozilla.jss.CryptoManager;
 import org.mozilla.jss.crypto.CryptoToken;
 import org.mozilla.jss.crypto.EncryptionAlgorithm;
 import org.mozilla.jss.crypto.IVParameterSpec;
@@ -31,9 +30,10 @@ import org.mozilla.jss.crypto.SymmetricKey;
 import org.mozilla.jss.pkix.cmc.PKIData;
 
 import com.netscape.certsrv.apps.CMS;
-import com.netscape.certsrv.authentication.AuthToken;
 import com.netscape.certsrv.authentication.EInvalidCredentials;
 import com.netscape.certsrv.authentication.IAuthCredentials;
+import com.netscape.certsrv.authentication.AuthToken;
+import com.netscape.certsrv.authentication.IAuthToken;
 import com.netscape.certsrv.authentication.ISharedToken;
 import com.netscape.certsrv.base.EBaseException;
 import com.netscape.certsrv.base.IConfigStore;
@@ -143,8 +143,7 @@ public class SharedSecret extends DirBasedAuthentication
     private IConfigStore shrTokLdapConfigStore = null;
 
     private PrivateKey issuanceProtPrivKey = null;
-    protected CryptoManager cm = null;
-    protected CryptoToken tmpToken = null;
+    protected CryptoToken token = null;
     protected byte iv[] = { 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1 };
     EncryptionAlgorithm encryptAlgorithm = EncryptionAlgorithm.AES_128_CBC_PAD;
     ICertificateRepository certRepository = null;
@@ -193,15 +192,16 @@ public class SharedSecret extends DirBasedAuthentication
         }
 
         try {
-            cm = CryptoManager.getInstance();
+            String tokenName =
+                    CMS.getConfigStore().getString("cmc.token", CryptoUtil.INTERNAL_TOKEN_NAME);
+            CMS.debug(method + "getting token :" + tokenName);
+            token = CryptoUtil.getKeyStorageToken(tokenName);
         } catch (Exception e) {
-            msg = method + e.toString();
-            CMS.debug(msg);
-            throw new EBaseException(msg);
+            CMS.debug(method + e);
+            throw new EBaseException(e);
         }
-        tmpToken = cm.getInternalKeyStorageToken();
-        if (tmpToken == null) {
-            msg = method + "tmpToken null";
+        if (token == null) {
+            msg = method + "token null";
             CMS.debug(msg);
             throw new EBaseException(msg);
         }
@@ -234,18 +234,25 @@ public class SharedSecret extends DirBasedAuthentication
     }
 
     /**
-     * getSharedToken(String identification) provides
+     * getSharedToken(String identification, IAuthToken authToken) provides
      *  support for id_cmc_identification shared secret based enrollment
+     *
+     * @param identification maps to the uid in user's ldap record
+     * @param authToken the IAuthToken that will be filled with the DN
+     *        in user's ldap record
      *
      * Note: caller should clear the memory for the returned token
      *       after each use
      */
-    public String getSharedToken(String identification)
+    public char[] getSharedToken(String identification, IAuthToken authToken)
             throws EBaseException {
-        String method = "SharedSecret.getSharedToken(String identification): ";
+        String method = "SharedSecret.getSharedToken(String identification, IAuthToken authToken): ";
         String msg = "";
         CMS.debug(method + "begins.");
 
+        if ((identification == null) || (authToken == null)) {
+            throw new EBaseException(method + "paramsters identification or authToken cannot be null");
+        }
         LDAPConnection shrTokLdapConnection = null;
         LDAPSearchResults res = null;
         LDAPEntry entry = null;
@@ -288,6 +295,9 @@ public class SharedSecret extends DirBasedAuthentication
                 throw new EBaseException(msg);
             }
 
+            CMS.debug(method + "found user ldap entry: userdn = " + userdn);
+            authToken.set(IAuthToken.TOKEN_CERT_SUBJECT, userdn);
+
             res = shrTokLdapConnection.search(userdn, LDAPv2.SCOPE_BASE,
                     "(objectclass=*)", new String[] { mShrTokAttr }, false);
             if (res != null && res.hasMoreElements()) {
@@ -319,7 +329,7 @@ public class SharedSecret extends DirBasedAuthentication
             }
             CMS.debug(method + " got entryShrTok");
 
-            String shrSecret = decryptShrTokData(new String(entryShrTok));
+            char[] shrSecret = decryptShrTokData(new String(entryShrTok));
             CMS.debug(method + "returning");
             return shrSecret;
         } catch (Exception e) {
@@ -338,11 +348,11 @@ public class SharedSecret extends DirBasedAuthentication
      *     encryptedPrivate OCTET STRING
      * }
      * @param data_s
-     * @return
+     * @return phrase in char array.
      */
-    private String decryptShrTokData(String data_s) {
+    private char[] decryptShrTokData(String data_s) {
         String method = "SharedSecret.decryptShrTokData: ";
-        String msg = "";
+        byte[] ver_passphrase = null;
         try {
             byte[] wrapped_secret_data = Utils.base64decode(data_s);
             DerValue wrapped_val = new DerValue(wrapped_secret_data);
@@ -355,24 +365,26 @@ public class SharedSecret extends DirBasedAuthentication
             byte wrapped_passphrase[] = wrapped_dPassphrase.getOctetString();
             CMS.debug(method + "wrapped passphrase retrieved");
 
-            SymmetricKey ver_session = CryptoUtil.unwrap(tmpToken, SymmetricKey.AES, 128, SymmetricKey.Usage.UNWRAP,
+            SymmetricKey ver_session = CryptoUtil.unwrap(token, SymmetricKey.AES, 128, SymmetricKey.Usage.UNWRAP,
                     issuanceProtPrivKey, wrapped_session, wrapAlgorithm);
-            byte[] ver_passphrase = CryptoUtil.decryptUsingSymmetricKey(tmpToken, new IVParameterSpec(iv),
+            ver_passphrase = CryptoUtil.decryptUsingSymmetricKey(token, new IVParameterSpec(iv),
                     wrapped_passphrase,
-                    ver_session, EncryptionAlgorithm.AES_128_CBC_PAD);
+                    ver_session, encryptAlgorithm);
 
-            String ver_spassphrase = new String(ver_passphrase, "UTF-8");
-            return ver_spassphrase;
+            char[] ver_spassphraseChars = CryptoUtil.bytesToChars(ver_passphrase);
+            return ver_spassphraseChars;
         } catch (Exception e) {
             CMS.debug(method + e.toString());
             return null;
+        } finally {
+            CryptoUtil.obscureBytes(ver_passphrase, "random");
         }
     }
 
     /**
      * unsupported
      */
-    public String getSharedToken(PKIData cmcdata)
+    public char[] getSharedToken(PKIData cmcdata)
             throws EBaseException {
         String method = "SharedSecret.getSharedToken(PKIData cmcdata): ";
         String msg = "";
@@ -389,10 +401,15 @@ public class SharedSecret extends DirBasedAuthentication
      * Note: caller should clear the memory for the returned token
      *       after each use
      */
-    public String getSharedToken(BigInteger serial)
+    public char[] getSharedToken(BigInteger serial)
             throws EBaseException {
         String method = "SharedSecret.getSharedToken(BigInteger serial): ";
         String msg = "";
+
+        if (serial == null) {
+            throw new EBaseException(method + "paramster serial cannot be null");
+        }
+        CMS.debug(method + serial.toString());
 
         ICertRecord record = null;
         try {
@@ -417,7 +434,7 @@ public class SharedSecret extends DirBasedAuthentication
             throw new EBaseException(method + msg);
         }
 
-        String shrSecret = decryptShrTokData(shrTok_s);
+        char[] shrSecret = decryptShrTokData(shrTok_s);
         CMS.debug(method + "returning");
         return shrSecret;
     }

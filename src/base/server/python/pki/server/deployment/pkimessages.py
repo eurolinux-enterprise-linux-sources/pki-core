@@ -179,6 +179,10 @@ PKIHELPER_CERTUTIL_MISSING_ISSUER_NAME = \
     "certutil:  Missing '-c issuer-name' option!"
 PKIHELPER_CERTUTIL_MISSING_KEY_TYPE = \
     "certutil:  Missing '-k key-type-or-id' option (must be 'ecc' or 'rsa')!"
+PKIHELPER_CERTUTIL_MISSING_KEY_SIZE = \
+    "certutil:  Missing '-g keysize' option!"
+PKIHELPER_CERTUTIL_MISSING_CURVE_NAME = \
+    "certutil:  Missing '-q curve-name' option!"
 PKIHELPER_CERTUTIL_MISSING_NICKNAME = \
     "certutil:  Missing '-n nickname' option!"
 PKIHELPER_CERTUTIL_MISSING_NOISE_FILE = \
@@ -273,6 +277,8 @@ PKIHELPER_NAMESPACE_COLLISION_2 = \
     "PKI instance '%s' would produce a namespace collision with '%s'!"
 PKIHELPER_NAMESPACE_RESERVED_NAME_2 = \
     "PKI instance '%s' is already a reserved name under '%s'!"
+PKIHELPER_LOG_REUSE = \
+    "previous logs of PKI instance '%s' already exist. Appending logs to '%s'"
 PKIHELPER_NCIPHER_RESTART_1 = "executing '%s'"
 PKIHELPER_NOISE_FILE_2 = \
     "generating noise file called '%s' and filling it with '%d' random bytes"
@@ -358,7 +364,7 @@ PKIHELPER_USER_ADD_DEFAULT_2 = "adding default UID '%s' for user '%s' . . ."
 PKIHELPER_USER_ADD_KEYERROR_1 = "KeyError:  pki_user %s"
 PKIHELPER_USER_ADD_UID_KEYERROR_1 = "KeyError:  pki_uid %s"
 
-PKI_CONFIG_ADMIN_CERT_SAVE_1 = "saving %s Admin Certificate to file:"
+PKI_CONFIG_ADMIN_CERT_SAVE_2 = "saving %s Admin Certificate to file: %s"
 PKI_CONFIG_ADMIN_CERT_ATOB_1 = "converting %s Admin Certificate to binary:"
 PKI_CONFIG_CDATA_TAG = "tag:"
 PKI_CONFIG_CDATA_CERT = "cert:"
@@ -384,16 +390,19 @@ PKI_CONFIG_EXTERNAL_CERT_LOAD_PKI_SUBSYSTEM_1 = \
 PKI_CONFIG_EXTERNAL_CERT_LOAD_PKI_AUDIT_SIGNING_1 = \
     "loading external CA signed %s Audit Signing certificate from file:"
 PKI_CONFIG_EXTERNAL_CSR_SAVE = "saving CA Signing CSR to file:"
-PKI_CONFIG_EXTERNAL_CSR_SAVE_KRA_STORAGE = "saving KRA Storage CSR to file:"
-PKI_CONFIG_EXTERNAL_CSR_SAVE_KRA_TRANSPORT = "saving KRA Transport CSR to file:"
-PKI_CONFIG_EXTERNAL_CSR_SAVE_OCSP_SIGNING = "saving OCSP Signing CSR to file:"
-PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_ADMIN_1 = "saving %s Admin CSR to file:"
-PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_AUDIT_SIGNING_1 = \
-    "saving %s Audit Signing CSR to file:"
-PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_SSLSERVER_1 = \
-    "saving %s SSL Server CSR to file:"
-PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_SUBSYSTEM_1 = \
-    "saving %s Subsystem CSR to file:"
+PKI_CONFIG_EXTERNAL_CSR_SAVE_KRA_STORAGE_1 = (
+    "saving KRA Storage CSR to file: %s")
+PKI_CONFIG_EXTERNAL_CSR_SAVE_KRA_TRANSPORT_1 = (
+    "saving KRA Transport CSR to file: %s")
+PKI_CONFIG_EXTERNAL_CSR_SAVE_OCSP_SIGNING_1 = (
+    "saving OCSP Signing CSR to file: %s")
+PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_ADMIN_2 = "saving %s Admin CSR to file: '%s'"
+PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_AUDIT_SIGNING_2 = \
+    "saving %s Audit Signing CSR to file: %s"
+PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_SSLSERVER_2 = (
+    "saving %s SSL Server CSR to file: %s")
+PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_SUBSYSTEM_2 = (
+    "saving %s Subsystem CSR to file: %s")
 PKI_CONFIG_JAVA_CONFIGURATION_EXCEPTION = \
     "Exception from Java Configuration Servlet:"
 PKI_CONFIG_RESPONSE_ADMIN_CERT = "adminCert:"

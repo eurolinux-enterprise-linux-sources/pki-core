@@ -40,7 +40,7 @@ from six.moves.urllib.parse import urlparse  # pylint: disable=F0401,E0611
 
 # PKI Imports
 import pki
-import pki.upgrade
+import pki.util
 import pki.account
 import pki.client
 import pki.system
@@ -65,6 +65,8 @@ class PKIConfigParser:
     # The 'new_param' is the new param name.
 
     DEPRECATED_DEFAULT_PARAMS = [
+        (None, 'pki_admin_keysize',
+         None, 'pki_admin_key_size'),
         (None, 'pki_external_ca_cert_path',
          None, 'pki_ca_signing_cert_path'),
         (None, 'pki_external_ca_cert_chain_path',
@@ -82,7 +84,11 @@ class PKIConfigParser:
         (None, 'pki_ssl_server_subject_dn',
          None, 'pki_sslserver_subject_dn'),
         (None, 'pki_ssl_server_token',
-         None, 'pki_sslserver_token')
+         None, 'pki_sslserver_token'),
+        (None, 'pki_database_path',
+         None, 'pki_server_database_path'),
+        (None, 'pki_pin',
+         None, 'pki_server_database_password'),
     ]
 
     DEPRECATED_CA_PARAMS = [
@@ -259,7 +265,47 @@ class PKIConfigParser:
                 self.arg_parser.print_help()
                 self.arg_parser.exit(-1)
 
+    def set_nss_default_db_type(self):
+        # Define default NSS DB types
+        dbm = 'dbm'
+        # sql = 'sql'
+        default = dbm
+
+        # Set default NSS DB type
+        nss_default_db_type = os.getenv('NSS_DEFAULT_DB_TYPE')
+        if nss_default_db_type is None:
+            # NSS_DEFAULT_DB_TYPE is undefined; set 'dbm' default NSS DB type
+            os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
+        elif nss_default_db_type == '':
+            # NSS_DEFAULT_DB_TYPE is empty; set 'dbm' default NSS DB type
+            os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
+        else:
+            nss_type = nss_default_db_type.lower()
+            if nss_type == 'dbm':
+                # Always set/reset 'dbm' default NSS DB type
+                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
+            elif nss_type == 'sql':
+                # Always set/reset 'sql' default NSS DB type
+                # os.putenv('NSS_DEFAULT_DB_TYPE', 'sql')
+                # default = sql
+
+                # Warn user and set 'dbm' default NSS DB type
+                print('WARNING: NSS_DEFAULT_DB_TYPE=sql is currently ' +
+                      'unsupported!')
+                print('         Resetting to NSS_DEFAULT_DB_TYPE=dbm.')
+                # Currently override 'sql' with 'dbm' default NSS DB type
+                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
+            else:
+                # NSS_DEFAULT_DB_TYPE is invalid; set 'dbm' default NSS DB type
+                print('WARNING: NSS_DEFAULT_DB_TYPE=%s is invalid!'
+                      % nss_default_db_type)
+                print('         Resetting to NSS_DEFAULT_DB_TYPE=dbm.')
+                os.putenv('NSS_DEFAULT_DB_TYPE', 'dbm')
+        return default
+
     def init_config(self):
+
+        nss_default_db_type = self.set_nss_default_db_type()
 
         java_home = subprocess.check_output(
             '. /usr/share/pki/etc/pki.conf && . /etc/pki/pki.conf '
@@ -291,7 +337,7 @@ class PKIConfigParser:
         default_http_port = '8080'
         default_https_port = '8443'
 
-        application_version = str(pki.upgrade.Version(
+        application_version = str(pki.util.Version(
             pki.implementation_version()))
 
         self.deployer.main_config = configparser.SafeConfigParser({
@@ -303,6 +349,7 @@ class PKIConfigParser:
             'pki_subsystem': self.deployer.subsystem_name,
             'pki_subsystem_type': self.deployer.subsystem_name.lower(),
             'pki_root_prefix': config.pki_root_prefix,
+            'nss_default_db_type': nss_default_db_type,
             'java_home': java_home,
             'resteasy_lib': resteasy_lib,
             'jni_jar_dir': jni_jar_dir,
@@ -447,6 +494,7 @@ class PKIConfigParser:
                     'pki_pin',
                     'pki_replication_password',
                     'pki_security_domain_password',
+                    'pki_server_database_password',
                     'pki_server_pkcs12_password',
                     'pki_token_password')
 
@@ -576,8 +624,6 @@ class PKIConfigParser:
             self.ds_connect()
             self.ds_bind()
             self.ds_search()
-        except:
-            raise
         finally:
             self.ds_close()
 
@@ -595,8 +641,6 @@ class PKIConfigParser:
 
             except ldap.NO_SUCH_OBJECT:
                 base_dn_exists = False
-        except:
-            raise
         finally:
             self.ds_close()
         return base_dn_exists
@@ -719,25 +763,6 @@ class PKIConfigParser:
                 config.pki_deployed_instance_name
 
             self.deployer.flatten_master_dict()
-
-            instance = pki.server.PKIInstance(self.mdict['pki_instance_name'])
-            instance.load()
-
-            internal_token = self.mdict['pki_self_signed_token']
-
-            # if instance already exists and has password, reuse the password
-            if internal_token in instance.passwords:
-                self.mdict['pki_pin'] = instance.passwords.get(internal_token)
-
-            # otherwise, use user-provided password if specified
-            elif 'pki_pin' in self.mdict:
-                pass
-
-            # otherwise, generate a random password
-            else:
-                self.mdict['pki_pin'] = pki.generate_password()
-
-            self.mdict['pki_client_pin'] = pki.generate_password()
 
             pkilogging.sensitive_parameters = \
                 self.mdict['sensitive_parameters'].split()
@@ -1072,7 +1097,7 @@ class PKIConfigParser:
             self.mdict['TOMCAT_SERVER_PORT_SLOT'] = \
                 self.mdict['pki_tomcat_server_port']
             self.mdict['TOMCAT_SSL_VERSION_RANGE_STREAM_SLOT'] = \
-                "tls1_0:tls1_2"
+                "tls1_1:tls1_2"
             self.mdict['TOMCAT_SSL_VERSION_RANGE_DATAGRAM_SLOT'] = \
                 "tls1_1:tls1_2"
             ##
@@ -1091,7 +1116,7 @@ class PKIConfigParser:
                     "+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA," + \
                     "-TLS_RSA_WITH_3DES_EDE_CBC_SHA," + \
                     "-TLS_RSA_WITH_AES_128_CBC_SHA," + \
-                    "+TLS_RSA_WITH_AES_256_CBC_SHA," + \
+                    "-TLS_RSA_WITH_AES_256_CBC_SHA," + \
                     "-TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA," + \
                     "+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA," + \
                     "-TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA," + \
@@ -1107,13 +1132,15 @@ class PKIConfigParser:
                     "-TLS_DHE_RSA_WITH_AES_256_CBC_SHA256," + \
                     "-TLS_DHE_RSA_WITH_AES_128_GCM_SHA256," + \
                     "-TLS_RSA_WITH_AES_128_CBC_SHA256," + \
-                    "+TLS_RSA_WITH_AES_256_CBC_SHA256," + \
+                    "-TLS_RSA_WITH_AES_256_CBC_SHA256," + \
                     "-TLS_RSA_WITH_AES_128_GCM_SHA256," + \
                     "+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256," + \
                     "+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256," + \
                     "-TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA," + \
                     "-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256," + \
-                    "-TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+                    "-TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256," + \
+                    "+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384," + \
+                    "+TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
             else:
                 self.mdict['TOMCAT_SSL_RANGE_CIPHERS_SLOT'] = \
                     "-TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA," + \
@@ -1126,76 +1153,32 @@ class PKIConfigParser:
                     "-TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA," + \
                     "-TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA," + \
                     "-TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                    "-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA," + \
-                    "-TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA," + \
+                    "+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA," + \
+                    "+TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA," + \
                     "-TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA," + \
                     "-TLS_DHE_DSS_WITH_AES_128_CBC_SHA," + \
                     "-TLS_DHE_DSS_WITH_AES_256_CBC_SHA," + \
                     "-TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                    "-TLS_DHE_RSA_WITH_AES_128_CBC_SHA," + \
-                    "-TLS_DHE_RSA_WITH_AES_256_CBC_SHA," + \
-                    "-TLS_DHE_RSA_WITH_AES_128_CBC_SHA256," + \
-                    "-TLS_DHE_RSA_WITH_AES_256_CBC_SHA256," + \
-                    "-TLS_DHE_RSA_WITH_AES_128_GCM_SHA256," + \
+                    "+TLS_DHE_RSA_WITH_AES_128_CBC_SHA," + \
+                    "+TLS_DHE_RSA_WITH_AES_256_CBC_SHA," + \
+                    "+TLS_DHE_RSA_WITH_AES_128_CBC_SHA256," + \
+                    "+TLS_DHE_RSA_WITH_AES_256_CBC_SHA256," + \
+                    "+TLS_DHE_RSA_WITH_AES_128_GCM_SHA256," + \
                     "-TLS_DHE_DSS_WITH_AES_128_GCM_SHA256," + \
                     "-TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256," + \
-                    "-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256," + \
+                    "+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256," + \
                     "-TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256," + \
-                    "-TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256," + \
+                    "+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256," + \
                     "-TLS_RSA_WITH_AES_128_CBC_SHA256," + \
                     "-TLS_RSA_WITH_AES_256_CBC_SHA256," + \
                     "-TLS_RSA_WITH_AES_128_GCM_SHA256," + \
                     "-TLS_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                    "+TLS_RSA_WITH_AES_128_CBC_SHA," + \
-                    "+TLS_RSA_WITH_AES_256_CBC_SHA"
-            self.mdict['TOMCAT_SSL2_CIPHERS_SLOT'] = \
-                "-SSL2_RC4_128_WITH_MD5," + \
-                "-SSL2_RC4_128_EXPORT40_WITH_MD5," + \
-                "-SSL2_RC2_128_CBC_WITH_MD5," + \
-                "-SSL2_RC2_128_CBC_EXPORT40_WITH_MD5," + \
-                "-SSL2_DES_64_CBC_WITH_MD5," + \
-                "-SSL2_DES_192_EDE3_CBC_WITH_MD5"
-            self.mdict['TOMCAT_SSL3_CIPHERS_SLOT'] = \
-                "-SSL3_FORTEZZA_DMS_WITH_NULL_SHA," + \
-                "-SSL3_FORTEZZA_DMS_WITH_RC4_128_SHA," + \
-                "+SSL3_RSA_WITH_RC4_128_SHA," + \
-                "-SSL3_RSA_EXPORT_WITH_RC4_40_MD5," + \
-                "-SSL3_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                "-SSL3_RSA_WITH_DES_CBC_SHA," + \
-                "-SSL3_RSA_EXPORT_WITH_RC2_CBC_40_MD5," + \
-                "-SSL3_FORTEZZA_DMS_WITH_FORTEZZA_CBC_SHA," + \
-                "-SSL_RSA_FIPS_WITH_DES_CBC_SHA," + \
-                "-SSL_RSA_FIPS_WITH_3DES_EDE_CBC_SHA," + \
-                "-SSL3_RSA_WITH_NULL_MD5," + \
-                "-TLS_RSA_EXPORT1024_WITH_RC4_56_SHA," + \
-                "-TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA," + \
-                "+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA"
-            self.mdict['TOMCAT_SSL_OPTIONS_SLOT'] = \
-                "ssl2=false," + \
-                "ssl3=false," + \
-                "tls=true"
-            self.mdict['TOMCAT_TLS_CIPHERS_SLOT'] = \
-                "-TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA," + \
-                "-TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA," + \
-                "-TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                "+TLS_ECDH_RSA_WITH_AES_128_CBC_SHA," + \
-                "+TLS_ECDH_RSA_WITH_AES_256_CBC_SHA," + \
-                "-TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA," + \
-                "+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA," + \
-                "-TLS_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                "+TLS_RSA_WITH_AES_128_CBC_SHA," + \
-                "+TLS_RSA_WITH_AES_256_CBC_SHA," + \
-                "-TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA," + \
-                "+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA," + \
-                "-TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                "-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA," + \
-                "-TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA," + \
-                "-TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA," + \
-                "+TLS_DHE_DSS_WITH_AES_128_CBC_SHA," + \
-                "+TLS_DHE_DSS_WITH_AES_256_CBC_SHA," + \
-                "-TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA," + \
-                "+TLS_DHE_RSA_WITH_AES_128_CBC_SHA," + \
-                "+TLS_DHE_RSA_WITH_AES_256_CBC_SHA"
+                    "-TLS_RSA_WITH_AES_128_CBC_SHA," + \
+                    "-TLS_RSA_WITH_AES_256_CBC_SHA," + \
+                    "+TLS_DHE_RSA_WITH_AES_256_GCM_SHA384," + \
+                    "+TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384," + \
+                    "+TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384," + \
+                    "-TLS_RSA_WITH_AES_256_GCM_SHA384"
 
             if self.deployer.architecture == 64:
                 self.mdict['NUXWDOG_JNI_PATH_SLOT'] = (
@@ -1234,13 +1217,13 @@ class PKIConfigParser:
                     self.mdict['pki_instance_configuration_path'],
                     "password.conf")
             self.mdict['pki_cert_database'] = \
-                os.path.join(self.mdict['pki_database_path'],
+                os.path.join(self.mdict['pki_server_database_path'],
                              "cert8.db")
             self.mdict['pki_key_database'] = \
-                os.path.join(self.mdict['pki_database_path'],
+                os.path.join(self.mdict['pki_server_database_path'],
                              "key3.db")
             self.mdict['pki_secmod_database'] = \
-                os.path.join(self.mdict['pki_database_path'],
+                os.path.join(self.mdict['pki_server_database_path'],
                              "secmod.db")
             self.mdict['pki_self_signed_nickname'] = \
                 self.mdict['pki_sslserver_nickname']
@@ -1264,11 +1247,6 @@ class PKIConfigParser:
                 os.path.join(
                     self.mdict['pki_subsystem_configuration_path'],
                     "password.conf")
-
-            if not len(self.mdict['pki_client_database_password']):
-                # use randomly generated client 'pin'
-                self.mdict['pki_client_database_password'] = \
-                    str(self.mdict['pki_client_pin'])
 
             # Configuration scriptlet
             # 'Security Domain' Configuration name/value pairs
@@ -1396,7 +1374,7 @@ class PKIConfigParser:
                 # NOTE:  ALWAYS store the PKCS #12 backup keys file
                 #        in with the NSS "server" security databases
                 self.mdict['pki_backup_keys_p12'] = \
-                    self.mdict['pki_database_path'] + "/" + \
+                    self.mdict['pki_server_database_path'] + "/" + \
                     self.mdict['pki_subsystem'].lower() + "_" + \
                     "backup" + "_" + "keys" + "." + "p12"
 

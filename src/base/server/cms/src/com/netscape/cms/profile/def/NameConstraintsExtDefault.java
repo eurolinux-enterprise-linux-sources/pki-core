@@ -408,6 +408,10 @@ public class NameConstraintsExtDefault extends EnrollExtDefault {
             }
 
             if (gnI != null) {
+                if (!gnI.validSubtree()) {
+                    throw new EPropertyException(
+                        "Not valid for Name Constraints: " + val);
+                }
                 gn = new GeneralName(gnI);
             } else {
                 throw new EPropertyException(CMS.getUserMessage(locale,
@@ -474,12 +478,7 @@ public class NameConstraintsExtDefault extends EnrollExtDefault {
                 CMS.debug("NameConstraintExtDefault: getValue " + e.toString());
             }
 
-            if (subtrees == null) {
-                CMS.debug("NameConstraintsExtDefault::getValue() VAL_PERMITTED_SUBTREES is null!");
-                throw new EPropertyException("subtrees is null");
-            }
-
-            return getSubtreesInfo(ext, subtrees);
+            return getSubtreesInfo(subtrees);
         } else if (name.equals(VAL_EXCLUDED_SUBTREES)) {
             ext = (NameConstraintsExtension)
                     getExtension(PKIXExtensions.NameConstraints_Id.toString(), info);
@@ -496,28 +495,22 @@ public class NameConstraintsExtDefault extends EnrollExtDefault {
                 CMS.debug("NameConstraintExtDefault: getValue " + e.toString());
             }
 
-            if (subtrees == null) {
-                CMS.debug("NameConstraintsExtDefault::getValue() VAL_EXCLUDED_SUBTREES is null!");
-                throw new EPropertyException("subtrees is null");
-            }
-
-            return getSubtreesInfo(ext, subtrees);
+            return getSubtreesInfo(subtrees);
         } else {
             throw new EPropertyException(CMS.getUserMessage(
                         locale, "CMS_INVALID_PROPERTY", name));
         }
     }
 
-    private String getSubtreesInfo(NameConstraintsExtension ext,
-            GeneralSubtrees subtrees) throws EPropertyException {
+    private static String getSubtreesInfo(GeneralSubtrees subtrees)
+            throws EPropertyException {
+        if (subtrees == null)
+            return "";
+
         Vector<GeneralSubtree> trees = subtrees.getSubtrees();
-        int size = trees.size();
+        Vector<NameValuePairs> recs = new Vector<>();
 
-        Vector<NameValuePairs> recs = new Vector<NameValuePairs>();
-
-        for (int i = 0; i < size; i++) {
-            GeneralSubtree tree = trees.elementAt(i);
-
+        for (GeneralSubtree tree : trees) {
             GeneralName gn = tree.getGeneralName();
             String type = getGeneralNameType(gn);
             int max = tree.getMaxValue();
@@ -591,7 +584,8 @@ public class NameConstraintsExtDefault extends EnrollExtDefault {
         addExtension(PKIXExtensions.NameConstraints_Id.toString(), ext, info);
     }
 
-    public NameConstraintsExtension createExtension() {
+    public NameConstraintsExtension createExtension()
+            throws EProfileException {
         NameConstraintsExtension ext = null;
 
         try {
@@ -632,6 +626,8 @@ public class NameConstraintsExtDefault extends EnrollExtDefault {
 
             ext = new NameConstraintsExtension(critical,
                         new GeneralSubtrees(v), new GeneralSubtrees(v1));
+        } catch (EProfileException e) {
+            throw e;  // re-throw
         } catch (Exception e) {
             CMS.debug("NameConstraintsExtDefault: createExtension " +
                     e.toString());
@@ -640,8 +636,9 @@ public class NameConstraintsExtDefault extends EnrollExtDefault {
         return ext;
     }
 
-    private GeneralSubtree createSubtree(String choice, String value,
-            String minS, String maxS) {
+    private GeneralSubtree createSubtree(
+                String choice, String value, String minS, String maxS
+            ) throws EProfileException {
         GeneralName gn = null;
         GeneralNameInterface gnI = null;
 
@@ -650,11 +647,16 @@ public class NameConstraintsExtDefault extends EnrollExtDefault {
         } catch (IOException e) {
             CMS.debug(e.toString());
         }
-        if (gnI != null)
+        if (gnI != null) {
+            if (!gnI.validSubtree()) {
+                throw new EProfileException(
+                    "Not valid for Name Constraints: " + value);
+            }
             gn = new GeneralName(gnI);
-        else
+        } else {
             //throw new EPropertyException("GeneralName must not be null");
             return null;
+        }
 
         int min = 0;
 

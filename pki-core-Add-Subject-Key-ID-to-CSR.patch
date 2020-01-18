@@ -1,0 +1,366 @@
+From 5c459c1861e4132904fe88e99341738f1c3555e8 Mon Sep 17 00:00:00 2001
+From: Fraser Tweedale <ftweedal@redhat.com>
+Date: Thu, 11 Jan 2018 19:02:09 +1100
+Subject: [PATCH 1/2] install: support adding Subject Key ID to CSR
+
+For externally-signed CA installation, some users want to be able to
+generate a CSR with a Subject Key Identifier extension - either
+user-specified or a generated default.
+
+This commit adds support to NSSDatabase.create_request for
+generating a CSR with an SKI extension.  The process to achieve this
+is:
+
+1. Generate the key.  This behaviour has been extracted to a
+   separate method (NSSDatabase.generate_key).
+
+2. If a "default" SKI is requested, generate a throw-away CSR and
+   compute an SKI value from the public key contained therein.
+   This is a "minimal" CSR whose only purpose is to get the public
+   key in a convenient format.
+
+3. Generate the CSR and write it to the caller-specified file.
+   This CSR contains all the extensions the caller asked for.
+
+This commit relies on an enhancement to the certutil(1) program that
+allows create a CSR for a private key specified by CKA_ID.
+
+Part-of: https://pagure.io/dogtagpki/issue/2854
+(cherry picked from commit f1f32c31d51dffb93e7874d8c4dd0325136c4db7)
+---
+ base/common/python/pki/nssdb.py | 177 ++++++++++++++++++++++++++++++++++------
+ 1 file changed, 152 insertions(+), 25 deletions(-)
+
+diff --git a/base/common/python/pki/nssdb.py b/base/common/python/pki/nssdb.py
+index bbcb261..11509f0 100644
+--- a/base/common/python/pki/nssdb.py
++++ b/base/common/python/pki/nssdb.py
+@@ -22,14 +22,18 @@
+ 
+ from __future__ import absolute_import
+ import base64
++import binascii
+ import logging
+ import os
++import re
+ import shutil
+ import stat
+ import subprocess
+ import tempfile
+ import datetime
+ 
++import six
++
+ from cryptography import x509
+ from cryptography.hazmat.backends import default_backend
+ 
+@@ -444,20 +448,78 @@ class NSSDatabase(object):
+             basic_constraints_ext=None,
+             key_usage_ext=None,
+             extended_key_usage_ext=None,
++            cka_id=None,
++            subject_key_id=None,
+             generic_exts=None):
++        """
++        Generate a CSR.
++
++        ``cka_id``
++            PKCS #11 CKA_ID of key in the NSSDB to use, as text.
++            If ``None`` a new key will be generated (this is
++            the typical use case).
++
++        ``subject_key_id``
++            If ``None``, no Subject Key ID will be included in the
++            request.  If ``"DEFAULT"``, the Subject Key ID will be
++            derived from the generated key, using the default
++            digest.  Otherwise the value must be a hex-encoded
++            string, without leading ``0x``, containing the desired
++            Subject Key ID.
++
++        ``generic_exts``
++            List of generic extensions, each being a mapping with
++            the following keys:
++
++            ``oid``
++                Extension OID (``str``)
++            ``critical``
++                ``bool``
++            ``data``
++                Raw extension data (``bytes``)
++
++        """
++        if not cka_id:
++            cka_id = self.generate_key(
++                key_type=key_type, key_size=key_size,
++                curve=curve, noise_file=noise_file)
++        if not isinstance(cka_id, six.text_type):
++            raise TypeError('cka_id must be a text string')
+ 
+         tmpdir = tempfile.mkdtemp()
+ 
+         try:
+-            if not noise_file:
+-                noise_file = os.path.join(tmpdir, 'noise.bin')
+-                if key_size:
+-                    size = key_size
++            if subject_key_id is not None:
++                if subject_key_id == 'DEFAULT':
++                    # Caller wants a default subject key ID included
++                    # in CSR.  To do this we must first generate a
++                    # temporary CSR for the key, then compute an SKI
++                    # from the public key data.
++                    tmp_csr = os.path.join(tmpdir, 'tmp_csr.pem')
++                    self.create_request(
++                        subject_dn, tmp_csr,
++                        cka_id=cka_id, subject_key_id=None)
++                    with open(tmp_csr, 'rb') as f:
++                        data = f.read()
++                    csr = x509.load_pem_x509_csr(data, default_backend())
++                    pub = csr.public_key()
++                    ski = x509.SubjectKeyIdentifier.from_public_key(pub)
++                    ski_bytes = ski.digest
+                 else:
+-                    size = 2048
+-                self.create_noise(
+-                    noise_file=noise_file,
+-                    size=size)
++                    # Explicit subject_key_id provided; decode it
++                    ski_bytes = binascii.unhexlify(subject_key_id)
++
++                if generic_exts is None:
++                    generic_exts = []
++                generic_exts.append({
++                    'oid': x509.SubjectKeyIdentifier.oid.dotted_string,
++                    'critical': False,
++                    'data': bytearray([0x04, len(ski_bytes)]) + ski_bytes,
++                    # OCTET STRING     ^tag  ^length            ^data
++                    #
++                    # This structure is incorrect if len > 127 bytes, but this
++                    # will be fine for a CKA_ID or SKID of sensible length.
++                })
+ 
+             binary_request_file = os.path.join(tmpdir, 'request.bin')
+ 
+@@ -478,25 +540,9 @@ class NSSDatabase(object):
+                 '-f', self.password_file,
+                 '-s', subject_dn,
+                 '-o', binary_request_file,
+-                '-z', noise_file
++                '-k', cka_id,
+             ])
+ 
+-            if key_type:
+-                cmd.extend(['-k', key_type])
+-
+-            if key_type.lower() == 'ec':
+-                # This is fix for Bugzilla 1544843
+-                cmd.extend([
+-                    '--keyOpFlagsOn', 'sign',
+-                    '--keyOpFlagsOff', 'derive'
+-                ])
+-
+-            if key_size:
+-                cmd.extend(['-g', str(key_size)])
+-
+-            if curve:
+-                cmd.extend(['-q', curve])
+-
+             if hash_alg:
+                 cmd.extend(['-Z', hash_alg])
+ 
+@@ -603,6 +649,87 @@ class NSSDatabase(object):
+         finally:
+             shutil.rmtree(tmpdir)
+ 
++    def generate_key(
++            self,
++            key_type=None, key_size=None, curve=None,
++            noise_file=None):
++        """
++        Generate a key of the given type and size.
++        Returns the CKA_ID of the generated key, as a text string.
++
++        ``noise_file``
++          Path to a noise file, or ``None`` to automatically
++          generate a noise file.
++
++        """
++        ids_pre = set(self.list_private_keys())
++
++        cmd = [
++            'certutil',
++            '-d', self.directory,
++            '-f', self.password_file,
++            '-G',
++        ]
++        if self.token:
++            cmd.extend(['-h', self.token])
++        if key_type:
++            cmd.extend(['-k', key_type])
++        if key_type.lower() == 'ec':
++            # This is fix for Bugzilla 1544843
++            cmd.extend([
++                '--keyOpFlagsOn', 'sign',
++                '--keyOpFlagsOff', 'derive',
++            ])
++        if key_size:
++            cmd.extend(['-g', str(key_size)])
++        if curve:
++            cmd.extend(['-q', curve])
++
++        temp_noise_file = noise_file is None
++        if temp_noise_file:
++            fd, noise_file = tempfile.mkstemp()
++            os.close(fd)
++            size = key_size if key_size else 2048
++            self.create_noise(noise_file=noise_file, size=size)
++        cmd.extend(['-z', noise_file])
++
++        try:
++            subprocess.check_call(cmd)
++        finally:
++            if temp_noise_file:
++                os.unlink(noise_file)
++
++        ids_post = set(self.list_private_keys())
++        return list(ids_post - ids_pre)[0].decode('ascii')
++
++    def list_private_keys(self):
++        """
++        Return list of hex-encoded private key CKA_IDs in the token.
++
++        """
++        cmd = [
++            'certutil',
++            '-d', self.directory,
++            '-f', self.password_file,
++            '-K',
++        ]
++        if self.token:
++            cmd.extend(['-h', self.token])
++        try:
++            out = subprocess.check_output(cmd)
++        except subprocess.CalledProcessError as e:
++            if e.returncode == 255:
++                return []  # no keys were found
++            else:
++                raise e  # other error; re-raise
++
++        # output contains list that looks like:
++        #   < 0> rsa      b995381610fb58e8b45d3c2401dfd30d6efdd595 (orphan)
++        #   < 1> rsa      dcd6cbc1226ede02a961488553b01639ff981cdd someNickame
++        #
++        # The hex string is the hex-encoded CKA_ID
++        return re.findall(br'^<\s*\d+>\s+\w+\s+(\w+)', out, re.MULTILINE)
++
+     def create_cert(self, request_file, cert_file, serial, issuer=None,
+                     key_usage_ext=None, basic_constraints_ext=None,
+                     aki_ext=None, ski_ext=None, aia_ext=None,
+-- 
+1.8.3.1
+
+
+From 8f638afeec1527d581a8dd9eefc84cde69c1c6b6 Mon Sep 17 00:00:00 2001
+From: Fraser Tweedale <ftweedal@redhat.com>
+Date: Thu, 11 Jan 2018 19:46:40 +1100
+Subject: [PATCH 2/2] install: add pkispawn option for adding SKI to CSR
+
+For externally-signed CA installation, some users want to be able to
+generate a CSR with a Subject Key Identifier extension - either
+user-specified or a generated default.
+
+This commit adds the 'pki_req_ski' pkispwan option for specifying
+that the CSR should bear the SKI extension.  It can either be a
+hex-encoded SKI value or the string "DEFAULT" which asks that the
+value be derived from the public key.
+
+Update the pki_default.cfg.5 man page to document the new option.
+
+Fixes: https://pagure.io/dogtagpki/issue/2854
+(cherry picked from commit 4f9327b85eab58463adcece81269b823e9def2b4)
+---
+ base/server/man/man5/pki_default.cfg.5                              | 6 ++++++
+ base/server/python/pki/server/deployment/pkihelper.py               | 2 ++
+ .../server/python/pki/server/deployment/scriptlets/configuration.py | 6 +++++-
+ .../python/pki/server/deployment/scriptlets/security_databases.py   | 4 ++++
+ 4 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/base/server/man/man5/pki_default.cfg.5 b/base/server/man/man5/pki_default.cfg.5
+index afdcbfb..4d83fcc 100644
+--- a/base/server/man/man5/pki_default.cfg.5
++++ b/base/server/man/man5/pki_default.cfg.5
+@@ -352,6 +352,12 @@ Sets whether the new CA will have a signing certificate that will be issued by a
+ .IP
+ Required in the first step of the external CA signing process.  The CSR will be printed to the screen and stored in this location.
+ .PP
++.B pki_req_ski
++.IP
++Include a Subject Key Identifier extension in the CSR.  The value is either a
++hex-encoded byte string (\fBwithout\fR leading "0x"), or the string "DEFAULT"
++which will derive a value from the public key.
++.PP
+ .B pki_external_step_two
+ .IP
+ Specifies that this is the second step of the external CA process.  Defaults to False.
+diff --git a/base/server/python/pki/server/deployment/pkihelper.py b/base/server/python/pki/server/deployment/pkihelper.py
+index 740caff..48446b0 100644
+--- a/base/server/python/pki/server/deployment/pkihelper.py
++++ b/base/server/python/pki/server/deployment/pkihelper.py
+@@ -429,6 +429,8 @@ class ConfigurationFile:
+         # generic extension support in CSR - for external CA
+         self.add_req_ext = config.str2bool(
+             self.mdict['pki_req_ext_add'])
++        # include SKI extension in CSR - for external CA
++        self.req_ski = self.mdict.get('pki_req_ski')
+ 
+         self.existing = config.str2bool(self.mdict['pki_existing'])
+         self.external = config.str2bool(self.mdict['pki_external'])
+diff --git a/base/server/python/pki/server/deployment/scriptlets/configuration.py b/base/server/python/pki/server/deployment/scriptlets/configuration.py
+index b4f3141..3f153ec 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/configuration.py
++++ b/base/server/python/pki/server/deployment/scriptlets/configuration.py
+@@ -94,6 +94,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+                      basic_constraints_ext=None,
+                      key_usage_ext=None,
+                      extended_key_usage_ext=None,
++                     subject_key_id=None,
+                      generic_exts=None):
+ 
+         cert_id = self.get_cert_id(subsystem, tag)
+@@ -121,6 +122,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+             basic_constraints_ext=basic_constraints_ext,
+             key_usage_ext=key_usage_ext,
+             extended_key_usage_ext=extended_key_usage_ext,
++            subject_key_id=subject_key_id,
+             generic_exts=generic_exts)
+ 
+         with open(csr_path) as f:
+@@ -174,7 +176,9 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+             csr_path,
+             basic_constraints_ext=basic_constraints_ext,
+             key_usage_ext=key_usage_ext,
+-            generic_exts=generic_exts
++            generic_exts=generic_exts,
++            subject_key_id=subsystem.config.get(
++                'preop.cert.signing.subject_key_id'),
+         )
+ 
+     def generate_sslserver_csr(self, deployer, nssdb, subsystem):
+diff --git a/base/server/python/pki/server/deployment/scriptlets/security_databases.py b/base/server/python/pki/server/deployment/scriptlets/security_databases.py
+index 7ce32a8..82dd85c 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/security_databases.py
++++ b/base/server/python/pki/server/deployment/scriptlets/security_databases.py
+@@ -240,6 +240,10 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+                 subsystem.config['preop.cert.signing.ext.critical'] = \
+                     deployer.configuration_file.req_ext_critical.lower()
+ 
++            if deployer.configuration_file.req_ski:
++                subsystem.config['preop.cert.signing.subject_key_id'] = \
++                    deployer.configuration_file.req_ski
++
+         subsystem.save()
+ 
+     def update_external_certs_conf(self, external_path, deployer):
+-- 
+1.8.3.1
+

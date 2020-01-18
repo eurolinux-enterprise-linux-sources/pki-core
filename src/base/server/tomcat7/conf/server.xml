@@ -143,10 +143,6 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
               'ocspTimeout'
               'strictCiphers'
               'clientauth' (ALL lowercase)
-              'sslOptions'
-              'ssl2Ciphers'
-              'ssl3Ciphers'
-              'tlsCiphers'
               'sslVersionRangeStream'
               'sslVersionRangeDatagram'
               'sslRangeCiphers'
@@ -177,6 +173,11 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
         In case of an ocsp signing certificate, one must import the cert
         into the subsystem's nss db and set trust. e.g.:
           certutil -d . -A -n "ocspSigningCert cert-pki-ca" -t "C,," -a -i ocspCert.b64
+
+        If both ocspResponderURL and ocspResponderCertNickname are both unset
+        all OCSP checks will be made using the URL encoded within the AIA extension
+        of each cert being verified.
+
         ocspCacheSize - sets max cache entries
         ocspMinCacheEntryDuration - sets minimum seconds to next fetch attempt
         ocspMaxCacheEntryDuration - sets maximum seconds to next fetch attempt
@@ -196,15 +197,11 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
            ocspResponderURL="http://[PKI_HOSTNAME]:[PKI_UNSECURE_PORT]/ca/ocsp"
            ocspResponderCertNickname="ocspSigningCert cert-pki-ca"
            ocspCacheSize="1000"
-           ocspMinCacheEntryDuration="60"
-           ocspMaxCacheEntryDuration="120"
+           ocspMinCacheEntryDuration="7200"
+           ocspMaxCacheEntryDuration="14400"
            ocspTimeout="10"
            strictCiphers="true"
            clientAuth="[PKI_AGENT_CLIENTAUTH]"
-           sslOptions="[TOMCAT_SSL_OPTIONS]"
-           ssl2Ciphers="[TOMCAT_SSL2_CIPHERS]"
-           ssl3Ciphers="[TOMCAT_SSL3_CIPHERS]"
-           tlsCiphers="[TOMCAT_TLS_CIPHERS]"
            sslVersionRangeStream="[TOMCAT_SSL_VERSION_RANGE_STREAM]"
            sslVersionRangeDatagram="[TOMCAT_SSL_VERSION_RANGE_DATAGRAM]"
            sslRangeCiphers="[TOMCAT_SSL_RANGE_CIPHERS]"

@@ -33,9 +33,11 @@ public class ACLEntry implements IACLEntry, java.io.Serializable {
     */
     private static final long serialVersionUID = 422656406529200393L;
 
+    public enum Type { Allow , Deny };
+
     protected Hashtable<String, String> mPerms = new Hashtable<String, String>();
     protected String expressions = null;
-    protected boolean negative = false;
+    protected Type type = Type.Deny;
     protected String aclEntryString = null;
 
     /**
@@ -45,20 +47,12 @@ public class ACLEntry implements IACLEntry, java.io.Serializable {
     }
 
     /**
-     * Checks if this ACL entry is set to negative.
+     * Get the Type of the ACL entry.
      *
-     * @return true if this ACL entry expression is for "deny";
-     *         false if this ACL entry expression is for "allow"
+     * @return Allow or Deny
      */
-    public boolean isNegative() {
-        return negative;
-    }
-
-    /**
-     * Sets this ACL entry negative. This ACL entry expression is for "deny".
-     */
-    public void setNegative() {
-        negative = true;
+    public Type getType() {
+        return type;
     }
 
     /**
@@ -160,7 +154,7 @@ public class ACLEntry implements IACLEntry, java.io.Serializable {
         //           don't grant permission
         if (mPerms.get(permission) == null)
             return false;
-        if (isNegative()) {
+        if (type == Type.Deny) {
             return false;
         } else {
             return true;
@@ -195,14 +189,19 @@ public class ACLEntry implements IACLEntry, java.io.Serializable {
         ACLEntry entry = new ACLEntry();
 
         if (prefix.equals("allow")) {
-            // do nothing
+            entry.type = Type.Allow;
         } else if (prefix.equals("deny")) {
-            entry.setNegative();
+            entry.type = Type.Deny;
         } else {
             return null;
         }
         // locate the second space
         i = suffix.indexOf(' ');
+        if (i <= 0) {
+            // second space not found, or is at start of string
+            return null;
+        }
+
         // this prefix should be rights list, delimited by ","
         prefix = suffix.substring(1, i - 1);
         // the suffix is the rest, which is the "expressions"
@@ -225,7 +224,7 @@ public class ACLEntry implements IACLEntry, java.io.Serializable {
     public String toString() {
         StringBuffer entry = new StringBuffer();
 
-        if (isNegative()) {
+        if (type == Type.Deny) {
             entry.append("deny (");
         } else {
             entry.append("allow (");

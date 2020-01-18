@@ -21,6 +21,12 @@
 # System Imports
 from __future__ import absolute_import
 from __future__ import print_function
+
+try:
+    import configparser
+except ImportError:
+    import ConfigParser as configparser
+
 import errno
 import sys
 import os
@@ -339,18 +345,16 @@ class Namespace:
                     log.PKIHELPER_NAMESPACE_COLLISION_2 % (
                         self.mdict['pki_instance_name'],
                         self.mdict['pki_cgroup_cpu_systemd_service_path']))
+
         if os.path.exists(self.mdict['pki_instance_log_path']) and\
            os.path.exists(self.mdict['pki_subsystem_log_path']):
-            # Top-Level PKI log path collision
-            config.pki_log.error(
-                log.PKIHELPER_NAMESPACE_COLLISION_2,
+            # Check if logs already exist. If so, append to it. Log it as info
+            config.pki_log.info(
+                log.PKIHELPER_LOG_REUSE,
                 self.mdict['pki_instance_name'],
                 self.mdict['pki_instance_log_path'],
                 extra=config.PKI_INDENTATION_LEVEL_2)
-            raise Exception(
-                log.PKIHELPER_NAMESPACE_COLLISION_2 % (
-                    self.mdict['pki_instance_name'],
-                    self.mdict['pki_instance_log_path']))
+
         if os.path.exists(self.mdict['pki_instance_configuration_path']) and\
            os.path.exists(self.mdict['pki_subsystem_configuration_path']):
             # Top-Level PKI configuration path collision
@@ -428,7 +432,8 @@ class ConfigurationFile:
 
         self.existing = config.str2bool(self.mdict['pki_existing'])
         self.external = config.str2bool(self.mdict['pki_external'])
-        self.external_step_one = not config.str2bool(self.mdict['pki_external_step_two'])
+        self.external_step_one = not config.str2bool(
+            self.mdict['pki_external_step_two'])
         self.external_step_two = not self.external_step_one
 
         if self.external:
@@ -496,7 +501,8 @@ class ConfigurationFile:
         # ALWAYS defined via 'pkiparser.py'
         if self.external_step_two:
             # Only allowed for External CA/KRA/OCSP, or Stand-alone PKI
-            if self.subsystem not in ['CA', 'KRA', 'OCSP'] and not self.standalone:
+            if (self.subsystem not in ['CA', 'KRA', 'OCSP'] and
+                    not self.standalone):
                 config.pki_log.error(log.PKI_EXTERNAL_STEP_TWO_UNSUPPORTED_1,
                                      self.subsystem,
                                      extra=config.PKI_INDENTATION_LEVEL_2)
@@ -557,8 +563,9 @@ class ConfigurationFile:
             # Verify existence of PKCS #12 Password (ONLY for non-HSM Clones)
             if not config.str2bool(self.mdict['pki_hsm_enable']):
 
-                # If system certificates are already provided via pki_server_pkcs12
-                # there's no need to provide pki_clone_pkcs12.
+                # If system certificates are already provided via
+                # pki_server_pkcs12, there's no need to provide
+                # pki_clone_pkcs12.
                 if not self.mdict['pki_server_pkcs12_path']:
                     self.confirm_data_exists("pki_clone_pkcs12_password")
 
@@ -680,8 +687,9 @@ class ConfigurationFile:
             # Check clone parameters for non-HSM clone
             if not config.str2bool(self.mdict['pki_hsm_enable']):
 
-                # If system certificates are already provided via pki_server_pkcs12
-                # there's no need to provide pki_clone_pkcs12.
+                # If system certificates are already provided via
+                # pki_server_pkcs12, there's no need to provide
+                # pki_clone_pkcs12.
                 if not self.mdict['pki_server_pkcs12_path']:
                     self.confirm_data_exists("pki_clone_pkcs12_path")
                     self.confirm_file_exists("pki_clone_pkcs12_path")
@@ -704,39 +712,9 @@ class ConfigurationFile:
                 # pki_ca_signing_cert_path are optional.
                 pass
         elif not self.skip_configuration and self.standalone:
-            if not self.external_step_two:
 
-                # Stand-alone PKI Admin CSR (Step 1)
-                self.confirm_data_exists("pki_admin_csr_path")
+            if self.external_step_two:
 
-                # Stand-alone PKI Audit Signing CSR (Step 1)
-                self.confirm_data_exists(
-                    "pki_audit_signing_csr_path")
-
-                # Stand-alone PKI SSL Server CSR (Step 1)
-                self.confirm_data_exists("pki_sslserver_csr_path")
-
-                # Stand-alone PKI Subsystem CSR (Step 1)
-                self.confirm_data_exists("pki_subsystem_csr_path")
-
-                # Stand-alone PKI KRA CSRs
-                if self.subsystem == "KRA":
-
-                    # Stand-alone PKI KRA Storage CSR (Step 1)
-                    self.confirm_data_exists(
-                        "pki_storage_csr_path")
-
-                    # Stand-alone PKI KRA Transport CSR (Step 1)
-                    self.confirm_data_exists(
-                        "pki_transport_csr_path")
-
-                # Stand-alone PKI OCSP CSRs
-                if self.subsystem == "OCSP":
-                    # Stand-alone PKI OCSP OCSP Signing CSR (Step 1)
-                    self.confirm_data_exists(
-                        "pki_ocsp_signing_csr_path")
-
-            else:
                 # Stand-alone PKI External CA Certificate (Step 2)
                 # The pki_ca_signing_cert_path is optional.
 
@@ -801,7 +779,9 @@ class ConfigurationFile:
                 extra=config.PKI_INDENTATION_LEVEL_2)
             return
 
-        portrecs = seobject.portRecords().get_all()
+        trans = seobject.semanageRecords("targeted")
+        trans.start()
+        portrecs = seobject.portRecords(trans).get_all()
         portlist = ports[:]
         for port in portlist:
             context = ""
@@ -829,6 +809,7 @@ class ConfigurationFile:
                 raise Exception(
                     log.PKIHELPER_INVALID_SELINUX_CONTEXT_FOR_PORT %
                     (port, context))
+        trans.finish()
         return
 
     def verify_ds_secure_connection_data(self):
@@ -933,9 +914,11 @@ class Instance:
         # Return list of PKI subsystems in the specified tomcat instance
         rv = []
         try:
-            for subsystem in config.PKI_TOMCAT_SUBSYSTEMS:
-                path = self.mdict['pki_instance_path'] + \
-                    "/" + subsystem.lower()
+            for subsystem in config.PKI_SUBSYSTEMS:
+                path = os.path.join(
+                    self.mdict['pki_instance_path'],
+                    subsystem.lower()
+                )
                 if os.path.exists(path) and os.path.isdir(path):
                     rv.append(subsystem)
         except OSError as exc:
@@ -1006,8 +989,6 @@ class Instance:
             raise
 
     def get_instance_status(self, secure_connection=True):
-        pki_protocol = None
-        pki_port = None
         if secure_connection:
             pki_protocol = "https"
             pki_port = self.mdict['pki_https_port']
@@ -1042,7 +1023,7 @@ class Instance:
                 "No connection - server may still be down",
                 extra=config.PKI_INDENTATION_LEVEL_3)
             config.pki_log.debug(
-                "No connection - exception thrown: " + str(exc),
+                "No connection - exception thrown: %s", exc,
                 extra=config.PKI_INDENTATION_LEVEL_3)
             return None
 
@@ -1704,7 +1685,8 @@ class File:
 
     def substitute_deployment_params(self, line):
         """
-        Replace all occurrences of [param] in the line with the value of the deployment parameter.
+        Replace all occurrences of [param] in the line with the value of the
+        deployment parameter.
         """
 
         # find the first parameter in the line
@@ -2045,6 +2027,7 @@ class Password:
 
     def __init__(self, deployer):
         self.mdict = deployer.mdict
+        self.deployer = deployer
 
     def create_password_conf(self, path, pin, pin_sans_token=False,
                              overwrite_flag=False, critical_failure=True):
@@ -2134,7 +2117,7 @@ class Password:
                 raise
         return
 
-    def get_password(self, path, token_name, critical_failure=True):
+    def get_password(self, path, token_name):
         token_pwd = None
         if os.path.exists(path) and os.path.isfile(path) and\
            os.access(path, os.R_OK):
@@ -2147,16 +2130,11 @@ class Password:
                 token_pwd = tokens[token_name]
 
         if token_pwd is None or token_pwd == '':
-            # TODO prompt for this password
-            config.pki_log.error(log.PKIHELPER_PASSWORD_NOT_FOUND_1,
-                                 token_name,
-                                 extra=config.PKI_INDENTATION_LEVEL_2)
-            if critical_failure:
-                raise Exception(
-                    log.PKIHELPER_PASSWORD_NOT_FOUND_1 %
-                    token_name)
-            else:
-                return
+            self.deployer.parser.read_password(
+                'Password for token {}'.format(token_name),
+                self.deployer.subsystem_name,
+                'token_pwd')
+            token_pwd = self.mdict['token_pwd']
         return token_pwd
 
 
@@ -2178,7 +2156,7 @@ class FIPS:
             with open(os.devnull, "w") as fnull:
                 output = subprocess.check_output(command, stderr=fnull,
                                                  close_fds=True)
-                if (output != "0"):
+                if output != "0":
                     # Set FIPS mode as enabled
                     self.mdict['pki_fips_mode_enabled'] = True
                     config.pki_log.info(log.PKIHELPER_FIPS_MODE_IS_ENABLED,
@@ -2211,7 +2189,7 @@ class HSM:
 
     def initialize(self):
         if config.str2bool(self.mdict['pki_hsm_enable']):
-            if (self.mdict['pki_hsm_libfile'] == config.PKI_HSM_NCIPHER_LIB):
+            if self.mdict['pki_hsm_libfile'] == config.PKI_HSM_NCIPHER_LIB:
                 self.initialize_ncipher()
         return
 
@@ -2404,8 +2382,8 @@ class Certutil:
 
     def generate_self_signed_certificate(self, path, pki_cert_database,
                                          pki_key_database, pki_secmod_database,
-                                         token, nickname,
-                                         subject, serial_number,
+                                         token, nickname, subject,
+                                         key_type, key_size, serial_number,
                                          validity_period, issuer_name,
                                          trustargs, noise_file,
                                          password_file=None,
@@ -2445,6 +2423,35 @@ class Certutil:
                     log.PKIHELPER_CERTUTIL_MISSING_SUBJECT,
                     extra=config.PKI_INDENTATION_LEVEL_2)
                 raise Exception(log.PKIHELPER_CERTUTIL_MISSING_SUBJECT)
+            #   Specify the key type
+            if key_type:
+                if key_type == "ecc":
+                    command.extend(["-k", "ec"])
+                    #   Specify the curve name
+                    if key_size:
+                        command.extend(["-q", key_size])
+                    else:
+                        config.pki_log.error(
+                            log.PKIHELPER_CERTUTIL_MISSING_CURVE_NAME,
+                            extra=config.PKI_INDENTATION_LEVEL_2)
+                        raise Exception(
+                            log.PKIHELPER_CERTUTIL_MISSING_CURVE_NAME)
+                else:
+                    command.extend(["-k", key_type])
+                    #   Specify the key size
+                    if key_size:
+                        command.extend(["-g", key_size])
+                    else:
+                        config.pki_log.error(
+                            log.PKIHELPER_CERTUTIL_MISSING_KEY_SIZE,
+                            extra=config.PKI_INDENTATION_LEVEL_2)
+                        raise Exception(
+                            log.PKIHELPER_CERTUTIL_MISSING_KEY_SIZE)
+            else:
+                config.pki_log.error(
+                    log.PKIHELPER_CERTUTIL_MISSING_KEY_TYPE,
+                    extra=config.PKI_INDENTATION_LEVEL_2)
+                raise Exception(log.PKIHELPER_CERTUTIL_MISSING_KEY_TYPE)
             #   Specify the serial number
             if serial_number is not None:
                 command.extend(["-m", str(serial_number)])
@@ -2917,7 +2924,6 @@ class ServerCertNickConf:
             try:
                 # overwrite value inside 'serverCertNick.conf'
                 with open(self.servercertnick_conf, "w") as fd:
-                    sslserver_nickname = None
                     if self.step_two:
                         # use final HSM name
                         sslserver_nickname = (self.token_name + ":" +
@@ -2986,8 +2992,7 @@ class KRAConnector:
 
             token_pwd = self.password.get_password(
                 self.mdict['pki_shared_password_conf'],
-                token_name,
-                critical_failure)
+                token_name)
 
             if token_pwd is None or token_pwd == '':
                 config.pki_log.warning(
@@ -3023,8 +3028,8 @@ class KRAConnector:
                     sechost, secport)
             except Exception as e:
                 config.pki_log.error(
-                    "unable to access security domain. Continuing .. " +
-                    str(e),
+                    "unable to access security domain. Continuing .. %s ",
+                    e,
                     extra=config.PKI_INDENTATION_LEVEL_2)
                 ca_list = []
 
@@ -3087,7 +3092,7 @@ class KRAConnector:
                    "-h", cahost,
                    "-n", subsystemnick,
                    "-P", "https",
-                   "-d", self.mdict['pki_database_path'],
+                   "-d", self.mdict['pki_server_database_path'],
                    "-c", token_pwd,
                    "ca-kraconnector-del",
                    "--host", krahost,
@@ -3120,7 +3125,7 @@ class KRAConnector:
         command = ["/usr/bin/sslget",
                    "-n", subsystemnick,
                    "-p", token_pwd,
-                   "-d", self.mdict['pki_database_path'],
+                   "-d", self.mdict['pki_server_database_path'],
                    "-e", params,
                    "-v",
                    "-r", update_url, cahost + ":" + str(caport)]
@@ -3191,8 +3196,7 @@ class TPSConnector:
 
             token_pwd = self.password.get_password(
                 self.mdict['pki_shared_password_conf'],
-                token_name,
-                critical_failure)
+                token_name)
 
             if token_pwd is None or token_pwd == '':
                 config.pki_log.warning(
@@ -3232,7 +3236,7 @@ class TPSConnector:
                    "-h", tkshost,
                    "-n", subsystemnick,
                    "-P", "https",
-                   "-d", self.mdict['pki_database_path'],
+                   "-d", self.mdict['pki_server_database_path'],
                    "-c", token_pwd,
                    "-t", "tks",
                    "tks-tpsconnector-del",
@@ -3332,7 +3336,7 @@ class SecurityDomain:
                 admin_update_url = "/ca/admin/ca/updateDomainXML"
                 command = ["/usr/bin/sslget",
                            "-p", str(123456),
-                           "-d", self.mdict['pki_database_path'],
+                           "-d", self.mdict['pki_server_database_path'],
                            "-e", params,
                            "-v",
                            "-r", admin_update_url,
@@ -3429,8 +3433,7 @@ class SecurityDomain:
 
         token_pwd = self.password.get_password(
             self.mdict['pki_shared_password_conf'],
-            token_name,
-            critical_failure)
+            token_name)
 
         if token_pwd is None or token_pwd == '':
             config.pki_log.warning(
@@ -3448,7 +3451,7 @@ class SecurityDomain:
         command = ["/usr/bin/sslget",
                    "-n", subsystemnick,
                    "-p", token_pwd,
-                   "-d", self.mdict['pki_database_path'],
+                   "-d", self.mdict['pki_server_database_path'],
                    "-e", params,
                    "-v",
                    "-r", update_url, sechost + ":" + str(secagentport)]
@@ -3483,17 +3486,77 @@ class Systemd(object):
 
         Args:
           deployer (dictionary):  PKI Deployment name/value parameters
-
-        Attributes:
-
-        Returns:
-
-        Raises:
-
-        Examples:
-
         """
         self.mdict = deployer.mdict
+        self.deployer = deployer
+        instance_name = deployer.mdict['pki_instance_name']
+
+        unit_file = 'pki-tomcatd@%s.service' % instance_name
+        systemd_link = os.path.join(
+            '/etc/systemd/system/pki-tomcatd.target.wants',
+            unit_file)
+        override_dir = '/etc/systemd/system/pki-tomcatd@{}.service.d'.format(
+            instance_name)
+        self.base_override_dir = override_dir
+
+        nuxwdog_unit_file = 'pki-tomcatd-nuxwdog@%s.service' % instance_name
+        nuxwdog_systemd_link = os.path.join(
+            '/etc/systemd/system/pki-tomcatd-nuxwdog.target.wants',
+            nuxwdog_unit_file)
+        nuxwdog_override_dir = (
+            '/etc/systemd/system/pki-tomcatd-nuxwdog@{}.service.d'.format(
+                instance_name))
+        self.nuxwdog_override_dir = nuxwdog_override_dir
+
+        # self.overrides will be a hash of ConfigParsers indexed by filename
+        # once the overrides have been constructed, the caller should call
+        # write_overrides()
+        self.overrides = {}
+
+        if os.path.exists(nuxwdog_systemd_link):
+            self.is_nuxwdog_enabled = True
+            self.service_name = nuxwdog_unit_file
+            self.systemd_link = nuxwdog_systemd_link
+            self.override_dir = nuxwdog_override_dir
+        else:
+            self.is_nuxwdog_enabled = False
+            self.service_name = unit_file
+            self.systemd_link = systemd_link
+            self.override_dir = override_dir
+
+    def create_override_directory(self):
+        self.deployer.directory.create(self.override_dir, uid=0, gid=0)
+
+    def create_override_file(self, fname):
+        self.create_override_directory()
+        self.deployer.file.create(
+            os.path.join(self.override_dir, fname),
+            uid=0, gid=0
+        )
+
+    def set_override(self, section, param, value, fname='local.conf'):
+        if fname not in self.overrides:
+            parser = configparser.ConfigParser()
+            parser.optionxform = str
+            override_file = os.path.join(self.override_dir, fname)
+            if os.path.exists(override_file):
+                parser.read(override_file)
+            self.overrides[fname] = parser
+        else:
+            parser = self.overrides[fname]
+
+        if not parser.has_section(section):
+            parser.add_section(section)
+
+        parser.set(section, param, value)
+
+    def write_overrides(self):
+        for fname, parser in self.overrides.items():
+            override_file = os.path.join(self.override_dir, fname)
+            if not os.path.exists(override_file):
+                self.create_override_file(override_file)
+            with open(override_file, 'w') as fp:
+                parser.write(fp)
 
     def daemon_reload(self, critical_failure=True):
         """PKI Deployment execution management lifecycle function.
@@ -3567,7 +3630,7 @@ class Systemd(object):
                 command = ["rm", "/etc/rc3.d/*" +
                            self.mdict['pki_instance_name']]
             else:
-                command = ["systemctl", "disable", "pki-tomcatd.target"]
+                command = ["systemctl", "disable", self.service_name]
 
             # Display this "systemd" execution managment command
             config.pki_log.info(
@@ -3617,7 +3680,7 @@ class Systemd(object):
                 command = ["ln", "-s", "/etc/init.d/pki-tomcatd",
                            "/etc/rc3.d/S89" + self.mdict['pki_instance_name']]
             else:
-                command = ["systemctl", "enable", "pki-tomcatd.target"]
+                command = ["systemctl", "enable", self.service_name]
 
             # Display this "systemd" execution managment command
             config.pki_log.info(
@@ -3661,20 +3724,15 @@ class Systemd(object):
 
         """
         try:
-            service = None
             # Execute the "systemd daemon-reload" management lifecycle command
             if reload_daemon:
                 self.daemon_reload(critical_failure)
-            # Compose this "systemd" execution management command
-            service = "pki-tomcatd" + "@" +\
-                      self.mdict['pki_instance_name'] + "." +\
-                      "service"
 
             if pki.system.SYSTEM_TYPE == "debian":
                 command = ["/etc/init.d/pki-tomcatd", "start",
                            self.mdict['pki_instance_name']]
             else:
-                command = ["systemctl", "start", service]
+                command = ["systemctl", "start", self.service_name]
 
             # Display this "systemd" execution managment command
             config.pki_log.info(
@@ -3714,17 +3772,11 @@ class Systemd(object):
 
         """
         try:
-            service = None
-            # Compose this "systemd" execution management command
-            service = "pki-tomcatd" + "@" +\
-                      self.mdict['pki_instance_name'] + "." +\
-                      "service"
-
             if pki.system.SYSTEM_TYPE == "debian":
                 command = ["/etc/init.d/pki-tomcatd", "stop",
                            self.mdict['pki_instance_name']]
             else:
-                command = ["systemctl", "stop", service]
+                command = ["systemctl", "stop", self.service_name]
 
             # Display this "systemd" execution managment command
             config.pki_log.info(
@@ -3765,21 +3817,16 @@ class Systemd(object):
 
         """
         try:
-            service = None
             # Compose this "systemd" execution management command
             # Execute the "systemd daemon-reload" management lifecycle command
             if reload_daemon:
                 self.daemon_reload(critical_failure)
 
-            service = "pki-tomcatd" + "@" +\
-                      self.mdict['pki_instance_name'] + "." +\
-                      "service"
-
             if pki.system.SYSTEM_TYPE == "debian":
                 command = ["/etc/init.d/pki-tomcatd", "restart",
                            self.mdict['pki_instance_name']]
             else:
-                command = ["systemctl", "restart", service]
+                command = ["systemctl", "restart", self.service_name]
 
             # Display this "systemd" execution managment command
             config.pki_log.info(
@@ -3846,8 +3893,7 @@ class ConfigClient:
         # Store the Administration Certificate in a file
         admin_cert_file = self.mdict['pki_client_admin_cert']
         admin_cert_bin_file = admin_cert_file + ".der"
-        self.save_admin_cert(log.PKI_CONFIG_ADMIN_CERT_SAVE_1,
-                             admin_cert, admin_cert_file,
+        self.save_admin_cert(admin_cert, admin_cert_file,
                              self.mdict['pki_subsystem_name'])
 
         # convert the cert file to binary
@@ -3980,14 +4026,14 @@ class ConfigClient:
 
     def save_admin_csr(self):
         config.pki_log.info(
-            log.PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_ADMIN_1 + " '" +
-            self.mdict['pki_admin_csr_path'] + "'", self.subsystem,
+            log.PKI_CONFIG_EXTERNAL_CSR_SAVE_PKI_ADMIN_2,
+            self.subsystem,
+            self.mdict['pki_admin_csr_path'],
             extra=config.PKI_INDENTATION_LEVEL_2)
         self.deployer.directory.create(
             os.path.dirname(self.mdict['pki_admin_csr_path']))
         with open(self.mdict['pki_admin_csr_path'], "w") as f:
             f.write("-----BEGIN CERTIFICATE REQUEST-----\n")
-        admin_certreq = None
         with open(os.path.join(
                   self.mdict['pki_client_database_dir'],
                   "admin_pkcs10.bin.asc"), "r") as f:
@@ -4002,20 +4048,20 @@ class ConfigClient:
             log.PKI_CONFIG_CDATA_REQUEST + "\n" + admin_certreq,
             extra=config.PKI_INDENTATION_LEVEL_2)
 
-    def save_admin_cert(self, message, input_data, output_file,
-                        subsystem_name):
-        config.pki_log.debug(message + " '" + output_file + "'",
+    def save_admin_cert(self, input_data, output_file, subsystem_name):
+        config.pki_log.debug(log.PKI_CONFIG_ADMIN_CERT_SAVE_2,
                              subsystem_name,
+                             output_file,
                              extra=config.PKI_INDENTATION_LEVEL_2)
         with open(output_file, "w") as f:
             f.write(input_data)
 
     def save_system_csr(self, csr, message, path, subsystem=None):
         if subsystem is not None:
-            config.pki_log.info(message + " '" + path + "'", subsystem,
+            config.pki_log.info(message, subsystem, path,
                                 extra=config.PKI_INDENTATION_LEVEL_2)
         else:
-            config.pki_log.info(message + " '" + path + "'",
+            config.pki_log.info(message, path,
                                 extra=config.PKI_INDENTATION_LEVEL_2)
         self.deployer.directory.create(os.path.dirname(path))
         with open(path, "w") as f:
@@ -4029,10 +4075,11 @@ class ConfigClient:
         if not nickname:
             nickname = cert.nickname
 
-        config.pki_log.info("loading %s certificate" % nickname,
+        config.pki_log.info("loading %s certificate", nickname,
                             extra=config.PKI_INDENTATION_LEVEL_2)
 
-        cert.cert = nssdb.get_cert(nickname)
+        cert.cert = nssdb.get_cert(
+            nickname=nickname)
 
     def set_system_certs(self, nssdb, data):
         systemCerts = []  # nopep8
@@ -4289,7 +4336,7 @@ class ConfigClient:
         data.adminUID = self.mdict['pki_admin_uid']
         data.adminSubjectDN = self.mdict['pki_admin_subject_dn']
 
-        if self.standalone:
+        if self.standalone or self.external and self.subsystem in ['KRA', 'OCSP']:
             if not self.external_step_two:
                 # IMPORTANT:  ALWAYS set 'pki_import_admin_cert' FALSE for
                 #             Stand-alone PKI (Step 1)
@@ -4307,18 +4354,18 @@ class ConfigClient:
                 password=self.mdict['pki_client_database_password'])
 
             try:
-                data.adminCert = client_nssdb.get_cert(self.mdict['pki_admin_nickname'])
+                data.adminCert = client_nssdb.get_cert(
+                    nickname=self.mdict['pki_admin_nickname'])
                 if data.adminCert:  # already imported, return
                     return
 
             finally:
                 client_nssdb.close()
 
-            if self.standalone:
-                # Stand-alone PKI (Step 2)
+            if self.standalone or self.external and self.subsystem in ['KRA', 'OCSP']:
+                # Stand-alone/External PKI (Step 2)
                 #
-                # Copy the Stand-alone PKI 'Admin Certificate'
-                # (that was previously generated via an external CA) into
+                # Copy the externally-issued admin certificate into
                 # 'ca_admin.cert' under the specified 'pki_client_dir'
                 # stripping the certificate HEADER/FOOTER prior to saving it.
                 imported_admin_cert = ""
@@ -4363,7 +4410,7 @@ class ConfigClient:
                 self.deployer.certutil.generate_certificate_request(
                     self.mdict['pki_admin_subject_dn'],
                     self.mdict['pki_admin_key_type'],
-                    self.mdict['pki_admin_keysize'],
+                    self.mdict['pki_admin_key_size'],
                     self.mdict['pki_client_password_conf'],
                     noise_file,
                     output_file,

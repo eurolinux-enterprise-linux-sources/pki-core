@@ -21,6 +21,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -208,6 +209,14 @@ public abstract class EnrollProfile extends BasicProfile
 
             // catch for invalid request
             cmc_msgs = parseCMC(locale, cert_request, donePOI);
+            SessionContext sessionContext = SessionContext.getContext();
+            String authenticatedSubject = 
+                    (String) sessionContext.get(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT);
+
+            if (authenticatedSubject != null) {
+                ctx.set(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT, authenticatedSubject);
+            }
+
             if (cmc_msgs == null) {
                 CMS.debug(method + "parseCMC returns cmc_msgs null");
                 return null;
@@ -1051,7 +1060,15 @@ public abstract class EnrollProfile extends BasicProfile
                     msgs[i] = (TaggedRequest) reqSeq.elementAt(i);
                     if (id_cmc_revokeRequest)
                         continue;
+
+                    boolean hasPop = true;
+                    if (msgs[i].getType().equals(TaggedRequest.CRMF)) {
+                        CertReqMsg crm = msgs[i].getCrm();
+                        if (!crm.hasPop())
+                            hasPop = false;
+                    }
                     if (popLinkWitnessRequired &&
+                            hasPop && // popLinkWitness needs POP
                             !context.containsKey("POPLinkWitnessV2") &&
                             !context.containsKey("POPLinkWitness")) {
                         CMS.debug(method + "popLinkWitness(V2) required");
@@ -1300,7 +1317,7 @@ public abstract class EnrollProfile extends BasicProfile
     protected boolean verifyPopLinkWitnessV2(
             PopLinkWitnessV2 popLinkWitnessV2,
             byte[] randomSeed,
-            String sharedSecret,
+            byte[] sharedSecret,
             String ident_string) {
         String method = "EnrollProfile: verifyPopLinkWitnessV2: ";
 
@@ -1326,6 +1343,7 @@ public abstract class EnrollProfile extends BasicProfile
             return false;
         }
 
+        byte[] verifyBytes = null;
         try {
             DigestAlgorithm keyGenAlgID = DigestAlgorithm.fromOID(keyGenAlg.getOID());
             MessageDigest keyGenMDAlg = MessageDigest.getInstance(keyGenAlgID.toString());
@@ -1335,17 +1353,41 @@ public abstract class EnrollProfile extends BasicProfile
                     .getInstance(CryptoUtil.getHMACtoMessageDigestName(macAlgID.toString()));
 
             byte[] witness_bytes = witness.toByteArray();
-            return verifyDigest(
-                    (ident_string != null) ? (sharedSecret + ident_string).getBytes() : sharedSecret.getBytes(),
+
+            ByteBuffer bb = null;
+
+            if(ident_string != null) {
+                bb = ByteBuffer.allocate(ident_string.getBytes().length + sharedSecret.length);
+                bb.put(sharedSecret);
+                bb.put(ident_string.getBytes());
+                verifyBytes = bb.array();
+            } else {
+                verifyBytes = sharedSecret;
+            }
+
+            boolean result = verifyDigest(
+                    verifyBytes,
                     randomSeed,
                     witness_bytes,
                     keyGenMDAlg, macMDAlg);
+
+            //Check ident_string because, verifyBytes will be = sharedSecret otherwise.
+            //Let caller clear sharedSecret when the time comes.
+            if (ident_string != null) {
+                CryptoUtil.obscureBytes(verifyBytes, "random");
+            }
+
+            return result;
         } catch (NoSuchAlgorithmException e) {
             CMS.debug(method + e);
             return false;
         } catch (Exception e) {
             CMS.debug(method + e);
             return false;
+        } finally {
+            if (ident_string != null) {
+                CryptoUtil.obscureBytes(verifyBytes, "random");
+            }
         }
     }
 
@@ -1365,162 +1407,179 @@ public abstract class EnrollProfile extends BasicProfile
 
         boolean sharedSecretFound = true;
         String configName = "SharedToken";
-        String sharedSecret = null;
+        char[] sharedSecret = null;
+        byte[] sharedSecretBytes = null;
+
         try {
-            IAuthSubsystem authSS = (IAuthSubsystem) CMS.getSubsystem(CMS.SUBSYSTEM_AUTH);
 
-            IAuthManager sharedTokenAuth = authSS.getAuthManager(configName);
-            if (sharedTokenAuth == null) {
-                CMS.debug(method + " Failed to retrieve shared secret authentication plugin class");
-                sharedSecretFound = false;
-            }
-            ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
+            try {
+                IAuthSubsystem authSS = (IAuthSubsystem) CMS.getSubsystem(CMS.SUBSYSTEM_AUTH);
 
-            if (ident_string != null) {
-                sharedSecret = tokenClass.getSharedToken(ident_string);
-            } else {
-                sharedSecret = tokenClass.getSharedToken(mCMCData);
-            }
-            if (sharedSecret == null)
-                sharedSecretFound = false;
+                IAuthManager sharedTokenAuth = authSS.getAuthManager(configName);
+                if (sharedTokenAuth == null) {
+                    CMS.debug(method + " Failed to retrieve shared secret authentication plugin class");
+                    sharedSecretFound = false;
+                }
 
-        } catch (Exception e) {
-            CMS.debug(e);
-            return false;
-        }
+                IAuthToken authToken = (IAuthToken)
+                    context.get(SessionContext.AUTH_TOKEN);
 
-        INTEGER reqId = null;
-        byte[] bv = null;
+                ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
 
-        if (req.getType().equals(TaggedRequest.PKCS10)) {
-            String methodPos = method + "PKCS10: ";
-            CMS.debug(methodPos + "begins");
+                if (ident_string != null) {
+                    sharedSecret = tokenClass.getSharedToken(ident_string, authToken);
+                } else {
+                    sharedSecret = tokenClass.getSharedToken(mCMCData);
+                }
+                if (sharedSecret == null) {
+                    sharedSecretFound = false;
+                } else {
+                    sharedSecretBytes = CryptoUtil.charsToBytes(sharedSecret);
+                }
 
-            TaggedCertificationRequest tcr = req.getTcr();
-            if (!sharedSecretFound) {
-                bpids.addElement(tcr.getBodyPartID());
-                context.put("POPLinkWitness", bpids);
+            } catch (Exception e) {
+                CMS.debug(e);
                 return false;
-            } else {
-                CertificationRequest creq = tcr.getCertificationRequest();
-                CertificationRequestInfo cinfo = creq.getInfo();
-                SET attrs = cinfo.getAttributes();
-                for (int j = 0; j < attrs.size(); j++) {
-                    Attribute pkcs10Attr = (Attribute) attrs.elementAt(j);
-                    if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
-                        CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
-                        if (ident_string == null) {
-                            bpids.addElement(reqId);
-                            context.put("identification", bpids);
-                            context.put("POPLinkWitnessV2", bpids);
-                            String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
-                            CMS.debug(methodPos + msg);
-                            return false;
-                        }
+            }
 
-                        SET witnessVal = pkcs10Attr.getValues();
-                        if (witnessVal.size() > 0) {
-                            try {
-                                PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(witnessVal.elementAt(0));
-                                boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
-                                        randomSeed,
-                                        sharedSecret,
-                                        ident_string);
-                                if (!valid) {
-                                    bpids.addElement(reqId);
-                                    context.put("POPLinkWitnessV2", bpids);
-                                    return valid;
+            INTEGER reqId = null;
+            byte[] bv = null;
+
+            if (req.getType().equals(TaggedRequest.PKCS10)) {
+                String methodPos = method + "PKCS10: ";
+                CMS.debug(methodPos + "begins");
+
+                TaggedCertificationRequest tcr = req.getTcr();
+                if (!sharedSecretFound) {
+                    bpids.addElement(tcr.getBodyPartID());
+                    context.put("POPLinkWitness", bpids);
+                    return false;
+                } else {
+                    CertificationRequest creq = tcr.getCertificationRequest();
+                    CertificationRequestInfo cinfo = creq.getInfo();
+                    SET attrs = cinfo.getAttributes();
+                    for (int j = 0; j < attrs.size(); j++) {
+                        Attribute pkcs10Attr = (Attribute) attrs.elementAt(j);
+                        if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
+                            CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
+                            if (ident_string == null) {
+                                bpids.addElement(reqId);
+                                context.put("identification", bpids);
+                                context.put("POPLinkWitnessV2", bpids);
+                                String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
+                                CMS.debug(methodPos + msg);
+                                return false;
+                            }
+
+                            SET witnessVal = pkcs10Attr.getValues();
+                            if (witnessVal.size() > 0) {
+                                try {
+                                    PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(
+                                            witnessVal.elementAt(0));
+                                    boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
+                                            randomSeed,
+                                            sharedSecretBytes,
+                                            ident_string);
+                                    if (!valid) {
+                                        bpids.addElement(reqId);
+                                        context.put("POPLinkWitnessV2", bpids);
+                                        return valid;
+                                    }
+                                    return true;
+                                } catch (Exception ex) {
+                                    CMS.debug(methodPos + ex);
+                                    return false;
                                 }
-                                return true;
-                            } catch (Exception ex) {
-                                CMS.debug(methodPos + ex);
-                                return false;
+                            }
+                        } else if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
+                            SET witnessVal = pkcs10Attr.getValues();
+                            if (witnessVal.size() > 0) {
+                                try {
+                                    OCTET_STRING str = (OCTET_STRING) (ASN1Util.decode(OCTET_STRING.getTemplate(),
+                                            ASN1Util.encode(witnessVal.elementAt(0))));
+                                    bv = str.toByteArray();
+                                    return verifyDigest(sharedSecretBytes,
+                                            randomSeed, bv);
+                                } catch (InvalidBERException ex) {
+                                    return false;
+                                }
                             }
                         }
-                    } else if (pkcs10Attr.getType().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
-                        SET witnessVal = pkcs10Attr.getValues();
-                        if (witnessVal.size() > 0) {
+                    }
+
+                    return false;
+                }
+            } else if (req.getType().equals(TaggedRequest.CRMF)) {
+                String methodPos = method + "CRMF: ";
+                CMS.debug(methodPos + "begins");
+
+                CertReqMsg crm = req.getCrm();
+                CertRequest certReq = crm.getCertReq();
+                reqId = certReq.getCertReqId();
+                if (!sharedSecretFound) {
+                    bpids.addElement(reqId);
+                    context.put("POPLinkWitness", bpids);
+                    return false;
+                } else {
+                    for (int i = 0; i < certReq.numControls(); i++) {
+                        AVA ava = certReq.controlAt(i);
+
+                        if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
+                            CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
+                            if (ident_string == null) {
+                                bpids.addElement(reqId);
+                                context.put("identification", bpids);
+                                context.put("POPLinkWitnessV2", bpids);
+                                String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
+                                CMS.debug(methodPos + msg);
+                                return false;
+                            }
+
+                            ASN1Value value = ava.getValue();
+                            PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(value);
+
+                            boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
+                                    randomSeed,
+                                    sharedSecretBytes,
+                                    ident_string);
+                            if (!valid) {
+                                bpids.addElement(reqId);
+                                context.put("POPLinkWitnessV2", bpids);
+                                return valid;
+                            }
+                        } else if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
+                            CMS.debug(methodPos + "found id_cmc_idPOPLinkWitness");
+                            ASN1Value value = ava.getValue();
+                            ByteArrayInputStream bis = new ByteArrayInputStream(
+                                    ASN1Util.encode(value));
+                            OCTET_STRING ostr = null;
                             try {
-                                OCTET_STRING str = (OCTET_STRING) (ASN1Util.decode(OCTET_STRING.getTemplate(),
-                                        ASN1Util.encode(witnessVal.elementAt(0))));
-                                bv = str.toByteArray();
-                                return verifyDigest(sharedSecret.getBytes(),
-                                        randomSeed, bv);
-                            } catch (InvalidBERException ex) {
+                                ostr = (OCTET_STRING) (new OCTET_STRING.Template()).decode(bis);
+                                bv = ostr.toByteArray();
+                            } catch (Exception e) {
+                                bpids.addElement(reqId);
+                                context.put("POPLinkWitness", bpids);
                                 return false;
+                            }
+
+                            boolean valid = verifyDigest(sharedSecretBytes,
+                                    randomSeed, bv);
+                            if (!valid) {
+                                bpids.addElement(reqId);
+                                context.put("POPLinkWitness", bpids);
+                                return valid;
                             }
                         }
                     }
                 }
-
-                return false;
             }
-        } else if (req.getType().equals(TaggedRequest.CRMF)) {
-            String methodPos = method + "CRMF: ";
-            CMS.debug(methodPos + "begins");
 
-            CertReqMsg crm = req.getCrm();
-            CertRequest certReq = crm.getCertReq();
-            reqId = certReq.getCertReqId();
-            if (!sharedSecretFound) {
-                bpids.addElement(reqId);
-                context.put("POPLinkWitness", bpids);
-                return false;
-            } else {
-                for (int i = 0; i < certReq.numControls(); i++) {
-                    AVA ava = certReq.controlAt(i);
+            return true;
 
-                    if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_popLinkWitnessV2)) {
-                        CMS.debug(methodPos + "found id_cmc_popLinkWitnessV2");
-                        if (ident_string == null) {
-                            bpids.addElement(reqId);
-                            context.put("identification", bpids);
-                            context.put("POPLinkWitnessV2", bpids);
-                            String msg = "id_cmc_popLinkWitnessV2 must be accompanied by id_cmc_identification in this server";
-                            CMS.debug(methodPos + msg);
-                            return false;
-                        }
-
-                        ASN1Value value = ava.getValue();
-                        PopLinkWitnessV2 popLinkWitnessV2 = getPopLinkWitnessV2control(value);
-
-                        boolean valid = verifyPopLinkWitnessV2(popLinkWitnessV2,
-                                randomSeed,
-                                sharedSecret,
-                                ident_string);
-                        if (!valid) {
-                            bpids.addElement(reqId);
-                            context.put("POPLinkWitnessV2", bpids);
-                            return valid;
-                        }
-                    } else if (ava.getOID().equals(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness)) {
-                        CMS.debug(methodPos + "found id_cmc_idPOPLinkWitness");
-                        ASN1Value value = ava.getValue();
-                        ByteArrayInputStream bis = new ByteArrayInputStream(
-                                ASN1Util.encode(value));
-                        OCTET_STRING ostr = null;
-                        try {
-                            ostr = (OCTET_STRING) (new OCTET_STRING.Template()).decode(bis);
-                            bv = ostr.toByteArray();
-                        } catch (Exception e) {
-                            bpids.addElement(reqId);
-                            context.put("POPLinkWitness", bpids);
-                            return false;
-                        }
-
-                        boolean valid = verifyDigest(sharedSecret.getBytes(),
-                                randomSeed, bv);
-                        if (!valid) {
-                            bpids.addElement(reqId);
-                            context.put("POPLinkWitness", bpids);
-                            return valid;
-                        }
-                    }
-                }
-            }
+        } finally {
+            CryptoUtil.obscureBytes(sharedSecretBytes, "random");
+            CryptoUtil.obscureChars(sharedSecret);
         }
-
-        return true;
     }
 
     private boolean verifyDigest(byte[] sharedSecret, byte[] text, byte[] bv) {
@@ -1662,12 +1721,16 @@ public abstract class EnrollProfile extends BasicProfile
                 signedAuditLogger.log(auditMessage);
                 return false;
             }
+
+            IAuthToken authToken = (IAuthToken)
+                sessionContext.get(SessionContext.AUTH_TOKEN);
+
             ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
 
-            String token = null;
+            char[] token = null;
             if (ident_string != null) {
                 auditAttemptedCred = ident_string;
-                token = tokenClass.getSharedToken(ident_string);
+                token = tokenClass.getSharedToken(ident_string, authToken);
             } else
                 token = tokenClass.getSharedToken(mCMCData);
 
@@ -1702,13 +1765,35 @@ public abstract class EnrollProfile extends BasicProfile
 
             byte[] witness_bytes = witness.toByteArray();
             byte[] request_bytes = ASN1Util.encode(reqSeq); // PKIData reqSequence field
+
+            byte[] verifyBytes = null;
+            ByteBuffer bb = null;
+
+            byte[] tokenBytes = CryptoUtil.charsToBytes(token);
+
+            if(ident_string != null) {
+                bb = ByteBuffer.allocate(ident_string.getBytes().length + token.length);
+                bb.put(tokenBytes);
+                bb.put(ident_string.getBytes());
+                verifyBytes = bb.array();
+            } else {
+                verifyBytes = tokenBytes;
+            }
+
+
             verified = verifyDigest(
-                    (ident_string != null) ? (token + ident_string).getBytes() : token.getBytes(),
+                    verifyBytes,
                     request_bytes,
                     witness_bytes,
                     hashAlg, macAlg);
 
             String auditSubjectID = null;
+
+            if(ident_string != null) {
+                CryptoUtil.obscureBytes(verifyBytes, "random");
+            }
+
+            CryptoUtil.obscureChars(token);
 
             if (verified) {
                 auditSubjectID = (String) sessionContext.get(SessionContext.USER_ID);
@@ -1717,6 +1802,16 @@ public abstract class EnrollProfile extends BasicProfile
                 CMS.debug(method + "updated auditSubjectID is:" + ident_string);
                 auditSubjectID = ident_string;
                 sessionContext.put(SessionContext.USER_ID, auditSubjectID);
+
+                // subjectdn from SharedSecret ldap auth
+                // set in context and authToken to be used by profile
+                // default and constraints plugins
+                authToken.set(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT,
+                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
+                authToken.set(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT,
+                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
+                sessionContext.put(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT,
+                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
 
                 auditMessage = CMS.getLogMessage(
                         AuditEvent.CMC_PROOF_OF_IDENTIFICATION,
@@ -1760,13 +1855,14 @@ public abstract class EnrollProfile extends BasicProfile
         }
 
         OCTET_STRING ostr = null;
-        String token = null;
+        char[] token = null;
         try {
             token = tokenClass.getSharedToken(mCMCData);
             ostr = (OCTET_STRING) (ASN1Util.decode(OCTET_STRING.getTemplate(),
                     ASN1Util.encode(vals.elementAt(0))));
         } catch (InvalidBERException e) {
             CMS.debug(method + "Failed to decode the byte value.");
+            CryptoUtil.obscureChars(token);
             return false;
         } catch (Exception e) {
             CMS.debug(method + "exception: " + e.toString());
@@ -1775,10 +1871,15 @@ public abstract class EnrollProfile extends BasicProfile
         byte[] b = ostr.toByteArray();
         byte[] text = ASN1Util.encode(reqSeq);
 
-        verified = verifyDigest(token.getBytes(), text, b);
+        byte[] verifyBytes = CryptoUtil.charsToBytes(token);
+        verified = verifyDigest(verifyBytes, text, b);
         if (verified) {// update auditSubjectID
             //placeholder. Should probably just disable this v1 method
         }
+
+        CryptoUtil.obscureBytes(verifyBytes, "random");
+        CryptoUtil.obscureChars(token);
+
         return verified;
     }
 

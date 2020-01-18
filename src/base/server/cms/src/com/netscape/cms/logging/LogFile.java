@@ -41,8 +41,6 @@ import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.Signature;
 import java.security.SignatureException;
-import java.security.interfaces.DSAPrivateKey;
-import java.security.interfaces.RSAPrivateKey;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -81,6 +79,7 @@ import com.netscape.certsrv.logging.ILogger;
 import com.netscape.certsrv.logging.LogSource;
 import com.netscape.certsrv.logging.SignedAuditEvent;
 import com.netscape.certsrv.logging.SystemEvent;
+import com.netscape.cmscore.apps.CMSEngine;
 import com.netscape.cmsutil.util.Utils;
 
 import netscape.ldap.client.JDAPAVA;
@@ -109,7 +108,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
     public static final String PROP_SIGNED_AUDIT_CERT_NICKNAME =
                               "signedAuditCertNickname";
     public static final String PROP_SIGNED_AUDIT_SELECTED_EVENTS = "events";
-    public static final String PROP_SIGNED_AUDIT_UNSELECTED_EVENTS = "unselected.events";
     public static final String PROP_SIGNED_AUDIT_MANDATORY_EVENTS = "mandatory.events";
     public static final String PROP_SIGNED_AUDIT_FILTERS = "filters";
 
@@ -206,11 +204,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
      * The selected log event types
      */
     protected Set<String> selectedEvents = new LinkedHashSet<String>();
-
-    /**
-     * The unselected log event types
-     */
-    protected Set<String> unselectedEvents = new LinkedHashSet<String>();
 
     /**
      * The event filters
@@ -312,12 +305,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
             selectedEvents.add(event);
         }
 
-        // unselected events
-        String unselectedEventsList = config.getString(PROP_SIGNED_AUDIT_UNSELECTED_EVENTS, "");
-        for (String event : StringUtils.split(unselectedEventsList, ", ")) {
-            unselectedEvents.add(event);
-        }
-
         CMS.debug("Event filters:");
         IConfigStore filterStore = config.getSubStore(PROP_SIGNED_AUDIT_FILTERS);
         for (Enumeration<String> e = filterStore.getPropertyNames(); e.hasMoreElements(); ) {
@@ -370,7 +357,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
      */
     public void selectEvent(String event) {
         selectedEvents.add(event);
-        unselectedEvents.remove(event);
     }
 
     /**
@@ -380,7 +366,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
      */
     public void deselectEvent(String event) {
         selectedEvents.remove(event);
-        unselectedEvents.add(event);
     }
 
     /**
@@ -390,7 +375,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
      */
     public void replaceEvents(String events) {
         // unselect all events
-        unselectedEvents.addAll(selectedEvents);
         selectedEvents.clear();
 
         // select specified events
@@ -424,20 +408,10 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
             // synchronized. We just want to avoid an infinite loop.
             mInSignedAuditLogFailureMode = true;
 
-            // Block all new incoming requests
-            if (CMS.areRequestsDisabled() == false) {
-                // XXX is this a race condition?
-                CMS.disableRequests();
-            }
+            CMS.debug("LogFile: Disabling subsystem due to signed logging failure");
 
-            // Terminate all requests in process
-            CMS.terminateRequests();
-
-            // Call graceful shutdown of the CMS server
-            // Call force shutdown to get added functionality of
-            // making sure to kill the web server.
-
-            CMS.forceShutdown();
+            CMSEngine engine = (CMSEngine) CMS.getCMSEngine();
+            engine.disableSubsystem();
         }
     }
 
@@ -611,10 +585,10 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
             mSigningKey = cm.findPrivKeyByCert(cert);
 
             String sigAlgorithm;
-            if (mSigningKey instanceof RSAPrivateKey) {
+            if (mSigningKey.getAlgorithm().equalsIgnoreCase("RSA")) {
                 sigAlgorithm = "SHA-256/RSA";
-            } else if (mSigningKey instanceof DSAPrivateKey) {
-                sigAlgorithm = "SHA-256/DSA";
+            } else if (mSigningKey.getAlgorithm().equalsIgnoreCase("EC")) {
+                sigAlgorithm = "SHA-256/EC";
             } else {
                 throw new NoSuchAlgorithmException("Unknown private key type");
             }
@@ -729,7 +703,7 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
      * <P>
      *
      * <ul>
-     * <li>signed.audit LOGGING_SIGNED_AUDIT_SIGNING used when a signature on the audit log is generated (same as
+     * <li>signed.audit AUDIT_LOG_SIGNING used when a signature on the audit log is generated (same as
      * "flush" time)
      * </ul>
      *
@@ -824,6 +798,7 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
                             mFileName)));
         } catch (GeneralSecurityException gse) {
             // error with signed audit log, shutdown CMS
+            ConsoleError.send(new SystemEvent(CMS.getUserMessage("CMS_LOG_OPEN_FAILED", mFileName, gse.toString())));
             gse.printStackTrace();
             shutdownCMS();
         }
@@ -843,6 +818,8 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
                 } catch (ELogException le) {
                     ConsoleError.send(new SystemEvent(CMS.getUserMessage("CMS_LOG_FLUSH_LOG_FAILED", mFileName,
                             le.toString())));
+                    le.printStackTrace();
+                    shutdownCMS();
                 }
             }
 
@@ -858,8 +835,15 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
             }
         } catch (GeneralSecurityException gse) {
             // error with signed audit log, shutdown CMS
+            ConsoleError.send(new SystemEvent(CMS.getUserMessage("CMS_LOG_FLUSH_LOG_FAILED", mFileName, gse.toString())));
             gse.printStackTrace();
             shutdownCMS();
+        } catch (Exception ee) {
+            ConsoleError.send(new SystemEvent(CMS.getUserMessage("CMS_LOG_FLUSH_LOG_FAILED", mFileName, ee.toString())));
+            if(mLogSigning) {
+                ee.printStackTrace();
+                shutdownCMS();
+            }
         }
 
         mBytesUnflushed = 0;
@@ -886,7 +870,7 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
      * <P>
      *
      * <ul>
-     * <li>signed.audit LOGGING_SIGNED_AUDIT_AUDIT_LOG_SHUTDOWN used at audit function shutdown
+     * <li>signed.audit AUDIT_LOG_SHUTDOWN used at audit function shutdown
      * </ul>
      */
     public synchronized void shutdown() {
@@ -995,6 +979,11 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
         if (mLogWriter == null) {
             String[] params = { mFileName, entry };
 
+            if (mLogSigning) {
+                ConsoleError.send(new SystemEvent(CMS.getUserMessage("CMS_LOG_LOGFILE_CLOSED", params)));
+                // Failed to write to audit log, shut down CMS
+                shutdownCMS();
+            }
             throw new ELogException(CMS.getUserMessage("CMS_LOG_LOGFILE_CLOSED", params));
         } else {
             try {
@@ -1066,6 +1055,14 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
                 gse.printStackTrace();
                 ConsoleError.send(new SignedAuditEvent(CMS.getLogMessage(
                         LOG_SIGNED_AUDIT_EXCEPTION, gse.toString())));
+            } catch (Exception ee) { // Make darn sure we got everything
+                ConsoleError.send(new SignedAuditEvent(CMS.getLogMessage(LOG_SIGNED_AUDIT_EXCEPTION, ee.toString())));
+                if (mLogSigning) {
+                    // Failed to write to audit log, shut down CMS
+                    ee.printStackTrace();
+                    shutdownCMS();
+                }
+
             }
 
             // XXX
@@ -1202,7 +1199,7 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
 
         String stringAttr = (String)attr;
 
-        return value.equals(stringAttr);
+        return value.equalsIgnoreCase(stringAttr);
     }
 
     public boolean eval(SignedAuditEvent event, JDAPFilterSubString filter) {
@@ -1215,18 +1212,18 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
         if (attr == null) return false;
         if (!(attr instanceof String)) return false;
 
-        String stringAttr = (String)attr;
+        String stringAttr = ((String)attr).toLowerCase();
 
         // check initial substring
         String initialSubstring = filter.getInitialSubstring();
         if (initialSubstring != null) {
-            if (!stringAttr.startsWith(initialSubstring)) return false;
+            if (!stringAttr.startsWith(initialSubstring.toLowerCase())) return false;
             stringAttr = stringAttr.substring(initialSubstring.length());
         }
 
         // check any substrings
         for (String anySubstring : filter.getAnySubstrings()) {
-            int p = stringAttr.indexOf(anySubstring);
+            int p = stringAttr.indexOf(anySubstring.toLowerCase());
             if (p < 0) return false;
             stringAttr = stringAttr.substring(p + anySubstring.length());
         }
@@ -1234,7 +1231,7 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
         // check final substring
         String finalSubstring = filter.getFinalSubstring();
         if (finalSubstring != null) {
-            if (!stringAttr.endsWith(finalSubstring)) return false;
+            if (!stringAttr.endsWith(finalSubstring.toLowerCase())) return false;
         }
 
         return true;
@@ -1568,7 +1565,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
         v.addElement(PROP_SIGNED_AUDIT_CERT_NICKNAME + "=");
         v.addElement(PROP_SIGNED_AUDIT_MANDATORY_EVENTS + "=");
         v.addElement(PROP_SIGNED_AUDIT_SELECTED_EVENTS + "=");
-        v.addElement(PROP_SIGNED_AUDIT_UNSELECTED_EVENTS + "=");
         //}
 
         return v;
@@ -1623,7 +1619,6 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
 
                 v.addElement(PROP_SIGNED_AUDIT_MANDATORY_EVENTS + "=" + StringUtils.join(mandatoryEvents, ","));
                 v.addElement(PROP_SIGNED_AUDIT_SELECTED_EVENTS + "=" + StringUtils.join(selectedEvents, ","));
-                v.addElement(PROP_SIGNED_AUDIT_UNSELECTED_EVENTS + "=" + StringUtils.join(unselectedEvents, ","));
             }
         } catch (Exception e) {
         }
@@ -1659,9 +1654,7 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
                     PROP_SIGNED_AUDIT_MANDATORY_EVENTS +
                             ";string;A comma-separated list of strings used to specify mandatory signed audit log events",
                     PROP_SIGNED_AUDIT_SELECTED_EVENTS +
-                            ";string;A comma-separated list of strings used to specify selected signed audit log events",
-                    PROP_SIGNED_AUDIT_UNSELECTED_EVENTS +
-                            ";string;A comma-separated list of strings used to specify unselected signed audit log events",
+                            ";string;A comma-separated list of strings used to specify selected signed audit log events"
             };
 
             return params;

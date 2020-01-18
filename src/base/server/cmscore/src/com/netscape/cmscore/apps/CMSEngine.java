@@ -38,7 +38,6 @@ import java.util.Hashtable;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
-import java.util.StringTokenizer;
 import java.util.Timer;
 import java.util.Vector;
 
@@ -62,10 +61,6 @@ import org.mozilla.jss.util.PasswordCallback;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
-import com.netscape.certsrv.acls.ACL;
-import com.netscape.certsrv.acls.ACLEntry;
-import com.netscape.certsrv.acls.EACLsException;
-import com.netscape.certsrv.acls.IACL;
 import com.netscape.certsrv.apps.CMS;
 import com.netscape.certsrv.apps.ICMSEngine;
 import com.netscape.certsrv.apps.ICommandQueue;
@@ -100,12 +95,14 @@ import com.netscape.certsrv.ldap.ELdapException;
 import com.netscape.certsrv.ldap.ILdapAuthInfo;
 import com.netscape.certsrv.ldap.ILdapConnFactory;
 import com.netscape.certsrv.ldap.ILdapConnInfo;
+import com.netscape.certsrv.logging.ConsoleError;
 import com.netscape.certsrv.logging.ELogException;
 import com.netscape.certsrv.logging.IAuditor;
 import com.netscape.certsrv.logging.ILogEvent;
 import com.netscape.certsrv.logging.ILogEventListener;
 import com.netscape.certsrv.logging.ILogQueue;
 import com.netscape.certsrv.logging.ILogger;
+import com.netscape.certsrv.logging.SystemEvent;
 import com.netscape.certsrv.notification.IEmailFormProcessor;
 import com.netscape.certsrv.notification.IEmailResolver;
 import com.netscape.certsrv.notification.IEmailResolverKeys;
@@ -613,122 +610,6 @@ public class CMSEngine implements ICMSEngine {
         }
 
         serverStatus = "running";
-    }
-
-    /**
-     * Parse ACL resource attributes
-     *
-     * @param resACLs same format as the resourceACLs attribute:
-     *
-     *            <PRE>
-     *     <resource name>:<permission1,permission2,...permissionn>:
-     *     <allow|deny> (<subset of the permission set>) <evaluator expression>
-     * </PRE>
-     * @exception EACLsException ACL related parsing errors for resACLs
-     * @return an ACL instance built from the parsed resACLs
-     */
-    public IACL parseACL(String resACLs) throws EACLsException {
-        if (resACLs == null) {
-            throw new EACLsException(CMS.getUserMessage("CMS_ACL_NULL_VALUE", "resACLs"));
-        }
-
-        ACL acl = null;
-        Vector<String> rights = null;
-        int idx1 = resACLs.indexOf(":");
-
-        if (idx1 <= 0) {
-            acl = new ACL(resACLs, rights, resACLs);
-        } else {
-            // getting resource id
-            String resource = resACLs.substring(0, idx1);
-
-            if (resource == null) {
-                String infoMsg = "resource not specified in resourceACLS attribute:" +
-                        resACLs;
-
-                String[] params = new String[2];
-
-                params[0] = resACLs;
-                params[1] = infoMsg;
-                throw new EACLsException(CMS.getUserMessage("CMS_ACL_PARSING_ERROR", params));
-            }
-
-            // getting list of applicable rights
-            String st = resACLs.substring(idx1 + 1);
-            int idx2 = st.indexOf(":");
-            String rightsString = null;
-
-            if (idx2 != -1)
-                rightsString = st.substring(0, idx2);
-            else {
-                String infoMsg =
-                        "rights not specified in resourceACLS attribute:" + resACLs;
-                String[] params = new String[2];
-
-                params[0] = resACLs;
-                params[1] = infoMsg;
-                throw new EACLsException(CMS.getUserMessage("CMS_ACL_PARSING_ERROR", params));
-            }
-
-            if (rightsString != null) {
-                rights = new Vector<String>();
-                StringTokenizer rtok = new StringTokenizer(rightsString, ",");
-
-                while (rtok.hasMoreTokens()) {
-                    rights.addElement(rtok.nextToken());
-                }
-            }
-
-            acl = new ACL(resource, rights, resACLs);
-
-            // search *backwards* for final instance of ':', to handle case
-            // where acl expressions contain colon, e.g. in a group name.
-            String stx = st.substring(idx2 + 1);
-            int idx3 = stx.lastIndexOf(":");
-            String aclStr = stx.substring(0, idx3);
-
-            // getting list of acl entries
-            if (aclStr != null) {
-                StringTokenizer atok = new StringTokenizer(aclStr, ";");
-
-                while (atok.hasMoreTokens()) {
-                    String acs = atok.nextToken();
-
-                    // construct ACL entry
-                    ACLEntry entry = ACLEntry.parseACLEntry(acl, acs);
-
-                    if (entry == null) {
-                        String infoMsg = "parseACLEntry() call failed";
-                        String[] params = new String[2];
-
-                        params[0] = "ACLEntry = " + acs;
-                        params[1] = infoMsg;
-                        throw new EACLsException(CMS.getUserMessage("CMS_ACL_PARSING_ERROR", params));
-                    }
-
-                    entry.setACLEntryString(acs);
-                    acl.addEntry(entry);
-                }
-            } else {
-                // fine
-                String infoMsg = "acls not specified in resourceACLS attribute:" +
-
-                resACLs;
-
-                String[] params = new String[2];
-
-                params[0] = resACLs;
-                params[1] = infoMsg;
-                throw new EACLsException(CMS.getUserMessage("CMS_ACL_PARSING_ERROR", params));
-            }
-
-            // getting description
-            String desc = stx.substring(idx3 + 1);
-
-            acl.setDescription(desc);
-        }
-
-        return (acl);
     }
 
     /**
@@ -1318,6 +1199,7 @@ public class CMSEngine implements ICMSEngine {
     public void checkForAndAutoShutdown() {
         String method= "CMSEngine: checkForAndAutoShutdown: ";
         CMS.debug(method + "begins");
+
         try {
             boolean allowShutdown  = mConfig.getBoolean("autoShutdown.allowed", false);
             if ((!allowShutdown) || (mSigningKey == null) ||
@@ -1336,7 +1218,13 @@ public class CMSEngine implements ICMSEngine {
             byte[] result = signer.sign();
             CMS.debug(method + " signining successful: " + new String(result));
         } catch (SignatureException e) {
+
+            //Let's write to the error console in case we are in a bad memory situation
+            //This will be the most likely to work, giving us a record of the signing failure
+            ConsoleError.send(new SystemEvent(CMS.getUserMessage("CMS_CA_SIGNING_OPERATION_FAILED", e.toString())));
+
             CMS.debug(method + "autoShutdown for " + e.toString());
+
             CMS.autoShutdown();
         } catch (Exception e) {
             CMS.debug(method + "continue for " + e.toString());
@@ -1583,21 +1471,37 @@ public class CMSEngine implements ICMSEngine {
         return getUserMessage(locale, msgID, params);
     }
 
-    public String getLogMessage(String msgID, Object params[]) {
-        ResourceBundle rb = ResourceBundle.getBundle(
-                "LogMessages");
+    public String getLogMessage(String msgID, Object[] params) {
+
+        String bundleName;
+
+        // check whether requested message is an audit event
+        if (msgID.startsWith("LOGGING_SIGNED_AUDIT_")) {
+            // get audit event from audit-events.properties
+            bundleName = "audit-events";
+        } else {
+            // get log message from LogMessages.properties
+            bundleName = "LogMessages";
+        }
+
+        ResourceBundle rb = ResourceBundle.getBundle(bundleName);
         String msg = rb.getString(msgID);
 
-        if (params == null)
+        if (params == null) {
             return msg;
+        }
+
         MessageFormat mf = new MessageFormat(msg);
 
         Object escapedParams[] = new Object[params.length];
         for (int i = 0; i < params.length; i++) {
-            if (params[i] instanceof String)
-                escapedParams[i] = escapeLogMessageParam((String) params[i]);
-            else
-                escapedParams[i] = params[i];
+            Object param = params[i];
+
+            if (param instanceof String) {
+                escapedParams[i] = escapeLogMessageParam((String) param);
+            } else {
+                escapedParams[i] = param;
+            }
         }
 
         return mf.format(escapedParams);
@@ -1667,74 +1571,6 @@ public class CMSEngine implements ICMSEngine {
 
     public void traceHashKey(String type, String key, String val, String def) {
         Debug.traceHashKey(type, key, val, def);
-    }
-
-    public String getLogMessage(String msgID) {
-        return getLogMessage(msgID, (String[]) null);
-    }
-
-    public String getLogMessage(String msgID, String p1) {
-        String params[] = { p1 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2) {
-        String params[] = { p1, p2 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3) {
-        String params[] = { p1, p2, p3 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4) {
-        String params[] = { p1, p2, p3, p4 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5) {
-        String params[] = { p1, p2, p3, p4, p5 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6) {
-        String params[] = { p1, p2, p3, p4, p5, p6 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7) {
-        String params[] = { p1, p2, p3, p4, p5, p6, p7 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7, String p8) {
-        String params[] = { p1, p2, p3, p4, p5, p6, p7, p8 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7, String p8, String p9) {
-        String params[] = { p1, p2, p3, p4, p5, p6, p7, p8, p9 };
-
-        return getLogMessage(msgID, params);
-    }
-
-    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
-            String p7, String p8, String p9, String p10) {
-        String params[] = { p1, p2, p3, p4, p5, p6, p7, p8, p9, p10 };
-
-        return getLogMessage(msgID, params);
     }
 
     public void getSubjAltNameConfigDefaultParams(String name,
@@ -1823,7 +1659,7 @@ public class CMSEngine implements ICMSEngine {
     }
 
     public void verifySystemCerts() throws Exception {
-        CertUtils.verifySystemCerts();
+        CertUtils.verifySystemCerts(false);
     }
 
     public void verifySystemCertByTag(String tag) throws Exception {
@@ -2152,6 +1988,30 @@ public class CMSEngine implements ICMSEngine {
 
         shutdownHttpServer(restart);
 
+    }
+
+    public void disableSubsystem() {
+
+        String name = mConfig.get("cs.type");
+        String subsystemID = name.toLowerCase();
+
+        CMS.debug("CMSEngine: Disabling " + name + " subsystem");
+
+        try {
+            ProcessBuilder pb = new ProcessBuilder("pki-server", "subsystem-disable", "-i", instanceId, subsystemID);
+            CMS.debug("Command: " + String.join(" ", pb.command()));
+
+            Process process = pb.inheritIO().start();
+            int rc = process.waitFor();
+
+            if (rc != 0) {
+                CMS.debug("CMSEngine: Unable to disable " + name + " subsystem. RC: " + rc);
+            }
+
+        } catch (Exception e) {
+            CMS.debug("CMSEngine: Unable to disable " + name + " subsystem: " + e.getMessage());
+            CMS.debug(e);
+        }
     }
 
     /**
