@@ -65,22 +65,24 @@
 Name:             pki-core
 %if 0%{?rhel}
 Version:                10.5.16
-%define redhat_release  3
+%define redhat_release  5
 %define redhat_stage    0
 #%define default_release %{redhat_release}.%{redhat_stage}
 %define default_release %{redhat_release}
 %else
 Version:                10.5.16
-%define fedora_release  4
+%define fedora_release  5
 %define fedora_stage    0
 #%define default_release %{fedora_release}.%{fedora_stage}
 %define default_release %{fedora_release}
 %endif
 
 %if 0%{?use_pki_release}
-Release:          %{pki_release}%{?dist}
+#Release:          %{pki_release}%{?dist}
+Release:          %{pki_release}.el7_7
 %else
-Release:          %{default_release}%{?dist}
+#Release:          %{default_release}%{?dist}
+Release:          %{default_release}.el7_7
 %endif
 
 Summary:          Certificate System - PKI Core Components
@@ -208,6 +210,8 @@ Source0:          http://pki.fedoraproject.org/pki/sources/%{name}/%{version}/%{
 
 Patch0:  pki-core-Add-Subject-Key-ID-to-CSR.patch
 Patch1:  pki-core-PKI-startup-init-LDAP-operation-attr-independence.patch
+Patch2:  pki-core-Fixed-Missing-SAN-extension-for-CA-Clone.patch
+Patch3:  pki-core-Internal-LDAP-Server-goes-down-Audit-Event.patch
 
 # Obtain version phase number (e. g. - used by "alpha", "beta", etc.)
 #
@@ -803,6 +807,8 @@ This package is a part of the PKI Core used by the Certificate System.
 
 %patch0 -p1
 %patch1 -p1
+%patch2 -p1
+%patch3 -p1
 
 %clean
 %{__rm} -rf %{buildroot}
@@ -1339,6 +1345,30 @@ fi
 %endif # %{with server}
 
 %changelog
+* Mon Sep  9 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-5
+- ##########################################################################
+- # RHEL 7.7:
+- ##########################################################################
+- Bugzilla Bug #1750277 - CC: missing audit event for CS acting as TLS client
+  [rhel-7.7.z] (cfu)
+- ##########################################################################
+- # RHCS 9.5:
+- ##########################################################################
+- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
+  # pki-console to 10.5.16 in RHCS 9.5
+
+* Mon Aug 19 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-4
+- ##########################################################################
+- # RHEL 7.7:
+- ##########################################################################
+- Bugzilla Bug #1743122 - RHCS-9 CA clone SSL server cert not issued with its
+  custom SAN extension, RHEL-7.6 and HSM [rhel-7.7.z] (edewata)
+- ##########################################################################
+- # RHCS 9.5:
+- ##########################################################################
+- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
+  # pki-console to 10.5.16 in RHCS 9.5
+
 * Thu Jun 20 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-3
 - ##########################################################################
 - # RHEL 7.7:
