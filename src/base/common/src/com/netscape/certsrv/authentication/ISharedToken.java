@@ -28,7 +28,7 @@ import com.netscape.certsrv.base.EBaseException;
 public interface ISharedToken {
 
     // support for id_cmc_identification
-    public char[] getSharedToken(String identification, IAuthToken authToken)
+    public char[] getSharedToken(String identification)
             throws EBaseException;
 
     public char[] getSharedToken(PKIData cmcData)

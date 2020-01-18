@@ -203,7 +203,21 @@ public class AdminServlet extends HttpServlet {
             // __ (double underscores); however, in the event that
             // a security parameter slips through, we perform multiple
             // additional checks to insure that it is NOT displayed
-            if (CMS.isSensitive(pn)) {
+            if (pn.startsWith("__") ||
+                    pn.endsWith("password") ||
+                    pn.endsWith("passwd") ||
+                    pn.endsWith("pwd") ||
+                    pn.equalsIgnoreCase("admin_password_again") ||
+                    pn.equalsIgnoreCase("directoryManagerPwd") ||
+                    pn.equalsIgnoreCase("bindpassword") ||
+                    pn.equalsIgnoreCase("bindpwd") ||
+                    pn.equalsIgnoreCase("passwd") ||
+                    pn.equalsIgnoreCase("password") ||
+                    pn.equalsIgnoreCase("pin") ||
+                    pn.equalsIgnoreCase("pwd") ||
+                    pn.equalsIgnoreCase("pwdagain") ||
+                    pn.equalsIgnoreCase("uPasswd") ||
+                    pn.equalsIgnoreCase("PASSWORD_CACHE_ADD")) {
                 CMS.debug("AdminServlet::service() param name='" + pn +
                         "' value='(sensitive)'");
             } else {
@@ -977,11 +991,7 @@ public class AdminServlet extends HttpServlet {
             if (name.equals(Constants.OP_TYPE)) continue;
             if (name.equals(Constants.RS_ID)) continue;
 
-            String value = null;
-            if (CMS.isSensitive(name))
-                value = "(sensitive)";
-            else
-                value = req.getParameter(name);
+            String value = req.getParameter(name);
             params.put(name, value);
         }
 

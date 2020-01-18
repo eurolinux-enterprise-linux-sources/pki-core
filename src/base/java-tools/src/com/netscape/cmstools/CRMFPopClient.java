@@ -190,7 +190,7 @@ public class CRMFPopClient {
         option.setArgName("keywrap algorithm");
         options.addOption(option);
 
-        options.addOption("y", false, "for cmc SharedSecret requests.");
+        options.addOption("y", false, "for Self-signed cmc.");
 
         options.addOption("v", "verbose", false, "Run in verbose mode.");
         options.addOption(null, "help", false, "Show help message.");
@@ -210,7 +210,7 @@ public class CRMFPopClient {
         System.out.println("  -k <true|false>              Attribute value encoding in subject DN (default: false)");
         System.out.println("                               - true: enabled");
         System.out.println("                               - false: disabled");
-        System.out.println("  -y <true|false>              Add SubjectKeyIdentifier extension in case of CMC SharedSecret requests (default: false); To be used with 'request.useSharedSecret=true' when running CMCRequest.");
+        System.out.println("  -y <true|false>              Add SubjectKeyIdentifier extension in case of self-signed CMC requests (default: false)");
         System.out.println("                               - true: enabled");
         System.out.println("                               - false: disabled");
         System.out.println("  -a <rsa|ec>                  Key algorithm (default: rsa)");
@@ -320,7 +320,7 @@ public class CRMFPopClient {
         int sensitive = Integer.parseInt(cmd.getOptionValue("s", "-1"));
         int extractable = Integer.parseInt(cmd.getOptionValue("e", "-1"));
 
-        boolean use_shared_secret = cmd.hasOption("y");
+        boolean self_sign = cmd.hasOption("y");
 
         // get the keywrap algorithm
         KeyWrapAlgorithm keyWrapAlgorithm = null;
@@ -335,7 +335,6 @@ public class CRMFPopClient {
         }
 
         String output = cmd.getOptionValue("o");
-        String output_kid = output + ".keyId";
 
         String hostPort = cmd.getOptionValue("m");
         String username = cmd.getOptionValue("u");
@@ -508,7 +507,7 @@ public class CRMFPopClient {
 
             if (verbose) System.out.println("Creating certificate request");
             CertRequest certRequest = client.createCertRequest(
-                    use_shared_secret,
+                    self_sign,
                     token, transportCert, algorithm, keyPair,
                     subject, keyWrapAlgorithm);
 
@@ -559,14 +558,9 @@ public class CRMFPopClient {
                         requestor);
 
             } else if (output != null) {
-                System.out.println("Storing CRMF request into " + output);
+                System.out.println("Storing CRMF requrest into " + output);
                 try (FileWriter out = new FileWriter(output)) {
                     out.write(csr);
-                }
-
-                System.out.println("Storing CRMF request key id into " + output_kid);
-                try (FileWriter out_kid = new FileWriter(output_kid)) {
-                    out_kid.write(kid);
                 }
 
             } else {
@@ -661,7 +655,7 @@ public class CRMFPopClient {
     }
 
     public CertRequest createCertRequest(
-            boolean use_shared_secret,
+            boolean self_sign,
             CryptoToken token,
             X509Certificate transportCert,
             String algorithm,
@@ -707,8 +701,8 @@ public class CRMFPopClient {
         seq.addElement(new AVA(OBJECT_IDENTIFIER.id_cmc_idPOPLinkWitness, ostr));
         */
 
-        if (use_shared_secret) { // per rfc 5272
-            System.out.println("CRMFPopClient: use_shared_secret true. Generating SubjectKeyIdentifier extension.");
+        if (self_sign) { // per rfc 5272
+            System.out.println("CRMFPopClient: self_sign true. Generating SubjectKeyIdentifier extension.");
             KeyIdentifier subjKeyId = CryptoUtil.createKeyIdentifier(keyPair);
             OBJECT_IDENTIFIER oid = new OBJECT_IDENTIFIER(PKIXExtensions.SubjectKey_Id.toString());
             SEQUENCE extns = new SEQUENCE();

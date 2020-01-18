@@ -1,0 +1,1010 @@
+From 8b462b3a7e8ded71bc5aaf7d6a8b23fdce2d7ece Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Mon, 30 Jul 2018 17:15:09 -0700
+Subject: [PATCH 1/5] Bug 1601071  Certificate generation happens with partial
+ attributes in CMCRequest file
+
+This patch addresses the issue where when a cmcSelfSisnged profile is used
+in a cmcUserSigned case, the certificate is issued.
+A new authToken variable TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT has
+been introduced for shared token case so that the TOKEN_AUTHENTICATED_CERT_SUBJECT can be used for user-signed case.
+A new constraint CMCSelfSignedSubjectNameConstraint has been introduced
+to verify.
+In additional, all profiles that authenticate through CMCUserSignedAuth are
+turned off by default to allow site administrators to make conscious decision
+on their own for these features.
+Also, audit event CERT_STATUS_CHANGE_REQUEST_PROCESSED is now enabled by default.
+
+Change-Id: I275118d31b966494411888beb37032bb022c29ce
+(cherry picked from commit 50b881b7ec1d4856d4bfcc182a22bf1c131cd536)
+---
+ base/ca/shared/conf/CS.cfg                         |   2 +-
+ base/ca/shared/conf/registry.cfg                   |   9 +-
+ .../profiles/ca/caECFullCMCSelfSignedCert.cfg      |   8 +-
+ .../profiles/ca/caECFullCMCUserSignedCert.cfg      |   2 +-
+ .../shared/profiles/ca/caFullCMCSelfSignedCert.cfg |   8 +-
+ .../shared/profiles/ca/caFullCMCUserSignedCert.cfg |   2 +-
+ .../certsrv/authentication/IAuthToken.java         |   7 +-
+ .../com/netscape/cms/authentication/CMCAuth.java   |   5 +-
+ .../cms/authentication/CMCUserSignedAuth.java      |  16 ++-
+ .../netscape/cms/authentication/SharedSecret.java  |   4 +-
+ .../netscape/cms/profile/common/EnrollProfile.java |  18 +++
+ .../CMCSelfSignedSubjectNameConstraint.java        | 129 +++++++++++++++++++++
+ .../profile/def/AuthTokenSubjectNameDefault.java   |   2 +-
+ .../servlet/profile/ProfileSubmitCMCServlet.java   |  29 ++++-
+ base/server/cmsbundle/src/UserMessages.properties  |   3 +-
+ 15 files changed, 216 insertions(+), 28 deletions(-)
+ create mode 100644 base/server/cms/src/com/netscape/cms/profile/constraint/CMCSelfSignedSubjectNameConstraint.java
+
+diff --git a/base/ca/shared/conf/CS.cfg b/base/ca/shared/conf/CS.cfg
+index 1d65835..fcd85a2 100644
+--- a/base/ca/shared/conf/CS.cfg
++++ b/base/ca/shared/conf/CS.cfg
+@@ -909,7 +909,7 @@ log.instance.SignedAudit._005=## AUDIT_LOG_STARTUP,AUDIT_LOG_SHUTDOWN,ROLE_ASSUM
+ log.instance.SignedAudit._006=##
+ log.instance.SignedAudit.bufferSize=512
+ log.instance.SignedAudit.enable=true
+-log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CERT_REQUEST_PROCESSED,CERT_SIGNING_INFO,CMC_SIGNED_REQUEST_SIG_VERIFY,CMC_USER_SIGNED_REQUEST_SIG_VERIFY,CMC_REQUEST_RECEIVED,CMC_RESPONSE_SENT,CONFIG_AUTH,CONFIG_CERT_PROFILE,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SERIAL_NUMBER,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,CRL_SIGNING_INFO,DELTA_CRL_GENERATION,FULL_CRL_GENERATION,LOG_PATH_CHANGE,OCSP_GENERATION,OCSP_SIGNING_INFO,PROFILE_CERT_REQUEST,PROOF_OF_POSSESSION,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION
++log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CERT_REQUEST_PROCESSED,CERT_SIGNING_INFO,CMC_SIGNED_REQUEST_SIG_VERIFY,CMC_USER_SIGNED_REQUEST_SIG_VERIFY,CMC_REQUEST_RECEIVED,CMC_RESPONSE_SENT,CONFIG_AUTH,CONFIG_CERT_PROFILE,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SERIAL_NUMBER,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,CRL_SIGNING_INFO,DELTA_CRL_GENERATION,FULL_CRL_GENERATION,LOG_PATH_CHANGE,OCSP_GENERATION,OCSP_SIGNING_INFO,PROFILE_CERT_REQUEST,PROOF_OF_POSSESSION,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,CERT_STATUS_CHANGE_REQUEST_PROCESSED
+ log.instance.SignedAudit.filters.CMC_SIGNED_REQUEST_SIG_VERIFY=(Outcome=Failure)
+ log.instance.SignedAudit.filters.CMC_USER_SIGNED_REQUEST_SIG_VERIFY=(Outcome=Failure)
+ log.instance.SignedAudit.filters.DELTA_CRL_GENERATION=(Outcome=Failure)
+diff --git a/base/ca/shared/conf/registry.cfg b/base/ca/shared/conf/registry.cfg
+index 54e4d95..4fe6e93 100644
+--- a/base/ca/shared/conf/registry.cfg
++++ b/base/ca/shared/conf/registry.cfg
+@@ -1,5 +1,5 @@
+ types=profile,defaultPolicy,constraintPolicy,profileInput,profileOutput,profileUpdater
+-constraintPolicy.ids=noConstraintImpl,subjectNameConstraintImpl,uniqueSubjectNameConstraintImpl,userSubjectNameConstraintImpl,cmcUserSignedSubjectNameConstraintImpl,caValidityConstraintImpl,validityConstraintImpl,keyUsageExtConstraintImpl,nsCertTypeExtConstraintImpl,extendedKeyUsageExtConstraintImpl,keyConstraintImpl,basicConstraintsExtConstraintImpl,extensionConstraintImpl,signingAlgConstraintImpl,uniqueKeyConstraintImpl,renewGracePeriodConstraintImpl,authzRealmConstraintImpl,externalProcessConstraintImpl
++constraintPolicy.ids=noConstraintImpl,subjectNameConstraintImpl,uniqueSubjectNameConstraintImpl,userSubjectNameConstraintImpl,cmcSelfSignedSubjectNameConstraintImpl,cmcUserSignedSubjectNameConstraintImpl,caValidityConstraintImpl,validityConstraintImpl,keyUsageExtConstraintImpl,nsCertTypeExtConstraintImpl,extendedKeyUsageExtConstraintImpl,keyConstraintImpl,basicConstraintsExtConstraintImpl,extensionConstraintImpl,signingAlgConstraintImpl,uniqueKeyConstraintImpl,renewGracePeriodConstraintImpl,authzRealmConstraintImpl,externalProcessConstraintImpl
+ constraintPolicy.signingAlgConstraintImpl.class=com.netscape.cms.profile.constraint.SigningAlgConstraint
+ constraintPolicy.signingAlgConstraintImpl.desc=Signing Algorithm Constraint
+ constraintPolicy.signingAlgConstraintImpl.name=Signing Algorithm Constraint
+@@ -36,9 +36,12 @@ constraintPolicy.uniqueSubjectNameConstraintImpl.name=Unique Subject Name Constr
+ constraintPolicy.userSubjectNameConstraintImpl.class=com.netscape.cms.profile.constraint.UserSubjectNameConstraint
+ constraintPolicy.userSubjectNameConstraintImpl.desc=User Subject Name Constraint
+ constraintPolicy.userSubjectNameConstraintImpl.name=User Subject Name Constraint
++constraintPolicy.cmcSelfSignedSubjectNameConstraintImpl.class=com.netscape.cms.profile.constraint.CMCSelfSignedSubjectNameConstraint
++constraintPolicy.cmcSelfSignedSubjectNameConstraintImpl.desc=CMC Self-Signed request User Subject Name Constraint
++constraintPolicy.cmcSelfSignedSubjectNameConstraintImpl.name=CMC Self-Signed request User Subject Name Constraint
+ constraintPolicy.cmcUserSignedSubjectNameConstraintImpl.class=com.netscape.cms.profile.constraint.CMCUserSignedSubjectNameConstraint
+-constraintPolicy.cmcUserSignedSubjectNameConstraintImpl.desc=CMC User Subject Name Constraint
+-constraintPolicy.cmcUserSignedSubjectNameConstraintImpl.name=CMC User Subject Name Constraint
++constraintPolicy.cmcUserSignedSubjectNameConstraintImpl.desc=CMC User-Signed request User Subject Name Constraint
++constraintPolicy.cmcUserSignedSubjectNameConstraintImpl.name=CMC User-Signed request User Subject Name Constraint
+ constraintPolicy.validityConstraintImpl.class=com.netscape.cms.profile.constraint.ValidityConstraint
+ constraintPolicy.validityConstraintImpl.desc=Validity Constraint
+ constraintPolicy.validityConstraintImpl.name=Validity Constraint
+diff --git a/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg b/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg
+index 144c05c..48e6499 100644
+--- a/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg
++++ b/base/ca/shared/profiles/ca/caECFullCMCSelfSignedCert.cfg
+@@ -1,5 +1,5 @@
+ desc=This certificate profile is for enrolling user certificates with ECC keys by using the self-signed CMC certificate request
+-enable=true
++enable=false
+ enableBy=admin
+ name=Self-Signed CMC User Certificate Enrollment
+ visible=false
+@@ -10,10 +10,8 @@ output.list=o1
+ output.o1.class_id=certOutputImpl
+ policyset.list=cmcUserCertSet
+ policyset.cmcUserCertSet.list=1,2,3,4,5,6,7,8
+-policyset.cmcUserCertSet.1.constraint.class_id=subjectNameConstraintImpl
+-policyset.cmcUserCertSet.1.constraint.name=Subject Name Constraint
+-policyset.cmcUserCertSet.1.constraint.params.accept=true
+-policyset.cmcUserCertSet.1.constraint.params.pattern=(UID|CN)=.*
++policyset.cmcUserCertSet.1.constraint.class_id=cmcSelfSignedSubjectNameConstraintImpl
++policyset.cmcUserCertSet.1.constraint.name=CMC User-Signed Subject Name Constraint
+ policyset.cmcUserCertSet.1.default.class_id=authTokenSubjectNameDefaultImpl
+ policyset.cmcUserCertSet.1.default.name=Subject Name Default
+ policyset.cmcUserCertSet.1.default.params.name=
+diff --git a/base/ca/shared/profiles/ca/caECFullCMCUserSignedCert.cfg b/base/ca/shared/profiles/ca/caECFullCMCUserSignedCert.cfg
+index d2286de..e7b60ee 100644
+--- a/base/ca/shared/profiles/ca/caECFullCMCUserSignedCert.cfg
++++ b/base/ca/shared/profiles/ca/caECFullCMCUserSignedCert.cfg
+@@ -1,5 +1,5 @@
+ desc=This certificate profile is for enrolling user certificates with EC keys by using the CMC certificate request with non-agent user CMC authentication.
+-enable=true
++enable=false
+ enableBy=admin
+ name=User-Signed CMC-Authenticated User Certificate Enrollment
+ visible=false
+diff --git a/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg b/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg
+index bdcdc24..538b16a 100644
+--- a/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg
++++ b/base/ca/shared/profiles/ca/caFullCMCSelfSignedCert.cfg
+@@ -1,5 +1,5 @@
+ desc=This certificate profile is for enrolling user certificates by using the self-signed CMC certificate request
+-enable=true
++enable=false
+ enableBy=admin
+ name=Self-Signed CMC User Certificate Enrollment
+ visible=false
+@@ -10,10 +10,8 @@ output.list=o1
+ output.o1.class_id=certOutputImpl
+ policyset.list=cmcUserCertSet
+ policyset.cmcUserCertSet.list=1,2,3,4,5,6,7,8
+-policyset.cmcUserCertSet.1.constraint.class_id=subjectNameConstraintImpl
+-policyset.cmcUserCertSet.1.constraint.name=Subject Name Constraint
+-policyset.cmcUserCertSet.1.constraint.params.pattern=(UID|CN)=.*
+-policyset.cmcUserCertSet.1.constraint.params.accept=true
++policyset.cmcUserCertSet.1.constraint.class_id=cmcSelfSignedSubjectNameConstraintImpl
++policyset.cmcUserCertSet.1.constraint.name=CMC Self-Signed Subject Name Constraint
+ policyset.cmcUserCertSet.1.default.class_id=authTokenSubjectNameDefaultImpl
+ policyset.cmcUserCertSet.1.default.name=Subject Name Default
+ policyset.cmcUserCertSet.1.default.params.name=
+diff --git a/base/ca/shared/profiles/ca/caFullCMCUserSignedCert.cfg b/base/ca/shared/profiles/ca/caFullCMCUserSignedCert.cfg
+index 9b5d3e9..b0ff8af 100644
+--- a/base/ca/shared/profiles/ca/caFullCMCUserSignedCert.cfg
++++ b/base/ca/shared/profiles/ca/caFullCMCUserSignedCert.cfg
+@@ -1,5 +1,5 @@
+ desc=This certificate profile is for enrolling user certificates by using the CMC certificate request with non-agent user CMC authentication.
+-enable=true
++enable=false
+ enableBy=admin
+ name=User-Signed CMC-Authenticated User Certificate Enrollment
+ visible=false
+diff --git a/base/common/src/com/netscape/certsrv/authentication/IAuthToken.java b/base/common/src/com/netscape/certsrv/authentication/IAuthToken.java
+index 59c6af2..d5d03b4 100644
+--- a/base/common/src/com/netscape/certsrv/authentication/IAuthToken.java
++++ b/base/common/src/com/netscape/certsrv/authentication/IAuthToken.java
+@@ -44,9 +44,14 @@ public interface IAuthToken {
+     public static final String GROUP = "group";
+     public static final String GROUPS = "groups";
+ 
+-    /* Subject name of the certificate in the authenticating entry */
++    /* Subject name of the certificate request in the authenticating entry */
+     public static final String TOKEN_CERT_SUBJECT = "tokenCertSubject";
+ 
++    /* Subject name of the authenticated cert */
++    public static final String TOKEN_AUTHENTICATED_CERT_SUBJECT = "tokenAuthenticatedCertSubject";
++    /* Subject DN of the Shared Token authenticated entry */
++    public static final String TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT = "tokenSharedTokenAuthenticatedCertSubject";
++
+     /* NotBefore value of the certificate in the authenticating entry */
+     public static final String TOKEN_CERT_NOTBEFORE = "tokenCertNotBefore";
+ 
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java b/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java
+index 86ffa2f..9b6a819 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java
+@@ -959,8 +959,9 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
+ 
+                         IAuthToken tempToken = agentAuth.authenticate(agentCred);
+                         netscape.security.x509.X500Name tempPrincipal = (X500Name) x509Certs[0].getSubjectDN();
+-                        String ID = tempPrincipal.toString();
++                        String ID = tempPrincipal.getName();
+                         CMS.debug(method + " Principal name = " + ID);
++                        authToken.set(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT, ID);
+ 
+                         BigInteger agentCertSerial = x509Certs[0].getSerialNumber();
+                         authToken.set(IAuthManager.CRED_SSL_CLIENT_CERT, agentCertSerial.toString());
+@@ -1047,7 +1048,7 @@ public class CMCAuth implements IAuthManager, IExtendedPluginInfo,
+     public void populate(IAuthToken token, IRequest request)
+             throws EProfileException {
+         request.setExtData(IProfileAuthenticator.AUTHENTICATED_NAME,
+-                token.getInString(AuthToken.TOKEN_CERT_SUBJECT));
++                token.getInString(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT));
+     }
+ 
+     public boolean isSSLClientRequired() {
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java b/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
+index d5f6c34..a9a7ade 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
+@@ -674,7 +674,6 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
+                                     if (requestCertSubject.equals("")) {
+                                         requestCertSubject = ILogger.SIGNED_AUDIT_EMPTY_VALUE;
+                                     }
+-
+                                     authToken.set(AuthToken.TOKEN_CERT_SUBJECT, ss);
+                                     auditContext.put(SessionContext.CMC_REQUEST_CERT_SUBJECT, requestCertSubject);
+                                     //authToken.set("uid", uid);
+@@ -1160,8 +1159,9 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
+ 
+                         IAuthToken tempToken = new AuthToken(null);
+                         netscape.security.x509.X500Name tempPrincipal = (X500Name) x509Certs[0].getSubjectDN();
+-                        String ID = tempPrincipal.toString(); //tempToken.get("userid");
++                        String ID = tempPrincipal.getName(); //tempToken.get("userid");
+                         CMS.debug(method + " Principal name = " + ID);
++                        authToken.set(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT, ID);
+ 
+                         BigInteger certSerial = x509Certs[0].getSerialNumber();
+                         CMS.debug(method + " verified cert serial=" + certSerial.toString());
+@@ -1276,8 +1276,16 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
+ 
+     public void populate(IAuthToken token, IRequest request)
+             throws EProfileException {
+-        request.setExtData(IProfileAuthenticator.AUTHENTICATED_NAME,
+-                token.getInString(AuthToken.TOKEN_CERT_SUBJECT));
++        String method = "CMCUserSignedAuth: populate: ";
++        String authenticatedDN = token.getInString(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT);
++        if (authenticatedDN != null) {
++            request.setExtData(IProfileAuthenticator.AUTHENTICATED_NAME,
++                    authenticatedDN);
++            CMS.debug(method + "IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT is: "+
++                    authenticatedDN);
++        } else {
++            CMS.debug(method + "AuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT is null; self-signed?");
++        }
+     }
+ 
+     public boolean isSSLClientRequired() {
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+index 5ebc213..2d8679c 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/SharedSecret.java
+@@ -30,9 +30,9 @@ import org.mozilla.jss.crypto.SymmetricKey;
+ import org.mozilla.jss.pkix.cmc.PKIData;
+ 
+ import com.netscape.certsrv.apps.CMS;
+-import com.netscape.certsrv.authentication.AuthToken;
+ import com.netscape.certsrv.authentication.EInvalidCredentials;
+ import com.netscape.certsrv.authentication.IAuthCredentials;
++import com.netscape.certsrv.authentication.AuthToken;
+ import com.netscape.certsrv.authentication.IAuthToken;
+ import com.netscape.certsrv.authentication.ISharedToken;
+ import com.netscape.certsrv.base.EBaseException;
+@@ -296,7 +296,7 @@ public class SharedSecret extends DirBasedAuthentication
+             }
+ 
+             CMS.debug(method + "found user ldap entry: userdn = " + userdn);
+-            authToken.set(AuthToken.TOKEN_CERT_SUBJECT, userdn);
++            authToken.set(IAuthToken.TOKEN_CERT_SUBJECT, userdn);
+ 
+             res = shrTokLdapConnection.search(userdn, LDAPv2.SCOPE_BASE,
+                     "(objectclass=*)", new String[] { mShrTokAttr }, false);
+diff --git a/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java b/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
+index 929e629..f9903c6 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
++++ b/base/server/cms/src/com/netscape/cms/profile/common/EnrollProfile.java
+@@ -209,6 +209,14 @@ public abstract class EnrollProfile extends BasicProfile
+ 
+             // catch for invalid request
+             cmc_msgs = parseCMC(locale, cert_request, donePOI);
++            SessionContext sessionContext = SessionContext.getContext();
++            String authenticatedSubject = 
++                    (String) sessionContext.get(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT);
++
++            if (authenticatedSubject != null) {
++                ctx.set(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT, authenticatedSubject);
++            }
++
+             if (cmc_msgs == null) {
+                 CMS.debug(method + "parseCMC returns cmc_msgs null");
+                 return null;
+@@ -1795,6 +1803,16 @@ public abstract class EnrollProfile extends BasicProfile
+                 auditSubjectID = ident_string;
+                 sessionContext.put(SessionContext.USER_ID, auditSubjectID);
+ 
++                // subjectdn from SharedSecret ldap auth
++                // set in context and authToken to be used by profile
++                // default and constraints plugins
++                authToken.set(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT,
++                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
++                authToken.set(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT,
++                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
++                sessionContext.put(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT,
++                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
++
+                 auditMessage = CMS.getLogMessage(
+                         AuditEvent.CMC_PROOF_OF_IDENTIFICATION,
+                         auditSubjectID,
+diff --git a/base/server/cms/src/com/netscape/cms/profile/constraint/CMCSelfSignedSubjectNameConstraint.java b/base/server/cms/src/com/netscape/cms/profile/constraint/CMCSelfSignedSubjectNameConstraint.java
+new file mode 100644
+index 0000000..d4554ca
+--- /dev/null
++++ b/base/server/cms/src/com/netscape/cms/profile/constraint/CMCSelfSignedSubjectNameConstraint.java
+@@ -0,0 +1,129 @@
++// --- BEGIN COPYRIGHT BLOCK ---
++// This program is free software; you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation; version 2 of the License.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License along
++// with this program; if not, write to the Free Software Foundation, Inc.,
++// 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++//
++// (C) 2013 Red Hat, Inc.
++// All rights reserved.
++// --- END COPYRIGHT BLOCK ---
++package com.netscape.cms.profile.constraint;
++
++import java.util.Locale;
++
++import com.netscape.certsrv.apps.CMS;
++import com.netscape.certsrv.authentication.IAuthToken;
++import com.netscape.certsrv.authentication.IAuthManager;
++import com.netscape.certsrv.base.IConfigStore;
++import com.netscape.certsrv.profile.EProfileException;
++import com.netscape.certsrv.profile.ERejectException;
++import com.netscape.certsrv.profile.IPolicyDefault;
++import com.netscape.certsrv.profile.IProfile;
++import com.netscape.certsrv.property.IDescriptor;
++import com.netscape.certsrv.request.IRequest;
++import com.netscape.cms.profile.common.EnrollProfile;
++import com.netscape.cms.profile.def.AuthTokenSubjectNameDefault;
++
++import netscape.security.x509.CertificateSubjectName;
++import netscape.security.x509.X500Name;
++import netscape.security.x509.X509CertInfo;
++
++/**
++ * This class implements the user subject name constraint for self-signed cmc requests.
++ * It makes sure the SharedSecret authenticated subjectDN and the rsulting cert match
++ *
++ * @author cfu
++ * @version $Revision$, $Date$
++ */
++public class CMCSelfSignedSubjectNameConstraint extends EnrollConstraint {
++
++    public CMCSelfSignedSubjectNameConstraint() {
++    }
++
++    public void init(IProfile profile, IConfigStore config)
++            throws EProfileException {
++        super.init(profile, config);
++    }
++
++    public IDescriptor getConfigDescriptor(Locale locale, String name) {
++        return null;
++    }
++
++    public String getDefaultConfig(String name) {
++        return null;
++    }
++
++    /**
++     * Validates the request. The request is not modified
++     * during the validation. User encoded subject name
++     * is copied into the certificate template.
++     */
++    public void validate(IRequest request, X509CertInfo info)
++            throws ERejectException {
++        String method = "CMCSelfSignedSubjectNameConstraint: ";
++        String msg = "";
++
++        CertificateSubjectName infoCertSN = null;
++        String authTokenSharedTokenSN = null;
++
++        try {
++            infoCertSN = (CertificateSubjectName) info.get(X509CertInfo.SUBJECT);
++            if (infoCertSN == null) {
++                msg = method + "infoCertSN null";
++                CMS.debug(msg);
++                throw new Exception(msg);
++            }
++            CMS.debug(method + "validate user subject ="+
++                      infoCertSN.toString());
++            X500Name infoCertName = (X500Name) infoCertSN.get(CertificateSubjectName.DN_NAME);
++            if (infoCertName == null) {
++                msg = method + "infoCertName null";
++                CMS.debug(msg);
++                throw new Exception(msg);
++            }
++
++            authTokenSharedTokenSN = request.getExtDataInString(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT);
++            if (authTokenSharedTokenSN == null) {
++                msg = method + "authTokenSharedTokenSN null";
++                CMS.debug(msg);
++                throw new Exception(msg);
++            }
++            if (infoCertName.getName().equalsIgnoreCase(authTokenSharedTokenSN)) {
++                CMS.debug(method + "names matched");
++            } else {
++                msg = method + "names do not match; authTokenSharedTokenSN =" +
++                        authTokenSharedTokenSN;
++                CMS.debug(msg);
++                throw new Exception(msg);
++            }
++
++        } catch (Exception e) {
++            throw new ERejectException(
++                    CMS.getUserMessage(getLocale(request),
++                        "CMS_PROFILE_SUBJECT_NAME_NOT_MATCHED") + e);
++        }
++    }
++
++    public String getText(Locale locale) {
++        return CMS.getUserMessage(locale,
++                   "CMS_PROFILE_CONSTRAINT_CMC_SELF_SIGNED_SUBJECT_NAME_TEXT");
++    }
++
++    public boolean isApplicable(IPolicyDefault def) {
++        String method = "CMCSelfSignedSubjectNameConstraint: isApplicable: ";
++        if (def instanceof AuthTokenSubjectNameDefault) {
++            CMS.debug(method + "true");
++            return true;
++        }
++        CMS.debug(method + "false");
++        return false;
++    }
++}
+diff --git a/base/server/cms/src/com/netscape/cms/profile/def/AuthTokenSubjectNameDefault.java b/base/server/cms/src/com/netscape/cms/profile/def/AuthTokenSubjectNameDefault.java
+index e789625..85bf241 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/def/AuthTokenSubjectNameDefault.java
++++ b/base/server/cms/src/com/netscape/cms/profile/def/AuthTokenSubjectNameDefault.java
+@@ -140,7 +140,7 @@ public class AuthTokenSubjectNameDefault extends EnrollDefault {
+             X500Name name = new X500Name(
+                     request.getExtDataInString(IProfileAuthenticator.AUTHENTICATED_NAME));
+ 
+-            CMS.debug("AuthTokenSubjectNameDefault: X500Name=" + name.toString());
++            CMS.debug("AuthTokenSubjectNameDefault: X500Name=" + name.getName());
+             info.set(X509CertInfo.SUBJECT, new CertificateSubjectName(name));
+         } catch (Exception e) {
+             // failed to insert subject name
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java b/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
+index 12fd294..03e94a8 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/profile/ProfileSubmitCMCServlet.java
+@@ -525,6 +525,7 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             CMS.debug("ProfileSubmitCMCServlet: null it out");
+             ctx.set(IAuthManager.CRED_CMC_SIGNING_CERT, "");
+         }
++
+         String signingCertSerialS = null;
+         if (authToken != null) {
+             signingCertSerialS = (String) authToken.get(IAuthManager.CRED_CMC_SIGNING_CERT);
+@@ -534,6 +535,14 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+             ctx.set(IAuthManager.CRED_CMC_SIGNING_CERT, signingCertSerialS);
+         }
+ 
++        String tmpSharedTokenAuthenticatedCertSubject = ctx.get(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT);
++        if (tmpSharedTokenAuthenticatedCertSubject != null) {
++            // unlikely to happen, but do this just in case
++            CMS.debug("ProfileSubmitCMCServlet: found existing TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT in ctx for CMCUserSignedAuth:" + tmpSharedTokenAuthenticatedCertSubject);
++            CMS.debug("ProfileSubmitCMCServlet: null it out");
++            ctx.set(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT, "");
++        }
++
+         String errorCode = null;
+         String errorReason = null;
+         String auditRequesterID = ILogger.UNIDENTIFIED;
+@@ -731,13 +740,31 @@ public class ProfileSubmitCMCServlet extends ProfileServlet {
+ 
+                 tmpCertSerialS = reqs[k].getExtDataInString(IAuthManager.CRED_CMC_SIGNING_CERT);
+                 if (tmpCertSerialS != null) {
+-                    // unlikely to happenm, but do this just in case
++                    // unlikely to happen, but do this just in case
+                     CMS.debug("ProfileSubmitCMCServlet: found existing CRED_CMC_SIGNING_CERT in request for CMCUserSignedAuth:" + tmpCertSerialS);
+                     CMS.debug("ProfileSubmitCMCServlet: null it out");
+                     reqs[k].setExtData(IAuthManager.CRED_CMC_SIGNING_CERT, "");
+                 }
+                 // put CMCUserSignedAuth authToken in request
+                 if (signingCertSerialS != null) {
++                     CMS.debug("ProfileSubmitCMCServlet: setting CRED_CMC_SIGNING_CERT in request for CMCUserSignedAuth");
++                     reqs[k].setExtData(IAuthManager.CRED_CMC_SIGNING_CERT, signingCertSerialS);
++                 }
++
++                tmpSharedTokenAuthenticatedCertSubject = reqs[k].getExtDataInString(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT);
++                if (tmpSharedTokenAuthenticatedCertSubject != null) {
++                    // unlikely to happen, but do this just in case
++                    CMS.debug("ProfileSubmitCMCServlet: found existing TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT in request for CMCUserSignedAuth:" + tmpSharedTokenAuthenticatedCertSubject);
++                    CMS.debug("ProfileSubmitCMCServlet: null it out");
++                    reqs[k].setExtData(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT, "");
++                }
++                // put Shared Token authToken in request
++                String st_sbj = (String) ctx.get(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT);
++                if (st_sbj != null) {
++                    CMS.debug("ProfileSubmitCMCServlet: setting IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT in req for CMCUserSignedAuth");
++                    reqs[k].setExtData(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT, st_sbj);
++                }
++                if (tmpSharedTokenAuthenticatedCertSubject != null) {
+                     CMS.debug("ProfileSubmitCMCServlet: setting CRED_CMC_SIGNING_CERT in request for CMCUserSignedAuth");
+                     reqs[k].setExtData(IAuthManager.CRED_CMC_SIGNING_CERT, signingCertSerialS);
+                 }
+diff --git a/base/server/cmsbundle/src/UserMessages.properties b/base/server/cmsbundle/src/UserMessages.properties
+index 208632d..e5e6ecc 100644
+--- a/base/server/cmsbundle/src/UserMessages.properties
++++ b/base/server/cmsbundle/src/UserMessages.properties
+@@ -956,7 +956,8 @@ CMS_PROFILE_CONSTRAINT_SIGNING_ALG_TEXT=This constraint accepts only the Signing
+ CMS_PROFILE_CONSTRAINT_SUBJECT_NAME_TEXT=This constraint accepts the subject name that matches {0}
+ CMS_PROFILE_CONSTRAINT_UNIQUE_SUBJECT_NAME_TEXT=This constraint accepts unique subject name only
+ CMS_PROFILE_CONSTRAINT_USER_SUBJECT_NAME_TEXT=This constraint accepts user subject name only
+-CMS_PROFILE_CONSTRAINT_CMC_USER_SIGNED_SUBJECT_NAME_TEXT=This constraint accepts user subject name of the CMC request siging cert only
++CMS_PROFILE_CONSTRAINT_CMC_USER_SIGNED_SUBJECT_NAME_TEXT=This constraint accepts user subject name of user-signed CMC request only
++CMS_PROFILE_CONSTRAINT_CMC_SELF_SIGNED_SUBJECT_NAME_TEXT=This constraint accepts user subject name of the self-signed CMC request only
+ CMS_PROFILE_CONSTRAINT_VALIDITY_TEXT=This constraint rejects the validity that is not between {0} days.
+ CMS_PROFILE_CONSTRAINT_RENEWAL_GRACE_PERIOD_TEXT=This constraint rejects the renewal requests that are outside of the grace period {0}
+ CMS_PROFILE_CONSTRAINT_VALIDITY_RENEWAL_TEXT=This constraint rejects the validity that is not between {0} days. If renewal, grace period is {1} days before and {2} days after the expiration date of the original certificate.
+-- 
+1.8.3.1
+
+
+From 99101af800addd61f66cdcf6b18c0b26f1e27011 Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Wed, 1 Aug 2018 13:35:53 -0700
+Subject: [PATCH 2/5] Bug 1593805  Better understanding of
+ NSS_USE_DECODED_CKA_EC_POINT for ECC
+
+This patch removes the outdated reference to EC environment variable
+NSS_USE_DECODED_CKA_EC_POINT for ECC in the HttpClient command line usage.
+
+More info in the usage are updated as well for correctness and clarity.
+
+Change-Id: I562e2c0cd86f91369f347b38cc660cc3cee585b9
+(cherry picked from commit 6eef4f5cb83cd4b7e2c45ad6a44ba453392ec051)
+---
+ .../src/com/netscape/cmstools/HttpClient.java      | 32 ++++++++++++----------
+ 1 file changed, 18 insertions(+), 14 deletions(-)
+
+diff --git a/base/java-tools/src/com/netscape/cmstools/HttpClient.java b/base/java-tools/src/com/netscape/cmstools/HttpClient.java
+index fcaf210..28934ab 100644
+--- a/base/java-tools/src/com/netscape/cmstools/HttpClient.java
++++ b/base/java-tools/src/com/netscape/cmstools/HttpClient.java
+@@ -251,43 +251,47 @@ public class HttpClient {
+         System.out.println("The configuration file should look like as follows:");
+         System.out.println("");
+         System.out.println("#host: host name for the http server");
+-        System.out.println("host=host1.a.com");
++        System.out.println("host=host.example.com");
+         System.out.println("");
+         System.out.println("#port: port number");
+-        System.out.println("port=1025");
++        System.out.println("port=8443");
+         System.out.println("");
+         System.out.println("#secure: true for secure connection, false for nonsecure connection");
+-        System.out.println("#For secure connection, in an ECC setup, must set environment variable 'export NSS_USE_DECODED_CKA_EC_POINT=1' prior to running this command");
+         System.out.println("secure=false");
+         System.out.println("");
+         System.out.println("#input: full path for the enrollment request, the content must be in binary format");
+-        System.out.println("input=/u/doc/cmcReqCRMFBin");
++        System.out.println("input=~/cmcReqCRMFBin");
+         System.out.println("");
+         System.out.println("#output: full path for the response in binary format");
+-        System.out.println("output=/u/doc/cmcResp");
++        System.out.println("#output could be parsed by running CMCResponse");
++        System.out.println("output=~/cmcResp");
+         System.out.println("");
+-        System.out.println("#tokenname: name of token where SSL client authentication cert can be found (default is internal)");
++        System.out.println("#dbdir: directory for NSS certificate/key databases");
+         System.out.println("#This parameter will be ignored if secure=false");
+-        System.out.println("tokenname=hsmname");
++        System.out.println("dbdir=/.dogtag/nssdb");
+         System.out.println("");
+-        System.out.println("#dbdir: directory for cert8.db, key3.db and secmod.db");
++        System.out.println("#password: password for NSS database");
++        System.out.println("#This parameter will be ignored if secure=false and clientmode=false");
++        System.out.println("password=");
++        System.out.println("");
++        System.out.println("#tokenname: name of token where SSL client authentication cert for nickname can be found (default is internal)");
+         System.out.println("#This parameter will be ignored if secure=false");
+-        System.out.println("dbdir=/u/smith/.netscape");
++        System.out.println("tokenname=internal");
+         System.out.println("");
+         System.out.println("#clientmode: true for client authentication, false for no client authentication");
+         System.out.println("#This parameter will be ignored if secure=false");
+         System.out.println("clientmode=false");
+         System.out.println("");
+-        System.out.println("#password: password for cert8.db");
+-        System.out.println("#This parameter will be ignored if secure=false and clientauth=false");
+-        System.out.println("password=");
+-        System.out.println("");
+         System.out.println("#nickname: nickname for client certificate");
+         System.out.println("#This parameter will be ignored if clientmode=false");
+         System.out.println("nickname=");
+         System.out.println("");
+         System.out.println("#servlet: target URL");
+-        System.out.println("#This parameter may include query parameters");
++        System.out.println("#This parameter may include query parameters;");
++        System.out.println("#  - reminder: profileId should be a profile that matches");
++        System.out.println("#    the intended certificate; for certificates intended");
++        System.out.println("#    for SSL (client or server), profiles should match");
++        System.out.println("#    the key type (RSA or EC) of the keys generated for CSR;");
+         System.out.println("servlet=/ca/ee/ca/profileSubmitCMCFull?profileId=caFullCMCUserCert");
+         System.out.println("");
+         System.exit(0);
+-- 
+1.8.3.1
+
+
+From a285327323d058218684cc671223b5b872bc9afc Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Thu, 2 Aug 2018 09:31:50 -0700
+Subject: [PATCH 3/5] Bug1608375 - CMC Revocations throws exception with same
+ reqIssuer & certissuer
+
+This patch resolves the possible encoding mismatch between the actual CA cert
+and the X500Name gleaned from the CMC revocation request.
+
+Change-Id: I220f5d656a69c90fa02ba38fa21b069ed7d15a9d
+(cherry picked from commit 4a085b2ea3ee0f89ef2e49e1c0dbee2e36abd248)
+---
+ .../cms/authentication/CMCUserSignedAuth.java       | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java b/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
+index a9a7ade..97971dd 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
+@@ -83,6 +83,7 @@ import com.netscape.certsrv.base.EBaseException;
+ import com.netscape.certsrv.base.IConfigStore;
+ import com.netscape.certsrv.base.IExtendedPluginInfo;
+ import com.netscape.certsrv.base.SessionContext;
++import com.netscape.certsrv.ca.ICertificateAuthority;
+ import com.netscape.certsrv.logging.ILogger;
+ import com.netscape.certsrv.logging.event.CMCUserSignedRequestSigVerifyEvent;
+ import com.netscape.certsrv.profile.EProfileException;
+@@ -497,13 +498,27 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
+                                     // to CMCOutputTemplate so that we can
+                                     // have a chance to capture user identification info
+                                     if (issuerANY != null) {
++                                        // get CA signing cert
++                                        ICertificateAuthority ca = null;
++                                        ca = (ICertificateAuthority) CMS.getSubsystem("ca");
++                                        X500Name caName = ca.getX500Name();
++
+                                         try {
+                                             byte[] issuerBytes = issuerANY.getEncoded();
+-                                            X500Name issuerName = new X500Name(issuerBytes);
+-                                            CMS.debug(method + "revRequest issuer name = " + issuerName.toString());
++                                            X500Name reqIssuerName = new X500Name(issuerBytes);
++                                            String reqIssuerNameStr = reqIssuerName.getName();
++                                            CMS.debug(method + "revRequest issuer name = " + reqIssuerNameStr);
++                                            if (reqIssuerNameStr.equalsIgnoreCase(caName.getName())) {
++                                                // making sure it's identical, even in encoding
++                                                reqIssuerName = caName;
++                                            } else {
++                                                // not this CA; will be bumped off later;
++                                                // make a note in debug anyway
++                                                CMS.debug(method + "revRequest issuer name doesn't match our CA; will be bumped off later;");
++                                            }
+                                             // capture issuer principal to be checked against
+                                             // cert issuer principal later in CMCOutputTemplate
+-                                            auditContext.put(SessionContext.CMC_ISSUER_PRINCIPAL, issuerName);
++                                            auditContext.put(SessionContext.CMC_ISSUER_PRINCIPAL, reqIssuerName);
+                                         } catch (Exception e) {
+                                             CMS.debug(method + "failed getting issuer from RevokeRequest:" + e.toString());
+                                         }
+-- 
+1.8.3.1
+
+
+From 9f3c6d13991cdafc748ded223a85b121ce2389b5 Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Wed, 8 Aug 2018 18:41:52 -0700
+Subject: [PATCH 4/5] Ticket #3041 Enable all config audit events
+
+This patch enables the audit events concerning role actions (mostly config)
+by default.
+
+Two additional minor issues are also addressed:
+1. keyType typos in the two profiles: caDirUserCert and caECDirUserCert
+   (bugzilla #1610718)
+2. removing unrecommended signing algorithms
+
+fixes: https://pagure.io/dogtagpki/issue/3041
+Change-Id: I795e8437e66b59f343044eb8a974b2dd0b95ad6d
+(cherry picked from commit 5e9876da3fa7c1587b96e983f36ee2830398c099)
+---
+ base/ca/shared/conf/CS.cfg                                        | 2 +-
+ base/ca/shared/profiles/ca/caDirUserCert.cfg                      | 2 +-
+ base/ca/shared/profiles/ca/caECDirUserCert.cfg                    | 2 +-
+ base/kra/shared/conf/CS.cfg                                       | 2 +-
+ base/ocsp/shared/conf/CS.cfg                                      | 2 +-
+ .../netscape/cms/profile/common/ServerCertCAEnrollProfile.java    | 2 +-
+ .../com/netscape/cms/profile/common/UserCertCAEnrollProfile.java  | 2 +-
+ base/server/cmsbundle/src/LogMessages.properties                  | 2 +-
+ base/tks/shared/conf/CS.cfg                                       | 2 +-
+ base/tps/shared/conf/CS.cfg                                       | 2 +-
+ base/util/src/netscape/security/x509/AlgorithmId.java             | 8 ++++----
+ 11 files changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/base/ca/shared/conf/CS.cfg b/base/ca/shared/conf/CS.cfg
+index fcd85a2..6158d5a 100644
+--- a/base/ca/shared/conf/CS.cfg
++++ b/base/ca/shared/conf/CS.cfg
+@@ -909,7 +909,7 @@ log.instance.SignedAudit._005=## AUDIT_LOG_STARTUP,AUDIT_LOG_SHUTDOWN,ROLE_ASSUM
+ log.instance.SignedAudit._006=##
+ log.instance.SignedAudit.bufferSize=512
+ log.instance.SignedAudit.enable=true
+-log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CERT_REQUEST_PROCESSED,CERT_SIGNING_INFO,CMC_SIGNED_REQUEST_SIG_VERIFY,CMC_USER_SIGNED_REQUEST_SIG_VERIFY,CMC_REQUEST_RECEIVED,CMC_RESPONSE_SENT,CONFIG_AUTH,CONFIG_CERT_PROFILE,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SERIAL_NUMBER,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,CRL_SIGNING_INFO,DELTA_CRL_GENERATION,FULL_CRL_GENERATION,LOG_PATH_CHANGE,OCSP_GENERATION,OCSP_SIGNING_INFO,PROFILE_CERT_REQUEST,PROOF_OF_POSSESSION,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,CERT_STATUS_CHANGE_REQUEST_PROCESSED
++log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CERT_REQUEST_PROCESSED,CERT_SIGNING_INFO,CMC_SIGNED_REQUEST_SIG_VERIFY,CMC_USER_SIGNED_REQUEST_SIG_VERIFY,CMC_REQUEST_RECEIVED,CMC_RESPONSE_SENT,CONFIG_AUTH,CONFIG_CERT_PROFILE,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SERIAL_NUMBER,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,CRL_SIGNING_INFO,DELTA_CRL_GENERATION,FULL_CRL_GENERATION,LOG_PATH_CHANGE,OCSP_GENERATION,OCSP_SIGNING_INFO,PROFILE_CERT_REQUEST,PROOF_OF_POSSESSION,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,CERT_STATUS_CHANGE_REQUEST_PROCESSED,CERT_PROFILE_APPROVAL,CONFIG_CRL_PROFILE,CONFIG_OCSP_PROFILE,CONFIG_ACL,CONFIG_DRM,AUTHORITY_CONFIG
+ log.instance.SignedAudit.filters.CMC_SIGNED_REQUEST_SIG_VERIFY=(Outcome=Failure)
+ log.instance.SignedAudit.filters.CMC_USER_SIGNED_REQUEST_SIG_VERIFY=(Outcome=Failure)
+ log.instance.SignedAudit.filters.DELTA_CRL_GENERATION=(Outcome=Failure)
+diff --git a/base/ca/shared/profiles/ca/caDirUserCert.cfg b/base/ca/shared/profiles/ca/caDirUserCert.cfg
+index f12c7ed..0b7f6b7 100644
+--- a/base/ca/shared/profiles/ca/caDirUserCert.cfg
++++ b/base/ca/shared/profiles/ca/caDirUserCert.cfg
+@@ -34,7 +34,7 @@ policyset.userCertSet.2.default.params.range=180
+ policyset.userCertSet.2.default.params.startTime=0
+ policyset.userCertSet.3.constraint.class_id=keyConstraintImpl
+ policyset.userCertSet.3.constraint.name=Key Constraint
+-policyset.userCertSet.3.constraint.params.keyType=EC
++policyset.userCertSet.3.constraint.params.keyType=RSA
+ policyset.userCertSet.3.constraint.params.keyParameters=1024,2048,3072,4096
+ policyset.userCertSet.3.default.class_id=userKeyDefaultImpl
+ policyset.userCertSet.3.default.name=Key Default
+diff --git a/base/ca/shared/profiles/ca/caECDirUserCert.cfg b/base/ca/shared/profiles/ca/caECDirUserCert.cfg
+index 0663b40..b65999e 100644
+--- a/base/ca/shared/profiles/ca/caECDirUserCert.cfg
++++ b/base/ca/shared/profiles/ca/caECDirUserCert.cfg
+@@ -34,7 +34,7 @@ policyset.userCertSet.2.default.params.range=180
+ policyset.userCertSet.2.default.params.startTime=0
+ policyset.userCertSet.3.constraint.class_id=keyConstraintImpl
+ policyset.userCertSet.3.constraint.name=Key Constraint
+-policyset.userCertSet.3.constraint.params.keyType=-
++policyset.userCertSet.3.constraint.params.keyType=EC
+ policyset.userCertSet.3.constraint.params.keyParameters=nistp256,nistp384,nistp521
+ policyset.userCertSet.3.default.class_id=userKeyDefaultImpl
+ policyset.userCertSet.3.default.name=Key Default
+diff --git a/base/kra/shared/conf/CS.cfg b/base/kra/shared/conf/CS.cfg
+index f314234..878e5f8 100644
+--- a/base/kra/shared/conf/CS.cfg
++++ b/base/kra/shared/conf/CS.cfg
+@@ -304,7 +304,7 @@ log.instance.SignedAudit._005=## AUDIT_LOG_STARTUP,AUDIT_LOG_SHUTDOWN,ROLE_ASSUM
+ log.instance.SignedAudit._006=##
+ log.instance.SignedAudit.bufferSize=512
+ log.instance.SignedAudit.enable=true
+-log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,ASYMKEY_GENERATION_REQUEST,ASYMKEY_GEN_REQUEST_PROCESSED,AUTH,AUTHZ,CONFIG_AUTH,CONFIG_DRM,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SERIAL_NUMBER,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,KEY_GEN_ASYMMETRIC,KEY_RECOVERY_AGENT_LOGIN,LOG_PATH_CHANGE,PROFILE_CERT_REQUEST,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DATA_ARCHIVAL_REQUEST,SECURITY_DATA_ARCHIVAL_REQUEST_PROCESSED,SECURITY_DATA_RECOVERY_REQUEST,SECURITY_DATA_RECOVERY_REQUEST_PROCESSED,SECURITY_DATA_RECOVERY_REQUEST_STATE_CHANGE,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,SERVER_SIDE_KEYGEN_REQUEST,SERVER_SIDE_KEYGEN_REQUEST_PROCESSED,SYMKEY_GENERATION_REQUEST,SYMKEY_GEN_REQUEST_PROCESSED
++log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,ASYMKEY_GENERATION_REQUEST,ASYMKEY_GEN_REQUEST_PROCESSED,AUTH,AUTHZ,CONFIG_AUTH,CONFIG_DRM,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SERIAL_NUMBER,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,KEY_GEN_ASYMMETRIC,KEY_RECOVERY_AGENT_LOGIN,LOG_PATH_CHANGE,PROFILE_CERT_REQUEST,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DATA_ARCHIVAL_REQUEST,SECURITY_DATA_ARCHIVAL_REQUEST_PROCESSED,SECURITY_DATA_RECOVERY_REQUEST,SECURITY_DATA_RECOVERY_REQUEST_PROCESSED,SECURITY_DATA_RECOVERY_REQUEST_STATE_CHANGE,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,SERVER_SIDE_KEYGEN_REQUEST,SERVER_SIDE_KEYGEN_REQUEST_PROCESSED,SYMKEY_GENERATION_REQUEST,SYMKEY_GEN_REQUEST_PROCESSED,CONFIG_ACL
+ log.instance.SignedAudit.filters.ASYMKEY_GENERATION_REQUEST=(Outcome=Failure)
+ log.instance.SignedAudit.filters.ASYMKEY_GEN_REQUEST_PROCESSED=(Outcome=Failure)
+ log.instance.SignedAudit.filters.KEY_GEN_ASYMMETRIC=(Outcome=Failure)
+diff --git a/base/ocsp/shared/conf/CS.cfg b/base/ocsp/shared/conf/CS.cfg
+index dc993b0..b412e5e 100644
+--- a/base/ocsp/shared/conf/CS.cfg
++++ b/base/ocsp/shared/conf/CS.cfg
+@@ -220,7 +220,7 @@ log.instance.SignedAudit._005=## AUDIT_LOG_STARTUP,AUDIT_LOG_SHUTDOWN,ROLE_ASSUM
+ log.instance.SignedAudit._006=##
+ log.instance.SignedAudit.bufferSize=512
+ log.instance.SignedAudit.enable=true
+-log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CONFIG_AUTH,CONFIG_ENCRYPTION,CONFIG_OCSP_PROFILE,CONFIG_ROLE,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,LOG_PATH_CHANGE,OCSP_ADD_CA_REQUEST_PROCESSED,OCSP_REMOVE_CA_REQUEST_PROCESSED,OCSP_SIGNING_INFO,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION
++log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CONFIG_AUTH,CONFIG_ENCRYPTION,CONFIG_OCSP_PROFILE,CONFIG_ROLE,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,LOG_PATH_CHANGE,OCSP_ADD_CA_REQUEST_PROCESSED,OCSP_REMOVE_CA_REQUEST_PROCESSED,OCSP_SIGNING_INFO,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,CONFIG_ACL
+ log.instance.SignedAudit.filters.RANDOM_GENERATION=(Outcome=Failure)
+ log.instance.SignedAudit.filters.SELFTESTS_EXECUTION=(Outcome=Failure)
+ log.instance.SignedAudit.expirationTime=0
+diff --git a/base/server/cms/src/com/netscape/cms/profile/common/ServerCertCAEnrollProfile.java b/base/server/cms/src/com/netscape/cms/profile/common/ServerCertCAEnrollProfile.java
+index a1a83a4..2dcf9c1 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/common/ServerCertCAEnrollProfile.java
++++ b/base/server/cms/src/com/netscape/cms/profile/common/ServerCertCAEnrollProfile.java
+@@ -77,7 +77,7 @@ public class ServerCertCAEnrollProfile extends CAEnrollProfile
+         defConfig4
+                 .putString(
+                         "params.signingAlgsAllowed",
+-                        "SHA1withRSA,SHA256withRSA,SHA512withRSA,MD5withRSA,MD2withRSA,SHA1withEC,SHA256withEC,SHA384withEC,SHA512withEC");
++                        "SHA1withRSA,SHA256withRSA,SHA384withRSA,SHA512withRSA,SHA1withEC,SHA256withEC,SHA384withEC,SHA512withEC");
+ 
+         IProfilePolicy policy5 =
+                 createProfilePolicy("set1", "p5",
+diff --git a/base/server/cms/src/com/netscape/cms/profile/common/UserCertCAEnrollProfile.java b/base/server/cms/src/com/netscape/cms/profile/common/UserCertCAEnrollProfile.java
+index 710a461..9b1eacb 100644
+--- a/base/server/cms/src/com/netscape/cms/profile/common/UserCertCAEnrollProfile.java
++++ b/base/server/cms/src/com/netscape/cms/profile/common/UserCertCAEnrollProfile.java
+@@ -79,7 +79,7 @@ public class UserCertCAEnrollProfile extends CAEnrollProfile
+         defConfig4
+                 .putString(
+                         "params.signingAlgsAllowed",
+-                        "SHA1withRSA,SHA256withRSA,SHA512withRSA,MD5withRSA,MD2withRSA,SHA1withEC,SHA256withEC,SHA384withEC,SHA512withEC");
++                        "SHA1withRSA,SHA256withRSA,SHA384withRSA,SHA512withRSA,SHA1withEC,SHA256withEC,SHA384withEC,SHA512withEC");
+ 
+         IProfilePolicy policy5 =
+                 createProfilePolicy("set1", "p5",
+diff --git a/base/server/cmsbundle/src/LogMessages.properties b/base/server/cmsbundle/src/LogMessages.properties
+index 7963f6f..d534506 100644
+--- a/base/server/cmsbundle/src/LogMessages.properties
++++ b/base/server/cmsbundle/src/LogMessages.properties
+@@ -2133,7 +2133,7 @@ LOGGING_SIGNED_AUDIT_AUTH_SUCCESS=<type=AUTH>:[AuditEvent=AUTH]{0} authenticatio
+ #           and to be approved by an agent
+ # Op must be "approve" or "disapprove"
+ #
+-LOGGING_SIGNED_AUDIT_CERT_PROFILE_APPROVAL_4=<type=CERT_PROFILE_APPROVAL>:[AuditEvent=CERT_PROFILE_APPROVAL][SubjectID={0}][Outcome={1}][ProfileID={2}][Op={3}] certificate approval
++LOGGING_SIGNED_AUDIT_CERT_PROFILE_APPROVAL_4=<type=CERT_PROFILE_APPROVAL>:[AuditEvent=CERT_PROFILE_APPROVAL][SubjectID={0}][Outcome={1}][ProfileID={2}][Op={3}] certificate profile approval
+ #
+ # LOGGING_SIGNED_AUDIT_PROOF_OF_POSSESSION
+ # - used for proof of possession during certificate enrollment processing
+diff --git a/base/tks/shared/conf/CS.cfg b/base/tks/shared/conf/CS.cfg
+index d1da996..e9bf03e 100644
+--- a/base/tks/shared/conf/CS.cfg
++++ b/base/tks/shared/conf/CS.cfg
+@@ -212,7 +212,7 @@ log.instance.SignedAudit._005=## AUDIT_LOG_STARTUP,AUDIT_LOG_SHUTDOWN,ROLE_ASSUM
+ log.instance.SignedAudit._006=##
+ log.instance.SignedAudit.bufferSize=512
+ log.instance.SignedAudit.enable=true
+-log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CONFIG_AUTH,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,LOG_PATH_CHANGE,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION
++log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CONFIG_AUTH,CONFIG_ENCRYPTION,CONFIG_ROLE,CONFIG_SIGNED_AUDIT,CONFIG_TRUSTED_PUBLIC_KEY,LOG_PATH_CHANGE,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,CONFIG_ACL
+ log.instance.SignedAudit.filters.RANDOM_GENERATION=(Outcome=Failure)
+ log.instance.SignedAudit.filters.SELFTESTS_EXECUTION=(Outcome=Failure)
+ log.instance.SignedAudit.expirationTime=0
+diff --git a/base/tps/shared/conf/CS.cfg b/base/tps/shared/conf/CS.cfg
+index c44bc75..3671100 100644
+--- a/base/tps/shared/conf/CS.cfg
++++ b/base/tps/shared/conf/CS.cfg
+@@ -229,7 +229,7 @@ log.instance.SignedAudit._005=## AUDIT_LOG_STARTUP,AUDIT_LOG_SHUTDOWN,ROLE_ASSUM
+ log.instance.SignedAudit._006=##
+ log.instance.SignedAudit.bufferSize=512
+ log.instance.SignedAudit.enable=true
+-log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CONFIG_ROLE,CONFIG_SIGNED_AUDIT,CONFIG_TOKEN_AUTHENTICATOR,CONFIG_TOKEN_CONNECTOR,CONFIG_TOKEN_MAPPING_RESOLVER,CONFIG_TOKEN_RECORD,LOG_PATH_CHANGE,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,TOKEN_APPLET_UPGRADE,TOKEN_KEY_CHANGEOVER_REQUIRED,TOKEN_KEY_CHANGEOVER
++log.instance.SignedAudit.events=ACCESS_SESSION_ESTABLISH,ACCESS_SESSION_TERMINATED,AUTH,AUTHZ,CONFIG_ROLE,CONFIG_SIGNED_AUDIT,CONFIG_TOKEN_AUTHENTICATOR,CONFIG_TOKEN_CONNECTOR,CONFIG_TOKEN_MAPPING_RESOLVER,CONFIG_TOKEN_RECORD,LOG_PATH_CHANGE,RANDOM_GENERATION,ROLE_ASSUME,SECURITY_DOMAIN_UPDATE,SELFTESTS_EXECUTION,TOKEN_APPLET_UPGRADE,TOKEN_KEY_CHANGEOVER_REQUIRED,TOKEN_KEY_CHANGEOVER,CONFIG_ACL
+ log.instance.SignedAudit.filters.RANDOM_GENERATION=(Outcome=Failure)
+ log.instance.SignedAudit.filters.SELFTESTS_EXECUTION=(Outcome=Failure)
+ log.instance.SignedAudit.filters.TOKEN_APPLET_UPGRADE=(Outcome=Failure)
+diff --git a/base/util/src/netscape/security/x509/AlgorithmId.java b/base/util/src/netscape/security/x509/AlgorithmId.java
+index ae5975a..012575c 100644
+--- a/base/util/src/netscape/security/x509/AlgorithmId.java
++++ b/base/util/src/netscape/security/x509/AlgorithmId.java
+@@ -798,17 +798,17 @@ public class AlgorithmId implements Serializable, DerEncoder {
+      * Supported signing algorithms for a RSA key.
+      */
+     public static final String[] RSA_SIGNING_ALGORITHMS = new String[]
+-    { "SHA1withRSA", "SHA256withRSA", "SHA384withRSA", "SHA512withRSA", "MD5withRSA", "MD2withRSA" };
++    { "SHA256withRSA", "SHA384withRSA", "SHA512withRSA", "SHA1withRSA" };
+ 
+     public static final String[] EC_SIGNING_ALGORITHMS = new String[]
+-    { "SHA1withEC", "SHA256withEC", "SHA384withEC", "SHA512withEC" };
++    { "SHA256withEC", "SHA384withEC", "SHA512withEC", "SHA1withEC" };
+ 
+     /**
+      * All supported signing algorithms.
+      */
+     public static final String[] ALL_SIGNING_ALGORITHMS = new String[]
+     {
+-            "SHA1withRSA", "MD5withRSA", "MD2withRSA", "SHA1withDSA", "SHA256withRSA", "SHA384withRSA", "SHA512withRSA", "SHA1withEC",
+-            "SHA256withEC", "SHA384withEC", "SHA512withEC" };
++            "SHA256withRSA", "SHA384withRSA", "SHA512withRSA", "SHA1withRSA",
++            "SHA256withEC", "SHA384withEC", "SHA512withEC", "SHA1withEC" };
+ 
+ }
+-- 
+1.8.3.1
+
+
+From b4ef13f36124aeaadf3e43ae7c0560c38233c78a Mon Sep 17 00:00:00 2001
+From: Christina Fu <cfu@redhat.com>
+Date: Fri, 10 Aug 2018 14:04:14 -0700
+Subject: [PATCH 5/5] Ticket #2481 ECC keys not supported for signing audit
+ logs
+
+This patch addes support for ECC audit log signing key.
+All enrollment profiles for audit signing certificate are updated to allow that.
+
+fixes https://pagure.io/dogtagpki/issue/2481
+
+Change-Id: Idedd3cc2ed7655e73ee87ebcd0087ea17fb57f3f
+(cherry picked from commit 435ede04d525d8816345271a887753a620795d56)
+---
+ base/ca/shared/profiles/ca/caCMCauditSigningCert.cfg          | 4 ++--
+ base/ca/shared/profiles/ca/caInternalAuthAuditSigningCert.cfg | 4 ++--
+ base/ca/shared/profiles/ca/caSignedLogCert.cfg                | 8 ++++----
+ base/java-tools/src/com/netscape/cmstools/AuditVerify.java    | 6 +++---
+ base/server/cms/src/com/netscape/cms/logging/LogFile.java     | 8 +++-----
+ 5 files changed, 14 insertions(+), 16 deletions(-)
+
+diff --git a/base/ca/shared/profiles/ca/caCMCauditSigningCert.cfg b/base/ca/shared/profiles/ca/caCMCauditSigningCert.cfg
+index ff4856c..642e67b 100644
+--- a/base/ca/shared/profiles/ca/caCMCauditSigningCert.cfg
++++ b/base/ca/shared/profiles/ca/caCMCauditSigningCert.cfg
+@@ -29,8 +29,8 @@ policyset.auditSigningCertSet.2.default.params.range=720
+ policyset.auditSigningCertSet.2.default.params.startTime=0
+ policyset.auditSigningCertSet.3.constraint.class_id=keyConstraintImpl
+ policyset.auditSigningCertSet.3.constraint.name=Key Constraint
+-policyset.auditSigningCertSet.3.constraint.params.keyType=RSA
+-policyset.auditSigningCertSet.3.constraint.params.keyParameters=1024,2048,3072,4096
++policyset.auditSigningCertSet.3.constraint.params.keyType=-
++policyset.auditSigningCertSet.3.constraint.params.keyParameters=1024,2048,3072,4096,nistp256,nistp521
+ policyset.auditSigningCertSet.3.default.class_id=userKeyDefaultImpl
+ policyset.auditSigningCertSet.3.default.name=Key Default
+ policyset.auditSigningCertSet.4.constraint.class_id=noConstraintImpl
+diff --git a/base/ca/shared/profiles/ca/caInternalAuthAuditSigningCert.cfg b/base/ca/shared/profiles/ca/caInternalAuthAuditSigningCert.cfg
+index b850f1c..4acaab7 100644
+--- a/base/ca/shared/profiles/ca/caInternalAuthAuditSigningCert.cfg
++++ b/base/ca/shared/profiles/ca/caInternalAuthAuditSigningCert.cfg
+@@ -31,7 +31,7 @@ policyset.auditSigningCertSet.2.default.params.startTime=0
+ policyset.auditSigningCertSet.3.constraint.class_id=keyConstraintImpl
+ policyset.auditSigningCertSet.3.constraint.name=Key Constraint
+ policyset.auditSigningCertSet.3.constraint.params.keyType=-
+-policyset.auditSigningCertSet.3.constraint.params.keyParameters=1024,2048,3072,4096
++policyset.auditSigningCertSet.3.constraint.params.keyParameters=1024,2048,3072,4096,nistp256,nistp521
+ policyset.auditSigningCertSet.3.default.class_id=userKeyDefaultImpl
+ policyset.auditSigningCertSet.3.default.name=Key Default
+ policyset.auditSigningCertSet.4.constraint.class_id=noConstraintImpl
+@@ -74,7 +74,7 @@ policyset.auditSigningCertSet.6.default.params.keyUsageEncipherOnly=false
+ policyset.auditSigningCertSet.6.default.params.keyUsageDecipherOnly=false
+ policyset.auditSigningCertSet.9.constraint.class_id=signingAlgConstraintImpl
+ policyset.auditSigningCertSet.9.constraint.name=No Constraint
+-policyset.auditSigningCertSet.9.constraint.params.signingAlgsAllowed=SHA1withRSA,SHA256withRSA,SHA512withRSA,MD5withRSA,MD2withRSA,SHA1withDSA,SHA1withEC,SHA256withEC,SHA384withRSA,SHA384withEC,SHA512withEC
++policyset.auditSigningCertSet.9.constraint.params.signingAlgsAllowed=SHA1withRSA,SHA256withRSA,SHA512withRSA,SHA1withDSA,SHA1withEC,SHA256withEC,SHA384withRSA,SHA384withEC,SHA512withEC
+ policyset.auditSigningCertSet.9.default.class_id=signingAlgDefaultImpl
+ policyset.auditSigningCertSet.9.default.name=Signing Alg
+ policyset.auditSigningCertSet.9.default.params.signingAlg=-
+diff --git a/base/ca/shared/profiles/ca/caSignedLogCert.cfg b/base/ca/shared/profiles/ca/caSignedLogCert.cfg
+index 6fdb8b5..c568572 100644
+--- a/base/ca/shared/profiles/ca/caSignedLogCert.cfg
++++ b/base/ca/shared/profiles/ca/caSignedLogCert.cfg
+@@ -3,7 +3,7 @@ visible=true
+ enable=true
+ enableBy=admin
+ auth.class_id=
+-name=Manual Log Signing Certificate Enrollment
++name=Manual Audit Log Signing Certificate Enrollment
+ input.list=i1,i2
+ input.i1.class_id=certReqInputImpl
+ input.i2.class_id=submitterInfoInputImpl
+@@ -29,8 +29,8 @@ policyset.caLogSigningSet.2.default.params.range=720
+ policyset.caLogSigningSet.2.default.params.startTime=0
+ policyset.caLogSigningSet.3.constraint.class_id=keyConstraintImpl
+ policyset.caLogSigningSet.3.constraint.name=Key Constraint
+-policyset.caLogSigningSet.3.constraint.params.keyType=RSA
+-policyset.caLogSigningSet.3.constraint.params.keyParameters=1024,2048,3072,4096
++policyset.caLogSigningSet.3.constraint.params.keyType=-
++policyset.caLogSigningSet.3.constraint.params.keyParameters=1024,2048,3072,4096,nistp256,nistp521
+ policyset.caLogSigningSet.3.default.class_id=userKeyDefaultImpl
+ policyset.caLogSigningSet.3.default.name=Key Default
+ policyset.caLogSigningSet.4.constraint.class_id=noConstraintImpl
+@@ -68,7 +68,7 @@ policyset.caLogSigningSet.8.default.name=Subject Key Identifier Extension Defaul
+ policyset.caLogSigningSet.8.default.params.critical=false
+ policyset.caLogSigningSet.9.constraint.class_id=signingAlgConstraintImpl
+ policyset.caLogSigningSet.9.constraint.name=No Constraint
+-policyset.caLogSigningSet.9.constraint.params.signingAlgsAllowed=MD5withRSA,MD2withRSA,SHA1withRSA,SHA256withRSA,SHA512withRSA,SHA1withDSA,SHA1withEC,SHA256withEC,SHA384withRSA,SHA384withEC,SHA512withEC
++policyset.caLogSigningSet.9.constraint.params.signingAlgsAllowed=SHA1withRSA,SHA256withRSA,SHA512withRSA,SHA1withDSA,SHA1withEC,SHA256withEC,SHA384withRSA,SHA384withEC,SHA512withEC
+ policyset.caLogSigningSet.9.default.class_id=signingAlgDefaultImpl
+ policyset.caLogSigningSet.9.default.name=Signing Alg
+ policyset.caLogSigningSet.9.default.params.signingAlg=-
+diff --git a/base/java-tools/src/com/netscape/cmstools/AuditVerify.java b/base/java-tools/src/com/netscape/cmstools/AuditVerify.java
+index 7693ba3..be9c0ed 100644
+--- a/base/java-tools/src/com/netscape/cmstools/AuditVerify.java
++++ b/base/java-tools/src/com/netscape/cmstools/AuditVerify.java
+@@ -25,7 +25,6 @@ import java.io.FilenameFilter;
+ import java.io.IOException;
+ import java.security.PublicKey;
+ import java.security.Signature;
+-import java.security.interfaces.DSAPublicKey;
+ import java.security.interfaces.RSAPublicKey;
+ import java.util.List;
+ import java.util.StringTokenizer;
+@@ -34,6 +33,7 @@ import java.util.Vector;
+ import org.mozilla.jss.CryptoManager;
+ import org.mozilla.jss.crypto.ObjectNotFoundException;
+ import org.mozilla.jss.crypto.X509Certificate;
++import org.mozilla.jss.pkcs11.PK11ECPublicKey;
+ 
+ import com.netscape.cmsutil.util.Utils;
+ 
+@@ -159,8 +159,8 @@ public class AuditVerify {
+         String sigAlgorithm = null;
+         if (pubk instanceof RSAPublicKey) {
+             sigAlgorithm = "SHA-256/RSA";
+-        } else if (pubk instanceof DSAPublicKey) {
+-            sigAlgorithm = "SHA-256/DSA";
++        } else if (pubk instanceof PK11ECPublicKey) {
++            sigAlgorithm = "SHA-256/EC";
+         } else {
+             throw new Exception("Unknown signing certificate key type: " + pubk.getAlgorithm());
+         }
+diff --git a/base/server/cms/src/com/netscape/cms/logging/LogFile.java b/base/server/cms/src/com/netscape/cms/logging/LogFile.java
+index 74a8ada..b04f70d 100644
+--- a/base/server/cms/src/com/netscape/cms/logging/LogFile.java
++++ b/base/server/cms/src/com/netscape/cms/logging/LogFile.java
+@@ -41,8 +41,6 @@ import java.security.PrivateKey;
+ import java.security.Provider;
+ import java.security.Signature;
+ import java.security.SignatureException;
+-import java.security.interfaces.DSAPrivateKey;
+-import java.security.interfaces.RSAPrivateKey;
+ import java.text.ParseException;
+ import java.text.SimpleDateFormat;
+ import java.util.Date;
+@@ -611,10 +609,10 @@ public class LogFile implements ILogEventListener, IExtendedPluginInfo {
+             mSigningKey = cm.findPrivKeyByCert(cert);
+ 
+             String sigAlgorithm;
+-            if (mSigningKey instanceof RSAPrivateKey) {
++            if (mSigningKey.getAlgorithm().equalsIgnoreCase("RSA")) {
+                 sigAlgorithm = "SHA-256/RSA";
+-            } else if (mSigningKey instanceof DSAPrivateKey) {
+-                sigAlgorithm = "SHA-256/DSA";
++            } else if (mSigningKey.getAlgorithm().equalsIgnoreCase("EC")) {
++                sigAlgorithm = "SHA-256/EC";
+             } else {
+                 throw new NoSuchAlgorithmException("Unknown private key type");
+             }
+-- 
+1.8.3.1
+

@@ -35,8 +35,6 @@ import com.netscape.cmsutil.http.HttpResponse;
 import com.netscape.cmsutil.http.JssSSLSocketFactory;
 import com.netscape.cmsutil.net.ISocketFactory;
 
-import org.dogtagpki.server.PKIClientSocketListener;
-
 public class HttpConnector implements IConnector {
     protected IAuthority mSource = null;
     protected IRemoteAuthority mDest = null;
@@ -57,11 +55,7 @@ public class HttpConnector implements IConnector {
         mTimeout = 0;
         mSource = source;
         mDest = dest;
-        PKIClientSocketListener sockListener = new PKIClientSocketListener();
         mFactory = new JssSSLSocketFactory(nickName, clientCiphers);
-
-        JssSSLSocketFactory factory = (JssSSLSocketFactory)mFactory;
-        factory.addSocketListener(sockListener);
 
         int minConns = config.getInteger("minHttpConns", 1);
         int maxConns = config.getInteger("maxHttpConns", 15);
@@ -88,11 +82,7 @@ public class HttpConnector implements IConnector {
         mSource = source;
         mDest = dest;
         mTimeout = timeout;
-        PKIClientSocketListener sockListener = new PKIClientSocketListener();
         mFactory = new JssSSLSocketFactory(nickName, clientCiphers);
-
-        JssSSLSocketFactory factory = (JssSSLSocketFactory) mFactory;
-        factory.addSocketListener(sockListener);
 
         int minConns = config.getInteger("minHttpConns", 1);
         int maxConns = config.getInteger("maxHttpConns", 15);

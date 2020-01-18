@@ -1,0 +1,346 @@
+diff --git a/base/common/src/com/netscape/certsrv/client/SubsystemClient.java b/base/common/src/com/netscape/certsrv/client/SubsystemClient.java
+index 2e7ca34..0aa5c6c 100644
+--- a/base/common/src/com/netscape/certsrv/client/SubsystemClient.java
++++ b/base/common/src/com/netscape/certsrv/client/SubsystemClient.java
+@@ -17,9 +17,12 @@
+ // --- END COPYRIGHT BLOCK ---
+ package com.netscape.certsrv.client;
+ 
++import java.net.URI;
+ import java.net.URISyntaxException;
+ 
+-import javax.ws.rs.core.Response;
++import org.apache.http.HttpResponse;
++import org.apache.http.client.methods.HttpGet;
++import org.apache.http.impl.client.DefaultHttpClient;
+ 
+ import com.netscape.certsrv.account.AccountClient;
+ import com.netscape.certsrv.account.AccountInfo;
+@@ -49,12 +52,23 @@ public class SubsystemClient extends Client {
+ 
+     public boolean exists() throws Exception {
+ 
++        ClientConfig config = client.getConfig();
++        URI serverURI = config.getServerURI();
+ 
+-        PKIConnection connection = client.getConnection();
+-        Response response = connection.get("/" + name);
++        URI subsystemURI = new URI(
++                serverURI.getScheme(),
++                null,
++                serverURI.getHost(),
++                serverURI.getPort(),
++                "/" + name,
++                null,
++                null);
+ 
++        DefaultHttpClient client = new DefaultHttpClient();
++        HttpGet method = new HttpGet(subsystemURI);
+         try {
+-            int code = response.getStatus();
++            HttpResponse response = client.execute(method);
++            int code = response.getStatusLine().getStatusCode();
+ 
+             if (code == 200) {
+                 return true;
+@@ -63,11 +77,11 @@ public class SubsystemClient extends Client {
+                 return false;
+ 
+             } else {
+-                throw new Exception("Error: " + response.getStatusInfo());
++                throw new Exception("Error: " + response.getStatusLine());
+             }
+ 
+         } finally {
+-            response.close();
++            method.releaseConnection();
+         }
+     }
+ 
+diff --git a/base/kra/src/com/netscape/kra/SecurityDataRecoveryService.java b/base/kra/src/com/netscape/kra/SecurityDataRecoveryService.java
+index f20ab4b..8a8ed2e 100644
+--- a/base/kra/src/com/netscape/kra/SecurityDataRecoveryService.java
++++ b/base/kra/src/com/netscape/kra/SecurityDataRecoveryService.java
+@@ -32,9 +32,6 @@ import com.netscape.certsrv.request.RequestId;
+ import com.netscape.cms.logging.Logger;
+ import com.netscape.cms.logging.SignedAuditLogger;
+ 
+-import netscape.security.util.DerValue;
+-import netscape.security.x509.X509Key;
+-
+ /**
+  * This implementation services SecurityData Recovery requests.
+  * <p>
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java b/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java
+index 98d5e29..c289245 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/CMCAuth.java
+@@ -29,7 +29,6 @@ import java.io.ByteArrayInputStream;
+ import java.io.ByteArrayOutputStream;
+ import java.io.IOException;
+ import java.math.BigInteger;
+-import java.security.cert.X509Certificate;
+ import java.security.MessageDigest;
+ import java.security.PublicKey;
+ import java.security.cert.X509Certificate;
+diff --git a/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java b/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
+index 97971dd..b3136a0 100644
+--- a/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
++++ b/base/server/cms/src/com/netscape/cms/authentication/CMCUserSignedAuth.java
+@@ -28,7 +28,6 @@ package com.netscape.cms.authentication;
+ import java.io.ByteArrayInputStream;
+ import java.io.ByteArrayOutputStream;
+ import java.io.IOException;
+-import java.security.cert.X509Certificate;
+ import java.math.BigInteger;
+ import java.security.MessageDigest;
+ import java.security.PublicKey;
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java b/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java
+index 7398891..cc65c78 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/csadmin/ConfigurationUtils.java
+@@ -54,34 +54,6 @@ import javax.ws.rs.core.MultivaluedMap;
+ import javax.ws.rs.core.Response;
+ import javax.xml.parsers.ParserConfigurationException;
+ 
+-import netscape.ldap.LDAPAttribute;
+-import netscape.ldap.LDAPAttributeSet;
+-import netscape.ldap.LDAPConnection;
+-import netscape.ldap.LDAPDN;
+-import netscape.ldap.LDAPEntry;
+-import netscape.ldap.LDAPException;
+-import netscape.ldap.LDAPModification;
+-import netscape.ldap.LDAPSearchConstraints;
+-import netscape.ldap.LDAPSearchResults;
+-import netscape.ldap.LDAPv3;
+-import netscape.security.pkcs.ContentInfo;
+-import netscape.security.pkcs.PKCS10;
+-import netscape.security.pkcs.PKCS12;
+-import netscape.security.pkcs.PKCS12Util;
+-import netscape.security.pkcs.PKCS7;
+-import netscape.security.pkcs.SignerInfo;
+-import netscape.security.util.DerOutputStream;
+-import netscape.security.util.ObjectIdentifier;
+-import netscape.security.x509.AlgorithmId;
+-import netscape.security.x509.BasicConstraintsExtension;
+-import netscape.security.x509.CertificateChain;
+-import netscape.security.x509.Extension;
+-import netscape.security.x509.Extensions;
+-import netscape.security.x509.KeyUsageExtension;
+-import netscape.security.x509.X500Name;
+-import netscape.security.x509.X509CertImpl;
+-import netscape.security.x509.X509Key;
+-
+ import org.apache.commons.lang.StringUtils;
+ import org.apache.velocity.context.Context;
+ import org.mozilla.jss.CryptoManager;
+diff --git a/base/server/cms/src/com/netscape/cms/servlet/csadmin/GetStatus.java b/base/server/cms/src/com/netscape/cms/servlet/csadmin/GetStatus.java
+index 338e26b..1cb8a4c 100644
+--- a/base/server/cms/src/com/netscape/cms/servlet/csadmin/GetStatus.java
++++ b/base/server/cms/src/com/netscape/cms/servlet/csadmin/GetStatus.java
+@@ -138,7 +138,7 @@ public class GetStatus extends CMSServlet {
+         try {
+             inputStream = new FileInputStream(versionFilePathName);
+             String contents = IOUtils.toString(inputStream);
+-            
++
+             if(contents != null) {
+                 CMS.debug("Returning product version: " + version);
+                 version = contents.trim();
+diff --git a/base/server/etc/default.cfg b/base/server/etc/default.cfg
+index 0ae0764..515136b 100644
+--- a/base/server/etc/default.cfg
++++ b/base/server/etc/default.cfg
+@@ -399,11 +399,6 @@ pki_master_crl_enable=True
+ # based on the CMS hostname and port.
+ pki_default_ocsp_uri=
+ 
+-# Default OCSP URI added by AuthInfoAccessExtDefault if the profile
+-# config is blank.  If both are blank, the value is constructed
+-# based on the CMS hostname and port.
+-pki_default_ocsp_uri=
+-
+ # Paths
+ # These are used in the processing of pkispawn and are not supposed
+ # to be overwritten by user configuration files.
+diff --git a/base/server/python/pki/server/__init__.py b/base/server/python/pki/server/__init__.py
+index e0989a9..45af9a0 100644
+--- a/base/server/python/pki/server/__init__.py
++++ b/base/server/python/pki/server/__init__.py
+@@ -202,20 +202,21 @@ class PKISubsystem(object):
+     def load(self):
+         self.config.clear()
+ 
+-        lines = open(self.cs_conf).read().splitlines()
+-
+-        for index, line in enumerate(lines):
+-            if not line or line.startswith('#'):
+-                continue
+-            parts = line.split('=', 1)
+-            if len(parts) < 2:
+-                raise Exception('Missing delimiter in %s line %d' % (self.cs_conf, index + 1))
+-            name = parts[0]
+-            value = parts[1]
+-            self.config[name] = value
+-
+-        self.type = self.config['cs.type']
+-        self.prefix = self.type.lower()
++        if os.path.exists(self.cs_conf):
++            lines = open(self.cs_conf).read().splitlines()
++
++            for index, line in enumerate(lines):
++                if not line or line.startswith('#'):
++                    continue
++                parts = line.split('=', 1)
++                if len(parts) < 2:
++                    raise Exception('Missing delimiter in %s line %d' % (self.cs_conf, index + 1))
++                name = parts[0]
++                value = parts[1]
++                self.config[name] = value
++
++            self.type = self.config['cs.type']
++            self.prefix = self.type.lower()
+ 
+     def find_system_certs(self):
+         certs = []
+diff --git a/base/server/python/pki/server/deployment/pkiconfig.py b/base/server/python/pki/server/deployment/pkiconfig.py
+index 9e1cab5..cb71db9 100644
+--- a/base/server/python/pki/server/deployment/pkiconfig.py
++++ b/base/server/python/pki/server/deployment/pkiconfig.py
+@@ -39,9 +39,7 @@ PKI_DEPLOYMENT_DEFAULT_SHELL = "/sbin/nologin"
+ PKI_DEPLOYMENT_DEFAULT_UID = 17
+ PKI_DEPLOYMENT_DEFAULT_USER = "pkiuser"
+ 
+-PKI_SUBSYSTEMS = ["CA", "KRA", "OCSP", "RA", "TKS", "TPS"]
+-PKI_SIGNED_AUDIT_SUBSYSTEMS = ["CA", "KRA", "OCSP", "TKS", "TPS"]
+-PKI_TOMCAT_SUBSYSTEMS = ["CA", "KRA", "OCSP", "TKS", "TPS"]
++PKI_SUBSYSTEMS = ["CA", "KRA", "OCSP", "TKS", "TPS"]
+ PKI_BASE_RESERVED_NAMES = ["alias", "bin", "ca", "common", "conf", "kra",
+                            "lib", "logs", "ocsp", "temp", "tks", "tps",
+                            "webapps", "work"]
+diff --git a/base/server/python/pki/server/deployment/pkihelper.py b/base/server/python/pki/server/deployment/pkihelper.py
+index 77594ec..9b9e1b8 100644
+--- a/base/server/python/pki/server/deployment/pkihelper.py
++++ b/base/server/python/pki/server/deployment/pkihelper.py
+@@ -914,7 +914,7 @@ class Instance:
+         # Return list of PKI subsystems in the specified tomcat instance
+         rv = []
+         try:
+-            for subsystem in config.PKI_TOMCAT_SUBSYSTEMS:
++            for subsystem in config.PKI_SUBSYSTEMS:
+                 path = os.path.join(
+                     self.mdict['pki_instance_path'],
+                     subsystem.lower()
+diff --git a/base/server/python/pki/server/deployment/scriptlets/initialization.py b/base/server/python/pki/server/deployment/scriptlets/initialization.py
+index 4515b55..b35e82c 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/initialization.py
++++ b/base/server/python/pki/server/deployment/scriptlets/initialization.py
+@@ -155,7 +155,8 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+             deployer.security_domain.deregister(None)
+ 
+         except Exception as e:  # pylint: disable=broad-except
+-            config.pki_log.error(str(e))
++            config.pki_log.error(log.PKI_OSERROR_1, e,
++                                 extra=config.PKI_INDENTATION_LEVEL_0)
+             # If it is a normal destroy, pass any exception
+             if not deployer.mdict['pki_force_destroy']:
+                 raise
+diff --git a/base/server/python/pki/server/deployment/scriptlets/subsystem_layout.py b/base/server/python/pki/server/deployment/scriptlets/subsystem_layout.py
+index fb9f754..32b716a 100644
+--- a/base/server/python/pki/server/deployment/scriptlets/subsystem_layout.py
++++ b/base/server/python/pki/server/deployment/scriptlets/subsystem_layout.py
+@@ -42,10 +42,9 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+         deployer.directory.create(deployer.mdict['pki_subsystem_log_path'])
+         deployer.directory.create(
+             deployer.mdict['pki_subsystem_archive_log_path'])
+-        if deployer.mdict['pki_subsystem'] in \
+-                config.PKI_SIGNED_AUDIT_SUBSYSTEMS:
+-            deployer.directory.create(
+-                deployer.mdict['pki_subsystem_signed_audit_log_path'])
++
++        deployer.directory.create(
++            deployer.mdict['pki_subsystem_signed_audit_log_path'])
+ 
+         # create /var/lib/pki/<instance>/<subsystem>/conf
+         deployer.directory.create(
+@@ -127,10 +126,8 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
+ 
+         # remove instance-based subsystem logs only if --remove-logs flag is specified
+         if deployer.mdict['pki_remove_logs']:
+-            if deployer.mdict['pki_subsystem'] in \
+-                    config.PKI_SIGNED_AUDIT_SUBSYSTEMS:
+-                deployer.directory.delete(
+-                    deployer.mdict['pki_subsystem_signed_audit_log_path'])
++            deployer.directory.delete(
++                deployer.mdict['pki_subsystem_signed_audit_log_path'])
+             deployer.directory.delete(
+                 deployer.mdict['pki_subsystem_archive_log_path'])
+             deployer.directory.delete(
+diff --git a/base/server/upgrade/10.3.5/03-UpdateAJPLoopbackAddress b/base/server/upgrade/10.3.5/03-UpdateAJPLoopbackAddress
+deleted file mode 100755
+index b7d5c0e..0000000
+--- a/base/server/upgrade/10.3.5/03-UpdateAJPLoopbackAddress
++++ /dev/null
+@@ -1,62 +0,0 @@
+-#!/usr/bin/python
+-# Authors:
+-#     Endi S. Dewata <edewata@redhat.com>
+-#
+-# This program is free software; you can redistribute it and/or modify
+-# it under the terms of the GNU General Public License as published by
+-# the Free Software Foundation; version 2 of the License.
+-#
+-# This program is distributed in the hope that it will be useful,
+-# but WITHOUT ANY WARRANTY; without even the implied warranty of
+-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-# GNU General Public License for more details.
+-#
+-# You should have received a copy of the GNU General Public License along
+-# with this program; if not, write to the Free Software Foundation, Inc.,
+-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-#
+-# Copyright (C) 2017 Red Hat, Inc.
+-# All rights reserved.
+-#
+-
+-from __future__ import absolute_import
+-import os
+-from lxml import etree
+-
+-import pki
+-
+-
+-class UpdateAJPLoopbackAddress(
+-        pki.server.upgrade.PKIServerUpgradeScriptlet):
+-
+-    def __init__(self):
+-        super(UpdateAJPLoopbackAddress, self).__init__()
+-        self.message = 'Update AJP loopback address'
+-
+-        self.parser = etree.XMLParser(remove_blank_text=True)
+-
+-    def upgrade_instance(self, instance):
+-
+-        server_xml = os.path.join(instance.conf_dir, 'server.xml')
+-        self.backup(server_xml)
+-
+-        document = etree.parse(server_xml, self.parser)
+-
+-        server = document.getroot()
+-        connectors = server.findall('.//Connector')
+-
+-        # replace IPv4- or IPv6-specific AJP loopback address with localhost
+-        for connector in connectors:
+-
+-            protocol = connector.get('protocol')
+-            if protocol != 'AJP/1.3':
+-                continue
+-
+-            address = connector.get('address')
+-            if address != '127.0.0.1' and address != '::1':
+-                continue
+-
+-            connector.set('address', 'localhost')
+-
+-        with open(server_xml, 'wb') as f:
+-            document.write(f, pretty_print=True, encoding='utf-8')

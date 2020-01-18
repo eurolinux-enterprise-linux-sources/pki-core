@@ -39,8 +39,6 @@ import com.netscape.certsrv.request.RequestStatus;
 import com.netscape.cmscore.util.Debug;
 import com.netscape.cmsutil.http.JssSSLSocketFactory;
 
-import org.dogtagpki.server.PKIClientSocketListener;
-
 /**
  * Resend requests at intervals to the server to check if it's been completed.
  * Default interval is 5 minutes.
@@ -129,11 +127,7 @@ public class Resender implements IResender {
 
         if (! connected) {
             CMS.debug("Connecting ...");
-            PKIClientSocketListener sockListener = new PKIClientSocketListener();
-            JssSSLSocketFactory factory = new JssSSLSocketFactory(mNickName, mClientCiphers);
-            factory.addSocketListener(sockListener);
-
-            mConn = new HttpConnection(mDest, factory);
+            mConn = new HttpConnection(mDest, new JssSSLSocketFactory(mNickName, mClientCiphers));
             initRequests();
             connected = true;
         }

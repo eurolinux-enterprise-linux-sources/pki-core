@@ -224,16 +224,14 @@ class PKCS12ImportCLI(pki.cli.CLI):
                     cert_id = cert_info['id']
                     nickname = cert_info['nickname']
 
-                    cert = nssdb.get_cert(
-                        nickname=nickname)
+                    cert = nssdb.get_cert(nickname)
 
                     if cert:
                         if not overwrite:
                             print('WARNING: cert %s already exists' % nickname)
                             continue
 
-                        nssdb.remove_cert(
-                            nickname=nickname)
+                        nssdb.remove_cert(nickname)
 
                     if 'trust_flags' in cert_info:
                         trust_flags = cert_info['trust_flags']
@@ -270,10 +268,7 @@ class PKCS12ImportCLI(pki.cli.CLI):
                     if main_cli.verbose:
                         print('Importing %s' % nickname)
 
-                    nssdb.add_cert(
-                        nickname=nickname,
-                        cert_file=cert_file,
-                        trust_attributes=trust_flags)
+                    nssdb.add_cert(nickname, cert_file, trust_flags)
 
             finally:
                 shutil.rmtree(tmpdir)

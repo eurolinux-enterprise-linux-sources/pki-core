@@ -54,6 +54,34 @@ import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.Response;
 import javax.xml.parsers.ParserConfigurationException;
 
+import netscape.ldap.LDAPAttribute;
+import netscape.ldap.LDAPAttributeSet;
+import netscape.ldap.LDAPConnection;
+import netscape.ldap.LDAPDN;
+import netscape.ldap.LDAPEntry;
+import netscape.ldap.LDAPException;
+import netscape.ldap.LDAPModification;
+import netscape.ldap.LDAPSearchConstraints;
+import netscape.ldap.LDAPSearchResults;
+import netscape.ldap.LDAPv3;
+import netscape.security.pkcs.ContentInfo;
+import netscape.security.pkcs.PKCS10;
+import netscape.security.pkcs.PKCS12;
+import netscape.security.pkcs.PKCS12Util;
+import netscape.security.pkcs.PKCS7;
+import netscape.security.pkcs.SignerInfo;
+import netscape.security.util.DerOutputStream;
+import netscape.security.util.ObjectIdentifier;
+import netscape.security.x509.AlgorithmId;
+import netscape.security.x509.BasicConstraintsExtension;
+import netscape.security.x509.CertificateChain;
+import netscape.security.x509.Extension;
+import netscape.security.x509.Extensions;
+import netscape.security.x509.KeyUsageExtension;
+import netscape.security.x509.X500Name;
+import netscape.security.x509.X509CertImpl;
+import netscape.security.x509.X509Key;
+
 import org.apache.commons.lang.StringUtils;
 import org.apache.velocity.context.Context;
 import org.mozilla.jss.CryptoManager;
@@ -2025,7 +2053,7 @@ public class ConfigurationUtils {
             }
 
             String status = replicationStatus(replicadn, masterConn, masterAgreementName);
-            if (!(status.startsWith("Error (0) ") || status.startsWith("0 "))) {
+            if (!status.startsWith("0 ")) {
                 CMS.debug("setupReplication: consumer initialization failed. " + status);
                 throw new IOException("consumer initialization failed. " + status);
             }
@@ -2958,9 +2986,14 @@ public class ConfigurationUtils {
 
         CMS.debug("ConfigurationUtils.loadCertRequest(" + tag + ")");
 
-        // the CSR must exist in the second step of external CA scenario
-        String certreq = config.getString(subsystem + "." + tag + ".certreq");
-        return CryptoUtil.base64Decode(certreq);
+        try {
+            String certreq = config.getString(subsystem + "." + tag + ".certreq");
+            return CryptoUtil.base64Decode(certreq);
+
+        } catch (EPropertyNotFound e) {
+            // The CSR is optional for existing CA case.
+            return null;
+        }
     }
 
     public static void generateCertRequest(IConfigStore config, String certTag, Cert cert) throws Exception {

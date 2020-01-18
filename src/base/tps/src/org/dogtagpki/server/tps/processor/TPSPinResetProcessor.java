@@ -33,7 +33,7 @@ import org.dogtagpki.tps.msg.BeginOpMsg;
 import org.dogtagpki.tps.msg.EndOpMsg.TPSStatus;
 
 import com.netscape.certsrv.apps.CMS;
-import com.netscape.certsrv.logging.event.TokenPinResetEvent;
+import com.netscape.certsrv.logging.AuditEvent;
 import com.netscape.certsrv.tps.token.TokenStatus;
 
 public class TPSPinResetProcessor extends TPSProcessor {
@@ -92,8 +92,7 @@ public class TPSPinResetProcessor extends TPSProcessor {
         if (tokenRecord == null) {
             //We can't reset the pin of a token that does not exist.
             logMsg = method + "Token does not exist!";
-            auditPinResetFailure(session.getIpAddress(), userid, appletInfo, logMsg);
-
+            auditPinReset(session.getIpAddress(), userid, appletInfo, "failure", null, logMsg);
             tps.tdb.tdbActivity(ActivityDatabase.OP_PIN_RESET, tokenRecord, session.getIpAddress(), logMsg,
                     "failure");
             CMS.debug(logMsg);
@@ -124,8 +123,7 @@ public class TPSPinResetProcessor extends TPSProcessor {
             }
         } catch (TPSException e) {
             logMsg = e.toString();
-            auditPinResetFailure(session.getIpAddress(), userid, appletInfo, logMsg);
-
+            auditPinReset(session.getIpAddress(), userid, appletInfo, "failure", null, logMsg);
             tps.tdb.tdbActivity(ActivityDatabase.OP_PIN_RESET, tokenRecord, session.getIpAddress(), logMsg,
                     "failure");
 
@@ -144,8 +142,7 @@ public class TPSPinResetProcessor extends TPSProcessor {
 
         if (!status.equals(TokenStatus.ACTIVE)) {
             logMsg = method + "Can not reset the pin of a non active token.";
-            auditPinResetFailure(session.getIpAddress(), userid, appletInfo, logMsg);
-
+            auditPinReset(session.getIpAddress(), userid, appletInfo, "failure", null, logMsg);
             throw new TPSException(method + " Attempt to reset pin of token not currently active!",
                     TPSStatus.STATUS_ERROR_MAC_RESET_PIN_PDU);
 
@@ -156,8 +153,7 @@ public class TPSPinResetProcessor extends TPSProcessor {
         CMS.debug(method + ": PinResetPolicy: Pin Reset Allowed:  " + pinResetAllowed);
         logMsg = method + " PinReset Policy forbids pin reset operation.";
         if (pinResetAllowed == false) {
-            auditPinResetFailure(session.getIpAddress(), userid, appletInfo, logMsg);
-
+            auditPinReset(session.getIpAddress(), userid, appletInfo, "failure", null, logMsg);
             throw new TPSException(method + " Attempt to reset pin when token policy disallows it.!",
                     TPSStatus.STATUS_ERROR_MAC_RESET_PIN_PDU);
 
@@ -173,8 +169,8 @@ public class TPSPinResetProcessor extends TPSProcessor {
 
         checkAndHandlePinReset(channel);
 
-        auditPinResetSuccess(session.getIpAddress(), userid, appletInfo,
-                channel.getKeyInfoData().toHexStringPlain());
+        auditPinReset(session.getIpAddress(), userid, appletInfo, "success",
+                channel.getKeyInfoData().toHexStringPlain(), null);
 
         statusUpdate(100, "PROGRESS_PIN_RESET_COMPLETE");
         logMsg = "update token during pin reset";
@@ -193,34 +189,31 @@ public class TPSPinResetProcessor extends TPSProcessor {
 
     }
 
-    protected void auditPinResetSuccess(String ip, String subjectID,
+    protected void auditPinReset(String ip, String subjectID,
             AppletInfo aInfo,
-            String keyVersion) {
-
-        TokenPinResetEvent event = TokenPinResetEvent.success(
-                ip,
-                subjectID,
-                (aInfo != null) ? aInfo.getCUIDhexStringPlain() : null,
-                getSelectedTokenType(),
-                (aInfo != null) ? aInfo.getFinalAppletVersion() : null,
-                keyVersion);
-
-        signedAuditLogger.log(event);
-    }
-
-    protected void auditPinResetFailure(String ip, String subjectID,
-            AppletInfo aInfo,
+            String status,
+            String keyVersion,
             String info) {
 
-        TokenPinResetEvent event = TokenPinResetEvent.failure(
+        String auditType = "";
+        switch (status) {
+        case "success":
+            auditType = AuditEvent.TOKEN_PIN_RESET_SUCCESS;
+            break;
+        default:
+            auditType = AuditEvent.TOKEN_PIN_RESET_FAILURE;
+        }
+
+        String auditMessage = CMS.getLogMessage(
+                auditType,
                 ip,
                 subjectID,
                 (aInfo != null) ? aInfo.getCUIDhexStringPlain() : null,
+                status,
                 getSelectedTokenType(),
-                (aInfo != null) ? aInfo.getFinalAppletVersion() : null,
+                keyVersion,
                 info);
-
-        signedAuditLogger.log(event);
+        audit(auditMessage);
     }
 
     public static void main(String[] args) {

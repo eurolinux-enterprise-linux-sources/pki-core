@@ -33,9 +33,6 @@ public class Cert {
     public static final String HEADER = "-----BEGIN CERTIFICATE-----";
     public static final String FOOTER = "-----END CERTIFICATE-----";
 
-    public static final String PKCS7_HEADER = "-----BEGIN PKCS7-----";
-    public static final String PKCS7_FOOTER = "-----END PKCS7-----";
-
     // From https://www.rfc-editor.org/rfc/rfc7468.txt
     public static final String REQUEST_HEADER = "-----BEGIN CERTIFICATE REQUEST-----";
     public static final String REQUEST_FOOTER = "-----END CERTIFICATE REQUEST-----";
@@ -71,12 +68,9 @@ public class Cert {
             return s;
         }
 
-        if (s.startsWith(HEADER) && s.endsWith(FOOTER)) {
-            return s.substring(HEADER.length(), s.length() - FOOTER.length());
-        }
-
-        if (s.startsWith(PKCS7_HEADER) && s.endsWith(PKCS7_FOOTER)) {
-            return s.substring(PKCS7_HEADER.length(), s.length() - PKCS7_FOOTER.length());
+        if ((s.startsWith(HEADER)) &&
+                (s.endsWith(FOOTER))) {
+            return (s.substring(27, (s.length() - 25)));
         }
 
         // To support Thawte's header and footer

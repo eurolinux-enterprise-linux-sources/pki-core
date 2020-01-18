@@ -55,7 +55,6 @@ import com.netscape.certsrv.logging.AuditResource;
 import com.netscape.certsrv.logging.ILogger;
 import com.netscape.certsrv.logging.event.ConfigSignedAuditEvent;
 import com.netscape.cms.servlet.base.SubsystemService;
-import com.netscape.cmscore.logging.LogSubsystem;
 
 /**
  * @author Endi S. Dewata
@@ -102,14 +101,15 @@ public class AuditService extends SubsystemService implements AuditResource {
 
         Map<String, String> eventConfigs = new TreeMap<String, String>();
 
-        LogSubsystem logSubsystem = (LogSubsystem) CMS.getSubsystem(LogSubsystem.ID);
-
-        // load all audit events as disabled initially
-        for (String name : logSubsystem.getAuditEvents()) {
-            eventConfigs.put(name, "disabled");
+        // unselected optional events
+        val = cs.getString("log.instance.SignedAudit.unselected.events", "");
+        if (auditParams != null)
+            auditParams.put("unselected.events", val);
+        for (String event : StringUtils.split(val, ", ")) {
+            eventConfigs.put(event.trim(), "disabled");
         }
 
-        // overwrite with enabled events
+        // selected optional events
         val = cs.getString("log.instance.SignedAudit.events", "");
         if (auditParams != null)
             auditParams.put("events", val);
@@ -117,7 +117,7 @@ public class AuditService extends SubsystemService implements AuditResource {
             eventConfigs.put(event.trim(), "enabled");
         }
 
-        // overwrite with mandatory events
+        // always selected mandatory events
         val = cs.getString("log.instance.SignedAudit.mandatory.events", "");
         if (auditParams != null)
             auditParams.put("mandatory.events", val);
@@ -187,6 +187,7 @@ public class AuditService extends SubsystemService implements AuditResource {
                 // update events if specified
 
                 Collection<String> selected = new TreeSet<String>();
+                Collection<String> unselected = new TreeSet<String>();
 
                 for (Map.Entry<String, String> entry : eventConfigs.entrySet()) {
                     String name = entry.getKey();
@@ -223,6 +224,9 @@ public class AuditService extends SubsystemService implements AuditResource {
                     if ("enabled".equals(value)) {
                         selected.add(name);
 
+                    } else if ("disabled".equals(value)) {
+                        unselected.add(name);
+
                     } else {
                         PKIException e = new PKIException("Invalid event configuration: " + name + "=" + value);
                         auditModParams.put("Info", e.toString());
@@ -232,6 +236,7 @@ public class AuditService extends SubsystemService implements AuditResource {
                 }
 
                 cs.putString("log.instance.SignedAudit.events", StringUtils.join(selected, ","));
+                cs.putString("log.instance.SignedAudit.unselected.events", StringUtils.join(unselected, ","));
             }
 
             for (String name : currentEventConfigs.keySet()) {

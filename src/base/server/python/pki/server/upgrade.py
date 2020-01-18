@@ -20,7 +20,6 @@
 
 from __future__ import absolute_import
 from __future__ import print_function
-import logging
 import os
 import traceback
 
@@ -35,8 +34,6 @@ BACKUP_DIR = pki.LOG_DIR + '/server/upgrade'
 
 INSTANCE_TRACKER = '%s/tomcat.conf'
 SUBSYSTEM_TRACKER = '%s/CS.cfg'
-
-logger = logging.getLogger(__name__)
 
 
 class PKIServerUpgradeScriptlet(pki.upgrade.PKIUpgradeScriptlet):
@@ -68,10 +65,7 @@ class PKIServerUpgradeScriptlet(pki.upgrade.PKIUpgradeScriptlet):
             tracker.set_version(self.version.next)
 
     def upgrade(self):
-
         for instance in self.upgrader.instances():
-
-            logger.info('Upgrading %s instance', instance.name)
 
             self.upgrade_subsystems(instance)
 
@@ -87,7 +81,6 @@ class PKIServerUpgradeScriptlet(pki.upgrade.PKIUpgradeScriptlet):
             try:
                 if verbose:
                     print('Upgrading ' + str(instance) + ' instance.')
-
                 self.upgrade_instance(instance)
                 self.update_server_tracker(instance)
 
@@ -113,10 +106,7 @@ class PKIServerUpgradeScriptlet(pki.upgrade.PKIUpgradeScriptlet):
                     'Upgrade failed in %s: %s' % (instance, e), e, instance)
 
     def upgrade_subsystems(self, instance):
-
         for subsystem in self.upgrader.subsystems(instance):
-
-            logger.info('Upgrading %s subsystem', subsystem.name)
 
             if not self.can_upgrade_server(instance, subsystem):
                 if verbose:

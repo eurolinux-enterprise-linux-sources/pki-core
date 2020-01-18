@@ -85,12 +85,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
 
         return (key_type, key_size, curve, hash_alg)
 
-    def generate_csr(self,
-                     deployer,
-                     nssdb,
-                     subsystem,
-                     tag,
-                     csr_path,
+    def generate_csr(self, deployer, nssdb, subsystem, tag, csr_path,
                      basic_constraints_ext=None,
                      key_usage_ext=None,
                      extended_key_usage_ext=None,
@@ -102,9 +97,6 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
             "generating %s CSR in %s", cert_id, csr_path,
             extra=config.PKI_INDENTATION_LEVEL_2)
 
-        cert = subsystem.get_subsystem_cert(tag)
-        token = pki.nssdb.normalize_token(cert['token'])
-
         subject_dn = deployer.mdict['pki_%s_subject_dn' % cert_id]
 
         (key_type, key_size, curve, hash_alg) = self.get_key_params(
@@ -113,7 +105,6 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
         nssdb.create_request(
             subject_dn=subject_dn,
             request_file=csr_path,
-            token=token,
             key_type=key_type,
             key_size=key_size,
             curve=curve,
@@ -167,11 +158,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
             generic_exts = [generic_ext]
 
         self.generate_csr(
-            deployer,
-            nssdb,
-            subsystem,
-            'signing',
-            csr_path,
+            deployer, nssdb, subsystem, 'signing', csr_path,
             basic_constraints_ext=basic_constraints_ext,
             key_usage_ext=key_usage_ext,
             generic_exts=generic_exts
@@ -381,7 +368,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
             csr_data = f.read()
 
         b64_csr = pki.nssdb.convert_csr(csr_data, 'pem', 'base64')
-        subsystem.config['%s.%s.certreq' % (subsystem.name, tag)] = b64_csr
+        subsystem.config['ca.%s.certreq' % tag] = b64_csr
 
     def import_ca_signing_csr(self, deployer, subsystem):
 
@@ -404,28 +391,19 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
         if subsystem.name == 'ca':
             self.import_ca_signing_csr(deployer, subsystem)
             self.import_system_cert_request(deployer, subsystem, 'ocsp_signing')
+            self.import_system_cert_request(deployer, subsystem, 'audit_signing')
+            self.import_system_cert_request(deployer, subsystem, 'subsystem')
+            self.import_system_cert_request(deployer, subsystem, 'sslserver')
 
-        if subsystem.name == 'kra':
-            self.import_system_cert_request(deployer, subsystem, 'storage')
-            self.import_system_cert_request(deployer, subsystem, 'transport')
-
-        if subsystem.name == 'ocsp':
-            self.import_system_cert_request(deployer, subsystem, 'signing')
-
-        self.import_system_cert_request(deployer, subsystem, 'audit_signing')
-        self.import_system_cert_request(deployer, subsystem, 'subsystem')
-        self.import_system_cert_request(deployer, subsystem, 'sslserver')
-
-    def import_ca_signing_cert(self, deployer, nssdb):
+    def import_ca_signing_cert(self, deployer, nssdb, subsystem):
 
         param = 'pki_ca_signing_cert_path'
         cert_file = deployer.mdict.get(param)
-
-        if not cert_file:
-            return
-
-        if not os.path.exists(cert_file):
-            raise Exception('Invalid certificate path: %s=%s' % (param, cert_file))
+        if not cert_file or not os.path.exists(cert_file):
+            if subsystem.name == 'ca':
+                raise Exception('Invalid certificate path: %s=%s' % (param, cert_file))
+            else:
+                return
 
         nickname = deployer.mdict['pki_ca_signing_nickname']
 
@@ -615,14 +593,14 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
     def import_system_certs(self, deployer, nssdb, subsystem):
 
         if subsystem.name == 'ca':
-            self.import_ca_signing_cert(deployer, nssdb)
+            self.import_ca_signing_cert(deployer, nssdb, subsystem)
             self.import_ca_ocsp_signing_cert(deployer, nssdb)
 
         if subsystem.name == 'kra':
             # Always import cert chain into internal token.
             internal_nssdb = subsystem.instance.open_nssdb()
             try:
-                self.import_ca_signing_cert(deployer, internal_nssdb)
+                self.import_ca_signing_cert(deployer, internal_nssdb, subsystem)
             finally:
                 internal_nssdb.close()
 
@@ -634,7 +612,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
             # Always import cert chain into internal token.
             internal_nssdb = subsystem.instance.open_nssdb()
             try:
-                self.import_ca_signing_cert(deployer, internal_nssdb)
+                self.import_ca_signing_cert(deployer, internal_nssdb, subsystem)
             finally:
                 internal_nssdb.close()
 
@@ -807,8 +785,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
 
         cert_id = self.get_cert_id(subsystem, tag)
         nickname = deployer.mdict['pki_%s_nickname' % cert_id]
-        cert_data = nssdb.get_cert(
-            nickname=nickname)
+        cert_data = nssdb.get_cert(nickname)
 
         if not cert_data:
             return
@@ -850,8 +827,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
                 "checking existing SSL server cert: %s", nickname,
                 extra=config.PKI_INDENTATION_LEVEL_2)
 
-            pem_cert = nssdb.get_cert(
-                nickname=nickname)
+            pem_cert = nssdb.get_cert(nickname)
 
             if pem_cert:
                 cert = x509.load_pem_x509_certificate(pem_cert, default_backend())
@@ -880,7 +856,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
 
             deployer.password.create_password_conf(
                 deployer.mdict['pki_shared_pfile'],
-                deployer.mdict['pki_server_database_password'], pin_sans_token=True)
+                deployer.mdict['pki_pin'], pin_sans_token=True)
 
             # only create a self signed cert for a new instance
             #
@@ -899,7 +875,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
                 f.write("not_so_random_data")
 
             deployer.certutil.generate_self_signed_certificate(
-                deployer.mdict['pki_server_database_path'],
+                deployer.mdict['pki_database_path'],
                 deployer.mdict['pki_cert_database'],
                 deployer.mdict['pki_key_database'],
                 deployer.mdict['pki_secmod_database'],
@@ -951,8 +927,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
                 remove_key = False
             else:
                 remove_key = True
-            nssdb.remove_cert(nickname=nickname,
-                              remove_key=remove_key)
+            nssdb.remove_cert(nickname, remove_key=remove_key)
 
         finally:
             nssdb.close()
@@ -976,9 +951,7 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
             with open(cert_file, 'w') as f:
                 f.write(pem_cert)
 
-            nssdb.add_cert(
-                nickname=nickname,
-                cert_file=cert_file)
+            nssdb.add_cert(nickname, cert_file)
 
         finally:
             nssdb.close()
@@ -1300,4 +1273,9 @@ class PkiScriptlet(pkiscriptlet.AbstractBasePkiScriptlet):
             raise RuntimeError("server failed to restart")
 
     def destroy(self, deployer):
-        pass
+
+        config.pki_log.info(log.CONFIGURATION_DESTROY_1, __name__,
+                            extra=config.PKI_INDENTATION_LEVEL_1)
+        if len(deployer.instance.tomcat_instance_subsystems()) == 1:
+            if deployer.directory.exists(deployer.mdict['pki_client_dir']):
+                deployer.directory.delete(deployer.mdict['pki_client_dir'])

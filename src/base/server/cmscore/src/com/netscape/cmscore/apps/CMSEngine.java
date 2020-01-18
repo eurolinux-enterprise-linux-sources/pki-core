@@ -1471,37 +1471,21 @@ public class CMSEngine implements ICMSEngine {
         return getUserMessage(locale, msgID, params);
     }
 
-    public String getLogMessage(String msgID, Object[] params) {
-
-        String bundleName;
-
-        // check whether requested message is an audit event
-        if (msgID.startsWith("LOGGING_SIGNED_AUDIT_")) {
-            // get audit event from audit-events.properties
-            bundleName = "audit-events";
-        } else {
-            // get log message from LogMessages.properties
-            bundleName = "LogMessages";
-        }
-
-        ResourceBundle rb = ResourceBundle.getBundle(bundleName);
+    public String getLogMessage(String msgID, Object params[]) {
+        ResourceBundle rb = ResourceBundle.getBundle(
+                "LogMessages");
         String msg = rb.getString(msgID);
 
-        if (params == null) {
+        if (params == null)
             return msg;
-        }
-
         MessageFormat mf = new MessageFormat(msg);
 
         Object escapedParams[] = new Object[params.length];
         for (int i = 0; i < params.length; i++) {
-            Object param = params[i];
-
-            if (param instanceof String) {
-                escapedParams[i] = escapeLogMessageParam((String) param);
-            } else {
-                escapedParams[i] = param;
-            }
+            if (params[i] instanceof String)
+                escapedParams[i] = escapeLogMessageParam((String) params[i]);
+            else
+                escapedParams[i] = params[i];
         }
 
         return mf.format(escapedParams);
@@ -1571,6 +1555,74 @@ public class CMSEngine implements ICMSEngine {
 
     public void traceHashKey(String type, String key, String val, String def) {
         Debug.traceHashKey(type, key, val, def);
+    }
+
+    public String getLogMessage(String msgID) {
+        return getLogMessage(msgID, (String[]) null);
+    }
+
+    public String getLogMessage(String msgID, String p1) {
+        String params[] = { p1 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2) {
+        String params[] = { p1, p2 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3) {
+        String params[] = { p1, p2, p3 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4) {
+        String params[] = { p1, p2, p3, p4 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5) {
+        String params[] = { p1, p2, p3, p4, p5 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6) {
+        String params[] = { p1, p2, p3, p4, p5, p6 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7) {
+        String params[] = { p1, p2, p3, p4, p5, p6, p7 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7, String p8) {
+        String params[] = { p1, p2, p3, p4, p5, p6, p7, p8 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7, String p8, String p9) {
+        String params[] = { p1, p2, p3, p4, p5, p6, p7, p8, p9 };
+
+        return getLogMessage(msgID, params);
+    }
+
+    public String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7, String p8, String p9, String p10) {
+        String params[] = { p1, p2, p3, p4, p5, p6, p7, p8, p9, p10 };
+
+        return getLogMessage(msgID, params);
     }
 
     public void getSubjAltNameConfigDefaultParams(String name,
@@ -1659,7 +1711,7 @@ public class CMSEngine implements ICMSEngine {
     }
 
     public void verifySystemCerts() throws Exception {
-        CertUtils.verifySystemCerts(false);
+        CertUtils.verifySystemCerts();
     }
 
     public void verifySystemCertByTag(String tag) throws Exception {
@@ -1988,30 +2040,6 @@ public class CMSEngine implements ICMSEngine {
 
         shutdownHttpServer(restart);
 
-    }
-
-    public void disableSubsystem() {
-
-        String name = mConfig.get("cs.type");
-        String subsystemID = name.toLowerCase();
-
-        CMS.debug("CMSEngine: Disabling " + name + " subsystem");
-
-        try {
-            ProcessBuilder pb = new ProcessBuilder("pki-server", "subsystem-disable", "-i", instanceId, subsystemID);
-            CMS.debug("Command: " + String.join(" ", pb.command()));
-
-            Process process = pb.inheritIO().start();
-            int rc = process.waitFor();
-
-            if (rc != 0) {
-                CMS.debug("CMSEngine: Unable to disable " + name + " subsystem. RC: " + rc);
-            }
-
-        } catch (Exception e) {
-            CMS.debug("CMSEngine: Unable to disable " + name + " subsystem: " + e.getMessage());
-            CMS.debug(e);
-        }
     }
 
     /**

@@ -28,6 +28,7 @@ package com.netscape.cms.authentication;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.security.cert.X509Certificate;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.security.PublicKey;
@@ -82,7 +83,6 @@ import com.netscape.certsrv.base.EBaseException;
 import com.netscape.certsrv.base.IConfigStore;
 import com.netscape.certsrv.base.IExtendedPluginInfo;
 import com.netscape.certsrv.base.SessionContext;
-import com.netscape.certsrv.ca.ICertificateAuthority;
 import com.netscape.certsrv.logging.ILogger;
 import com.netscape.certsrv.logging.event.CMCUserSignedRequestSigVerifyEvent;
 import com.netscape.certsrv.profile.EProfileException;
@@ -497,27 +497,13 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
                                     // to CMCOutputTemplate so that we can
                                     // have a chance to capture user identification info
                                     if (issuerANY != null) {
-                                        // get CA signing cert
-                                        ICertificateAuthority ca = null;
-                                        ca = (ICertificateAuthority) CMS.getSubsystem("ca");
-                                        X500Name caName = ca.getX500Name();
-
                                         try {
                                             byte[] issuerBytes = issuerANY.getEncoded();
-                                            X500Name reqIssuerName = new X500Name(issuerBytes);
-                                            String reqIssuerNameStr = reqIssuerName.getName();
-                                            CMS.debug(method + "revRequest issuer name = " + reqIssuerNameStr);
-                                            if (reqIssuerNameStr.equalsIgnoreCase(caName.getName())) {
-                                                // making sure it's identical, even in encoding
-                                                reqIssuerName = caName;
-                                            } else {
-                                                // not this CA; will be bumped off later;
-                                                // make a note in debug anyway
-                                                CMS.debug(method + "revRequest issuer name doesn't match our CA; will be bumped off later;");
-                                            }
+                                            X500Name issuerName = new X500Name(issuerBytes);
+                                            CMS.debug(method + "revRequest issuer name = " + issuerName.toString());
                                             // capture issuer principal to be checked against
                                             // cert issuer principal later in CMCOutputTemplate
-                                            auditContext.put(SessionContext.CMC_ISSUER_PRINCIPAL, reqIssuerName);
+                                            auditContext.put(SessionContext.CMC_ISSUER_PRINCIPAL, issuerName);
                                         } catch (Exception e) {
                                             CMS.debug(method + "failed getting issuer from RevokeRequest:" + e.toString());
                                         }
@@ -688,6 +674,7 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
                                     if (requestCertSubject.equals("")) {
                                         requestCertSubject = ILogger.SIGNED_AUDIT_EMPTY_VALUE;
                                     }
+
                                     authToken.set(AuthToken.TOKEN_CERT_SUBJECT, ss);
                                     auditContext.put(SessionContext.CMC_REQUEST_CERT_SUBJECT, requestCertSubject);
                                     //authToken.set("uid", uid);
@@ -1173,9 +1160,8 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
 
                         IAuthToken tempToken = new AuthToken(null);
                         netscape.security.x509.X500Name tempPrincipal = (X500Name) x509Certs[0].getSubjectDN();
-                        String ID = tempPrincipal.getName(); //tempToken.get("userid");
+                        String ID = tempPrincipal.toString(); //tempToken.get("userid");
                         CMS.debug(method + " Principal name = " + ID);
-                        authToken.set(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT, ID);
 
                         BigInteger certSerial = x509Certs[0].getSerialNumber();
                         CMS.debug(method + " verified cert serial=" + certSerial.toString());
@@ -1290,16 +1276,8 @@ public class CMCUserSignedAuth implements IAuthManager, IExtendedPluginInfo,
 
     public void populate(IAuthToken token, IRequest request)
             throws EProfileException {
-        String method = "CMCUserSignedAuth: populate: ";
-        String authenticatedDN = token.getInString(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT);
-        if (authenticatedDN != null) {
-            request.setExtData(IProfileAuthenticator.AUTHENTICATED_NAME,
-                    authenticatedDN);
-            CMS.debug(method + "IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT is: "+
-                    authenticatedDN);
-        } else {
-            CMS.debug(method + "AuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT is null; self-signed?");
-        }
+        request.setExtData(IProfileAuthenticator.AUTHENTICATED_NAME,
+                token.getInString(AuthToken.TOKEN_CERT_SUBJECT));
     }
 
     public boolean isSSLClientRequired() {

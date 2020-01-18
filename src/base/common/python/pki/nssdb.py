@@ -25,7 +25,6 @@ import base64
 import logging
 import os
 import shutil
-import stat
 import subprocess
 import tempfile
 import datetime
@@ -33,18 +32,10 @@ import datetime
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
-try:
-    import selinux
-except ImportError:
-    selinux = None
-
 import pki
 
-CSR_HEADER = '-----BEGIN CERTIFICATE REQUEST-----'
-CSR_FOOTER = '-----END CERTIFICATE REQUEST-----'
-
-LEGACY_CSR_HEADER = '-----BEGIN NEW CERTIFICATE REQUEST-----'
-LEGACY_CSR_FOOTER = '-----END NEW CERTIFICATE REQUEST-----'
+CSR_HEADER = '-----BEGIN NEW CERTIFICATE REQUEST-----'
+CSR_FOOTER = '-----END NEW CERTIFICATE REQUEST-----'
 
 CERT_HEADER = '-----BEGIN CERTIFICATE-----'
 CERT_FOOTER = '-----END CERTIFICATE-----'
@@ -60,18 +51,10 @@ logger = logging.LoggerAdapter(
     extra={'indent': ''})
 
 
-def convert_data(data, input_format, output_format,
-                 header=None, footer=None,
-                 headers=None, footers=None):
-    '''
-    This method converts a PEM file to base-64 and vice versa.
-    It supports CSR, certificate, and PKCS #7 certificate chain.
-    '''
-
+def convert_data(data, input_format, output_format, header=None, footer=None):
     if input_format == output_format:
         return data
 
-    # converting from base-64 to PEM
     if input_format == 'base64' and output_format == 'pem':
 
         # join base-64 data into a single line
@@ -83,30 +66,16 @@ def convert_data(data, input_format, output_format,
         # add header and footer
         return '%s\n%s\n%s\n' % (header, '\n'.join(lines), footer)
 
-    # converting from PEM to base-64
     if input_format == 'pem' and output_format == 'base64':
-
-        # initialize list of headers if not provided
-        if not headers:
-            headers = [header]
-
-        # initialize list of footers if not provided
-        if not footers:
-            footers = [footer]
 
         # join multiple lines into a single line
         lines = []
         for line in data.splitlines():
             line = line.rstrip('\r\n')
-
-            # if the line is a header, skip
-            if line in headers:
+            if line == header:
                 continue
-
-            # if the line is a footer, skip
-            if line in footers:
+            if line == footer:
                 continue
-
             lines.append(line)
 
         return ''.join(lines)
@@ -117,9 +86,7 @@ def convert_data(data, input_format, output_format,
 
 def convert_csr(csr_data, input_format, output_format):
     return convert_data(csr_data, input_format, output_format,
-                        CSR_HEADER, CSR_FOOTER,
-                        headers=[CSR_HEADER, LEGACY_CSR_HEADER],
-                        footers=[CSR_FOOTER, LEGACY_CSR_FOOTER])
+                        CSR_HEADER, CSR_FOOTER)
 
 
 def convert_cert(cert_data, input_format, output_format):
@@ -133,15 +100,10 @@ def convert_pkcs7(pkcs7_data, input_format, output_format):
 
 
 def get_file_type(filename):
-    '''
-    This method detects the content of a PEM file. It supports
-    CSR, certificate, PKCS #7 certificate chain.
-    '''
-
     with open(filename, 'r') as f:
         data = f.read()
 
-    if data.startswith(CSR_HEADER) or data.startswith(LEGACY_CSR_HEADER):
+    if data.startswith(CSR_HEADER):
         return 'csr'
 
     if data.startswith(CERT_HEADER):
@@ -173,11 +135,8 @@ def normalize_token(token):
 
 class NSSDatabase(object):
 
-    def __init__(self, directory=None,
-                 token=None,
-                 password=None,
-                 password_file=None,
-                 internal_password=None,
+    def __init__(self, directory=None, token=None, password=None,
+                 password_file=None, internal_password=None,
                  internal_password_file=None):
 
         if not directory:
@@ -190,24 +149,25 @@ class NSSDatabase(object):
         self.tmpdir = tempfile.mkdtemp()
 
         if password:
-            # if token password is provided, store it in a temp file
-            self.password_file = self.create_password_file(
-                self.tmpdir, password)
+            self.password_file = os.path.join(self.tmpdir, 'password.txt')
+            with open(self.password_file, 'w') as f:
+                f.write(password)
 
         elif password_file:
-            # if token password file is provided, use the file
             self.password_file = password_file
 
         else:
             self.password_file = None
 
         if internal_password:
-            # if internal password is provided, store it in a temp file
-            self.internal_password_file = self.create_password_file(
-                self.tmpdir, internal_password, 'internal_password.txt')
+            # Store the specified internal token into password file.
+            self.internal_password_file = os.path.join(
+                self.tmpdir, 'internal_password.txt')
+            with open(self.internal_password_file, 'w') as f:
+                f.write(internal_password)
 
         elif internal_password_file:
-            # if internal password file is provided, use the file
+            # Use the specified internal token password file.
             self.internal_password_file = internal_password_file
 
         else:
@@ -217,158 +177,45 @@ class NSSDatabase(object):
     def close(self):
         shutil.rmtree(self.tmpdir)
 
-    def get_effective_token(self, token=None):
-        if not normalize_token(token):
-            return self.token
-        return token
+    def add_cert(self, nickname, cert_file, trust_attributes=',,'):
 
-    def create_password_file(self, tmpdir, password, filename=None):
-        if not filename:
-            filename = 'password.txt'
-        password_file = os.path.join(tmpdir, filename)
-        with open(password_file, 'w') as f:
-            f.write(password)
-        return password_file
+        # Add cert in two steps due to bug #1393668.
 
-    def get_dbtype(self):
-        def dbexists(filename):
-            return os.path.isfile(os.path.join(self.directory, filename))
+        # If HSM is used, import cert into HSM without trust attributes.
+        if self.token:
+            cmd = [
+                'certutil',
+                '-A',
+                '-d', self.directory,
+                '-h', self.token,
+                '-P', self.token,
+                '-f', self.password_file,
+                '-n', nickname,
+                '-i', cert_file,
+                '-t', ''
+            ]
 
-        if dbexists('cert9.db'):
-            if not dbexists('key4.db') or not dbexists('pkcs11.txt'):
-                raise RuntimeError(
-                    "{} contains an incomplete NSS database in SQL "
-                    "format".format(self.directory)
-                )
-            return 'sql'
-        elif dbexists('cert8.db'):
-            if not dbexists('key3.db') or not dbexists('secmod.db'):
-                raise RuntimeError(
-                    "{} contains an incomplete NSS database in DBM "
-                    "format".format(self.directory)
-                )
-            return 'dbm'
-        else:
-            return None
+            logger.debug('Command: %s', ' '.join(cmd))
+            rc = subprocess.call(cmd)
 
-    def needs_conversion(self):
-        # Only attempt to convert if target format is SQL and DB is DBM
-        dest_dbtype = os.environ.get('NSS_DEFAULT_DB_TYPE')
-        return dest_dbtype == 'sql' and self.get_dbtype() == 'dbm'
+            if rc:
+                logger.warning('certutil returned non-zero exit code (bug #1393668)')
 
-    def convert_db(self):
-        dbtype = self.get_dbtype()
-        if dbtype is None:
-            raise ValueError(
-                "NSS database {} does not exist".format(self.directory)
-            )
-        elif dbtype == 'sql':
-            raise ValueError(
-                "NSS database {} already in SQL format".format(self.directory)
-            )
+        # If HSM is not used, or cert has trust attributes,
+        # import cert into internal token.
+        if not self.token or trust_attributes != ',,':
+            cmd = [
+                'certutil',
+                '-A',
+                '-d', self.directory,
+                '-f', self.internal_password_file,
+                '-n', nickname,
+                '-i', cert_file,
+                '-t', trust_attributes
+            ]
 
-        logger.info(
-            "Convert NSSDB %s from DBM to SQL format", self.directory
-        )
-
-        basecmd = [
-            'certutil',
-            '-d', 'sql:{}'.format(self.directory),
-            '-f', self.password_file,
-        ]
-        # See https://fedoraproject.org/wiki/Changes/NSSDefaultFileFormatSql
-        cmd = basecmd + [
-            '-N',
-            '-@', self.password_file
-        ]
-
-        logger.debug('Command: %s', ' '.join(cmd))
-        subprocess.check_call(cmd)
-
-        migration = (
-            ('cert8.db', 'cert9.db'),
-            ('key3.db', 'key4.db'),
-            ('secmod.db', 'pkcs11.txt'),
-        )
-
-        for oldname, newname in migration:
-            oldname = os.path.join(self.directory, oldname)
-            newname = os.path.join(self.directory, newname)
-            oldstat = os.stat(oldname)
-            os.chmod(newname, stat.S_IMODE(oldstat.st_mode))
-            os.chown(newname, oldstat.st_uid, oldstat.st_gid)
-
-        if selinux is not None and selinux.is_selinux_enabled():
-            selinux.restorecon(self.directory, recursive=True)
-
-        # list certs to verify DB
-        if self.get_dbtype() != 'sql':
-            raise RuntimeError(
-                "Migration of NSS database {} was not successfull.".format(
-                    self.directory
-                )
-            )
-
-        with open(os.devnull, 'wb') as f:
-            subprocess.check_call(basecmd + ['-L'], stdout=f)
-
-        for oldname, _ in migration:  # pylint: disable=unused-variable
-            oldname = os.path.join(self.directory, oldname)
-            os.rename(oldname, oldname + '.migrated')
-
-        logger.info("Migration successful")
-
-    def add_cert(self, nickname, cert_file, token=None, trust_attributes=None):
-
-        tmpdir = tempfile.mkdtemp()
-        try:
-            token = self.get_effective_token(token)
-
-            # Add cert in two steps due to bug #1393668.
-
-            # If HSM is used, import cert into HSM without trust attributes.
-            if token:
-                cmd = [
-                    'certutil',
-                    '-A',
-                    '-d', self.directory,
-                    '-h', token,
-                    '-P', token,
-                    '-f', self.password_file,
-                    '-n', nickname,
-                    '-a',
-                    '-i', cert_file,
-                    '-t', ''
-                ]
-
-                logger.debug('Command: %s', ' '.join(cmd))
-                rc = subprocess.call(cmd)
-
-                if rc:
-                    logger.warning('certutil returned non-zero exit code (bug #1393668)')
-
-            if not trust_attributes:
-                trust_attributes = ',,'
-
-            # If HSM is not used, or cert has trust attributes,
-            # import cert into internal token.
-            if not token or trust_attributes != ',,':
-                cmd = [
-                    'certutil',
-                    '-A',
-                    '-d', self.directory,
-                    '-f', self.internal_password_file,
-                    '-n', nickname,
-                    '-a',
-                    '-i', cert_file,
-                    '-t', trust_attributes
-                ]
-
-                logger.debug('Command: %s', ' '.join(cmd))
-                subprocess.check_call(cmd)
-
-        finally:
-            shutil.rmtree(tmpdir)
+            logger.debug('Command: %s', ' '.join(cmd))
+            subprocess.check_call(cmd)
 
     def add_ca_cert(self, cert_file, trust_attributes=None):
 
@@ -431,20 +278,13 @@ class NSSDatabase(object):
         logger.debug('Command: %s', ' '.join(cmd))
         subprocess.check_call(cmd)
 
-    def create_request(
-            self,
-            subject_dn,
-            request_file,
-            token=None,
-            noise_file=None,
-            key_type=None,
-            key_size=None,
-            curve=None,
-            hash_alg=None,
-            basic_constraints_ext=None,
-            key_usage_ext=None,
-            extended_key_usage_ext=None,
-            generic_exts=None):
+    def create_request(self, subject_dn, request_file, noise_file=None,
+                       key_type=None, key_size=None, curve=None,
+                       hash_alg=None,
+                       basic_constraints_ext=None,
+                       key_usage_ext=None,
+                       extended_key_usage_ext=None,
+                       generic_exts=None):
 
         tmpdir = tempfile.mkdtemp()
 
@@ -469,10 +309,8 @@ class NSSDatabase(object):
                 '-d', self.directory
             ]
 
-            token = self.get_effective_token(token)
-
-            if token:
-                cmd.extend(['-h', token])
+            if self.token:
+                cmd.extend(['-h', self.token])
 
             cmd.extend([
                 '-f', self.password_file,
@@ -842,11 +680,7 @@ class NSSDatabase(object):
         logger.debug('Command: %s', ' '.join(cmd))
         subprocess.check_call(cmd)
 
-    def get_cert(
-            self,
-            nickname,
-            token=None,
-            output_format='pem'):
+    def get_cert(self, nickname, output_format='pem'):
 
         if output_format == 'pem':
             output_format_option = '-a'
@@ -857,80 +691,68 @@ class NSSDatabase(object):
         else:
             raise Exception('Unsupported output format: %s' % output_format)
 
-        tmpdir = tempfile.mkdtemp()
-        try:
-            token = self.get_effective_token(token)
+        cmd = [
+            'certutil',
+            '-L',
+            '-d', self.directory
+        ]
 
-            cmd = [
-                'certutil',
-                '-L',
-                '-d', self.directory
-            ]
+        fullname = nickname
 
-            fullname = nickname
+        if self.token:
+            cmd.extend(['-h', self.token])
+            fullname = self.token + ':' + fullname
 
-            if token:
-                cmd.extend(['-h', token])
-                fullname = token + ':' + fullname
+        cmd.extend([
+            '-f', self.password_file,
+            '-n', fullname,
+            output_format_option
+        ])
 
-            cmd.extend([
-                '-f', self.password_file,
-                '-n', fullname,
-                output_format_option
-            ])
+        logger.debug('Command: %s', ' '.join(cmd))
 
-            logger.debug('Command: %s', ' '.join(cmd))
+        p = subprocess.Popen(cmd,
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
 
-            p = subprocess.Popen(cmd,
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE)
+        cert_data, std_err = p.communicate()
 
-            cert_data, std_err = p.communicate()
-
-            if std_err:
-                # certutil returned an error
-                # raise exception unless its not cert not found
-                if std_err.startswith(b'certutil: Could not find cert: '):
-                    return None
-
-                raise Exception('Could not find cert: %s: %s' % (fullname, std_err.strip()))
-
-            if not cert_data:
-                # certutil did not return data
+        if std_err:
+            # certutil returned an error
+            # raise exception unless its not cert not found
+            if std_err.startswith('certutil: Could not find cert: '):
                 return None
 
-            if p.returncode != 0:
-                logger.warning('certutil returned non-zero exit code (bug #1539996)')
+            raise Exception('Could not find cert: %s: %s' % (fullname, std_err.strip()))
 
-            if output_format == 'base64':
-                cert_data = base64.b64encode(cert_data)
+        if not cert_data:
+            # certutil did not return data
+            return None
 
-            return cert_data
+        if p.returncode != 0:
+            logger.warning('certutil returned non-zero exit code (bug #1539996)')
 
-        finally:
-            shutil.rmtree(tmpdir)
+        if output_format == 'base64':
+            cert_data = base64.b64encode(cert_data)
+
+        return cert_data
 
     def get_cert_info(self, nickname):
 
-        cert_pem = self.get_cert(
-            nickname=nickname)
+        cert = dict()
 
-        if not cert_pem:
-            return None
+        cert_pem = self.get_cert(nickname)
 
         cert_obj = x509.load_pem_x509_certificate(
             cert_pem, backend=default_backend())
 
-        cert = {}
-        cert['object'] = cert_obj
+        cert["serial_number"] = cert_obj.serial_number
 
-        cert['serial_number'] = cert_obj.serial_number
+        cert["issuer"] = pki.convert_x509_name_to_dn(cert_obj.issuer)
+        cert["subject"] = pki.convert_x509_name_to_dn(cert_obj.subject)
 
-        cert['issuer'] = pki.convert_x509_name_to_dn(cert_obj.issuer)
-        cert['subject'] = pki.convert_x509_name_to_dn(cert_obj.subject)
-
-        cert['not_before'] = self.convert_time_to_millis(cert_obj.not_valid_before)
-        cert['not_after'] = self.convert_time_to_millis(cert_obj.not_valid_after)
+        cert["not_before"] = self.convert_time_to_millis(cert_obj.not_valid_before)
+        cert["not_after"] = self.convert_time_to_millis(cert_obj.not_valid_after)
 
         return cert
 
@@ -939,45 +761,30 @@ class NSSDatabase(object):
         epoch = datetime.datetime.utcfromtimestamp(0)
         return (date - epoch).total_seconds() * 1000
 
-    def remove_cert(
-            self,
-            nickname,
-            token=None,
-            remove_key=False):
+    def remove_cert(self, nickname, remove_key=False):
 
-        tmpdir = tempfile.mkdtemp()
-        try:
-            token = self.get_effective_token(token)
+        cmd = ['certutil']
 
-            cmd = ['certutil']
+        if remove_key:
+            cmd.extend(['-F'])
+        else:
+            cmd.extend(['-D'])
 
-            if remove_key:
-                cmd.extend(['-F'])
-            else:
-                cmd.extend(['-D'])
+        cmd.extend(['-d', self.directory])
 
-            cmd.extend(['-d', self.directory])
+        if self.token:
+            cmd.extend(['-h', self.token])
 
-            if token:
-                cmd.extend(['-h', token])
+        cmd.extend([
+            '-f', self.password_file,
+            '-n', nickname
+        ])
 
-            cmd.extend([
-                '-f', self.password_file,
-                '-n', nickname
-            ])
+        logger.debug('Command: %s', ' '.join(cmd))
+        subprocess.check_call(cmd)
 
-            logger.debug('Command: %s', ' '.join(cmd))
-            subprocess.check_call(cmd)
-
-        finally:
-            shutil.rmtree(tmpdir)
-
-    def import_cert_chain(
-            self,
-            nickname,
-            cert_chain_file,
-            token=None,
-            trust_attributes=None):
+    def import_cert_chain(self, nickname, cert_chain_file,
+                          trust_attributes=None):
 
         tmpdir = tempfile.mkdtemp()
 
@@ -988,13 +795,9 @@ class NSSDatabase(object):
                 self.add_cert(
                     nickname=nickname,
                     cert_file=cert_chain_file,
-                    token=token,
                     trust_attributes=trust_attributes)
                 return (
-                    self.get_cert(
-                        nickname=nickname,
-                        token=token,
-                        output_format='base64'),
+                    self.get_cert(nickname=nickname, output_format='base64'),
                     [nickname]
                 )
 
@@ -1002,7 +805,6 @@ class NSSDatabase(object):
                 chain, nicks = self.import_pkcs7(
                     pkcs7_file=cert_chain_file,
                     nickname=nickname,
-                    token=token,
                     trust_attributes=trust_attributes,
                     output_format='base64')
                 return chain, nicks
@@ -1026,7 +828,6 @@ class NSSDatabase(object):
                 chain, nicks = self.import_pkcs7(
                     pkcs7_file=tmp_cert_chain_file,
                     nickname=nickname,
-                    token=token,
                     trust_attributes=trust_attributes)
 
                 return base64_data, nicks
@@ -1034,13 +835,8 @@ class NSSDatabase(object):
         finally:
             shutil.rmtree(tmpdir)
 
-    def import_pkcs7(
-            self,
-            pkcs7_file,
-            nickname,
-            token=None,
-            trust_attributes=None,
-            output_format='pem'):
+    def import_pkcs7(self, pkcs7_file, nickname, trust_attributes=None,
+                     output_format='pem'):
 
         tmpdir = tempfile.mkdtemp()
 
@@ -1076,11 +872,7 @@ class NSSDatabase(object):
 
             # Import user cert with specified nickname and trust attributes.
             cert_file = prefix + str(n - 1) + suffix
-            self.add_cert(
-                nickname=nickname,
-                cert_file=cert_file,
-                token=token,
-                trust_attributes=trust_attributes)
+            self.add_cert(nickname, cert_file, trust_attributes)
 
         finally:
             shutil.rmtree(tmpdir)
@@ -1102,12 +894,11 @@ class NSSDatabase(object):
 
         try:
             if pkcs12_password:
-                # if PKCS #12 password is provided, store it in a temp file
-                password_file = self.create_password_file(
-                    tmpdir, pkcs12_password)
+                password_file = os.path.join(tmpdir, 'password.txt')
+                with open(password_file, 'w') as f:
+                    f.write(pkcs12_password)
 
             elif pkcs12_password_file:
-                # if PKCS #12 password file is provided, use the file
                 password_file = pkcs12_password_file
 
             else:
@@ -1157,12 +948,11 @@ class NSSDatabase(object):
 
         try:
             if pkcs12_password:
-                # if PKCS #12 password is provided, store it in a temp file
-                password_file = self.create_password_file(
-                    tmpdir, pkcs12_password)
+                password_file = os.path.join(tmpdir, 'password.txt')
+                with open(password_file, 'w') as f:
+                    f.write(pkcs12_password)
 
             elif pkcs12_password_file:
-                # if PKCS #12 password file is provided, use the file
                 password_file = pkcs12_password_file
 
             else:

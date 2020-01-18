@@ -817,30 +817,6 @@ public class CertUtils {
         return tmp.toString();
     }
 
-    public static void verifySystemCertValidityByNickname(String nickname) throws Exception {
-
-        String method = "Certutils.verifySystemCertValidityByNickname: ";
-
-        CMS.debug(method + "(" + nickname + ")");
-        try {
-            CryptoManager cm = CryptoManager.getInstance();
-            org.mozilla.jss.crypto.X509Certificate cert = cm.findCertByNickname(nickname);
-
-            X509CertImpl impl = new X509CertImpl(cert.getEncoded());
-
-            boolean valid = isValidCert(impl);
-
-            if (!valid) {
-                throw new Exception(method + " failed: nickname: " + nickname);
-            }
-        } catch (Exception e) {
-            CMS.debug(method + " failed : " + e);
-            throw new Exception(method + " faliled: nickname: "+ nickname + "cause: " + e);
-        }
-
-        CMS.debug(method + "success");
-    }
-
     /*
      * verify a certificate by its nickname
      * @throws Exception if something is wrong
@@ -915,18 +891,10 @@ public class CertUtils {
     }
 
     /*
-     * verify a certificate by its tag name, do a full verification
+     * verify a certificate by its tag name
      * @throws Exception if something is wrong
      */
     public static void verifySystemCertByTag(String tag) throws Exception {
-        verifySystemCertByTag(tag,false);
-    }
-    /*
-     * verify a certificate by its tag name
-     * @throws Exception if something is wrong
-     * perform optional validity check only
-     */
-    public static void verifySystemCertByTag(String tag,boolean checkValidityOnly) throws Exception {
 
         CMS.debug("CertUtils: verifySystemCertByTag(" + tag + ")");
 
@@ -966,11 +934,7 @@ public class CertUtils {
                 // throw new Exception("Missing certificate usage for " + tag + " certificate"); ?
             }
 
-            if(!checkValidityOnly) {
-                verifySystemCertByNickname(nickname, certusage);
-            } else {
-                verifySystemCertValidityByNickname(nickname);
-            }
+            verifySystemCertByNickname(nickname, certusage);
 
             auditMessage = CMS.getLogMessage(
                     AuditEvent.CIMC_CERT_VERIFICATION,
@@ -1035,9 +999,8 @@ public class CertUtils {
      * goes through all system certs and check to see if they are good
      * and audit the result
      * @throws Exception if something is wrong
-     * optionally only check certs validity.
      */
-    public static void verifySystemCerts(boolean checkValidityOnly) throws Exception {
+    public static void verifySystemCerts() throws Exception {
 
         String auditMessage = null;
         IConfigStore config = CMS.getConfigStore();
@@ -1088,12 +1051,7 @@ public class CertUtils {
                 String tag = tokenizer.nextToken();
                 tag = tag.trim();
                 CMS.debug("CertUtils: verifySystemCerts() cert tag=" + tag);
-
-                if (!checkValidityOnly) {
-                    verifySystemCertByTag(tag);
-                } else {
-                    verifySystemCertByTag(tag, true);
-                }
+                verifySystemCertByTag(tag);
             }
 
         } catch (Exception e) {

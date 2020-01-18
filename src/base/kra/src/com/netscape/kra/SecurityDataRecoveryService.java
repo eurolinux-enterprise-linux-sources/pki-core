@@ -32,6 +32,9 @@ import com.netscape.certsrv.request.RequestId;
 import com.netscape.cms.logging.Logger;
 import com.netscape.cms.logging.SignedAuditLogger;
 
+import netscape.security.util.DerValue;
+import netscape.security.x509.X509Key;
+
 /**
  * This implementation services SecurityData Recovery requests.
  * <p>

@@ -13,8 +13,9 @@
 %global package_rhel_packages 1
 # Package RHCS-specific RPMS Only
 %global package_rhcs_packages 0
-%define pki_core_rhel_version 10.5.16
+%define pki_core_rhel_version 10.5.9
 %else
+# 0%{?fedora}
 # Fedora always packages all RPMS
 %global package_fedora_packages 1
 %endif
@@ -64,14 +65,14 @@
 
 Name:             pki-core
 %if 0%{?rhel}
-Version:                10.5.16
-%define redhat_release  5
+Version:                10.5.9
+%define redhat_release  13
 %define redhat_stage    0
 #%define default_release %{redhat_release}.%{redhat_stage}
 %define default_release %{redhat_release}
 %else
-Version:                10.5.16
-%define fedora_release  5
+Version:                10.5.14
+%define fedora_release  3
 %define fedora_stage    0
 #%define default_release %{fedora_release}.%{fedora_stage}
 %define default_release %{fedora_release}
@@ -79,10 +80,10 @@ Version:                10.5.16
 
 %if 0%{?use_pki_release}
 #Release:          %{pki_release}%{?dist}
-Release:          %{pki_release}.el7_7
+Release:          %{pki_release}.el7_6
 %else
 #Release:          %{default_release}%{?dist}
-Release:          %{default_release}.el7_7
+Release:          %{default_release}.el7_6
 %endif
 
 Summary:          Certificate System - PKI Core Components
@@ -168,7 +169,7 @@ BuildRequires:    policycoreutils-python-utils
 BuildRequires:    python-ldap
 BuildRequires:    junit
 BuildRequires:    jpackage-utils >= 0:1.7.5-10
-BuildRequires:    jss >= 4.4.6-1
+BuildRequires:    jss >= 4.4.4-5
 %if 0%{?rhel} && 0%{?rhel} <= 7
 BuildRequires:    tomcatjss >= 7.2.1-8
 %else
@@ -208,10 +209,18 @@ Source0:          http://pki.fedoraproject.org/pki/sources/%{name}/%{version}/%{
 Source0:          http://pki.fedoraproject.org/pki/sources/%{name}/%{version}/%{release}/%{name}-%{version}%{?prerel}.tar.gz
 %endif
 
-Patch0:  pki-core-Add-Subject-Key-ID-to-CSR.patch
-Patch1:  pki-core-PKI-startup-init-LDAP-operation-attr-independence.patch
-Patch2:  pki-core-Fixed-Missing-SAN-extension-for-CA-Clone.patch
-Patch3:  pki-core-Internal-LDAP-Server-goes-down-Audit-Event.patch
+Patch0:           pki-core-10.5.9-alpha.patch
+Patch1:           pki-core-10.5.9-beta.patch
+Patch2:           pki-core-nsds5replicaLastInitStatus-format.patch
+Patch3:           pki-core-10.5.9-snapshot-1.patch
+Patch4:           pki-core-10.5.9-batch-1.0.patch
+Patch5:           pki-core-10.5.9-batch-2.0.patch
+Patch6:           pki-core-CA-OCSP-SystemCertsVerification.patch
+Patch7:           pki-core-Session-Timeout.patch
+Patch8:           pki-core-Audit-Event-Names-Upgrade-Scripts.patch
+Patch9:           pki-core-Verify-Cert-Before-Import.patch
+Patch10:          pki-core-Audit-Event-Names-Upgrade-Scripts-2.patch
+Patch11:          pki-core-10.5.9-batch-3.0.patch
 
 # Obtain version phase number (e. g. - used by "alpha", "beta", etc.)
 #
@@ -311,7 +320,7 @@ Group:            System Environment/Libraries
 
 Requires:         java-1.8.0-openjdk-headless
 Requires:         jpackage-utils >= 0:1.7.5-10
-Requires:         jss >= 4.4.6-1
+Requires:         jss >= 4.4.4-5
 Requires:         nss >= 3.28.3
 
 Provides:         symkey = %{version}-%{release}
@@ -390,7 +399,7 @@ Requires:         slf4j-jdk14
 %endif
 Requires:         javassist
 Requires:         jpackage-utils >= 0:1.7.5-10
-Requires:         jss >= 4.4.6-1
+Requires:         jss >= 4.4.4-5
 Requires:         ldapjdk >= 4.19-5
 Requires:         pki-base = %{version}-%{release}
 
@@ -804,11 +813,18 @@ This package is a part of the PKI Core used by the Certificate System.
 
 %prep
 %setup -q -n %{name}-%{version}%{?prerel}
-
 %patch0 -p1
 %patch1 -p1
 %patch2 -p1
 %patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
+%patch8 -p1
+%patch9 -p1
+%patch10 -p1
+%patch11 -p1
 
 %clean
 %{__rm} -rf %{buildroot}
@@ -1345,66 +1361,6 @@ fi
 %endif # %{with server}
 
 %changelog
-* Mon Sep  9 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-5
-- ##########################################################################
-- # RHEL 7.7:
-- ##########################################################################
-- Bugzilla Bug #1750277 - CC: missing audit event for CS acting as TLS client
-  [rhel-7.7.z] (cfu)
-- ##########################################################################
-- # RHCS 9.5:
-- ##########################################################################
-- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
-  # pki-console to 10.5.16 in RHCS 9.5
-
-* Mon Aug 19 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-4
-- ##########################################################################
-- # RHEL 7.7:
-- ##########################################################################
-- Bugzilla Bug #1743122 - RHCS-9 CA clone SSL server cert not issued with its
-  custom SAN extension, RHEL-7.6 and HSM [rhel-7.7.z] (edewata)
-- ##########################################################################
-- # RHCS 9.5:
-- ##########################################################################
-- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
-  # pki-console to 10.5.16 in RHCS 9.5
-
-* Thu Jun 20 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-3
-- ##########################################################################
-- # RHEL 7.7:
-- ##########################################################################
-- Bugzilla Bug #1638379 - PKI startup initialization process should not
-  depend on LDAP operational attributes [ftweedal]
-- ##########################################################################
-- # RHCS 9.5:
-- ##########################################################################
-- Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
-  pki-console to 10.5.16 in RHCS 9.5
-
-* Thu Apr  4 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-2
-- ##########################################################################
-- # RHEL 7.7:
-- ##########################################################################
-- Bugzilla Bug #1491453 - Need Method to Include SKI in CA Signing
-  Certificate Request [ftweedal]
-- ##########################################################################
-- # RHCS 9.5:
-- ##########################################################################
-- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
-  # pki-console to 10.5.16 in RHCS 9.5
-
-* Mon Mar 18 2019 Dogtag Team <pki-devel@redhat.com> 10.5.16-1
-- Updated jss dependencies
-- ##########################################################################
-- # RHEL 7.7:
-- ##########################################################################
-- Bugzilla Bug #1633422 - Rebase pki-core from 10.5.1 to 10.5.16 (RHEL) 
-- ##########################################################################
-- # RHCS 9.5:
-- ##########################################################################
-- # Bugzilla Bug #1633423 - Rebase redhat-pki, redhat-pki-theme, pki-core, and
-  # pki-console to 10.5.6 in RHCS 9.5
-
 * Fri Feb 15 2019 Dogtag Team <pki-devel@redhat.com> 10.5.9-13
 - Updated jss dependencies
 - ##########################################################################

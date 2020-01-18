@@ -209,14 +209,6 @@ public abstract class EnrollProfile extends BasicProfile
 
             // catch for invalid request
             cmc_msgs = parseCMC(locale, cert_request, donePOI);
-            SessionContext sessionContext = SessionContext.getContext();
-            String authenticatedSubject = 
-                    (String) sessionContext.get(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT);
-
-            if (authenticatedSubject != null) {
-                ctx.set(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT, authenticatedSubject);
-            }
-
             if (cmc_msgs == null) {
                 CMS.debug(method + "parseCMC returns cmc_msgs null");
                 return null;
@@ -1420,14 +1412,10 @@ public abstract class EnrollProfile extends BasicProfile
                     CMS.debug(method + " Failed to retrieve shared secret authentication plugin class");
                     sharedSecretFound = false;
                 }
-
-                IAuthToken authToken = (IAuthToken)
-                    context.get(SessionContext.AUTH_TOKEN);
-
                 ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
 
                 if (ident_string != null) {
-                    sharedSecret = tokenClass.getSharedToken(ident_string, authToken);
+                    sharedSecret = tokenClass.getSharedToken(ident_string);
                 } else {
                     sharedSecret = tokenClass.getSharedToken(mCMCData);
                 }
@@ -1721,16 +1709,12 @@ public abstract class EnrollProfile extends BasicProfile
                 signedAuditLogger.log(auditMessage);
                 return false;
             }
-
-            IAuthToken authToken = (IAuthToken)
-                sessionContext.get(SessionContext.AUTH_TOKEN);
-
             ISharedToken tokenClass = (ISharedToken) sharedTokenAuth;
 
             char[] token = null;
             if (ident_string != null) {
                 auditAttemptedCred = ident_string;
-                token = tokenClass.getSharedToken(ident_string, authToken);
+                token = tokenClass.getSharedToken(ident_string);
             } else
                 token = tokenClass.getSharedToken(mCMCData);
 
@@ -1802,16 +1786,6 @@ public abstract class EnrollProfile extends BasicProfile
                 CMS.debug(method + "updated auditSubjectID is:" + ident_string);
                 auditSubjectID = ident_string;
                 sessionContext.put(SessionContext.USER_ID, auditSubjectID);
-
-                // subjectdn from SharedSecret ldap auth
-                // set in context and authToken to be used by profile
-                // default and constraints plugins
-                authToken.set(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT,
-                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
-                authToken.set(IAuthToken.TOKEN_AUTHENTICATED_CERT_SUBJECT,
-                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
-                sessionContext.put(IAuthToken.TOKEN_SHARED_TOKEN_AUTHENTICATED_CERT_SUBJECT,
-                        authToken.getInString(IAuthToken.TOKEN_CERT_SUBJECT));
 
                 auditMessage = CMS.getLogMessage(
                         AuditEvent.CMC_PROOF_OF_IDENTIFICATION,

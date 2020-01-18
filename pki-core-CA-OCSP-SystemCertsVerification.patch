@@ -1,0 +1,258 @@
+From da51b869a4ad3e558689c4dfa054605495c96485 Mon Sep 17 00:00:00 2001
+From: jmagne <jmagne@redhat.com>
+Date: Thu, 8 Nov 2018 17:07:40 -0800
+Subject: [PATCH] Resolve: Bug 1641119 - CC: CA/OCSP startup fail on
+ SystemCertsVerification if enableOCSP is true. (#87)
+
+The approach taken by this patch is quite simple. The SystemCertsVerification self test has been modified to
+optionally act differently when verifying the system certs of both ca and ocsp instances.
+
+Previously, the test would do a full cert verification , which results in an ocsp check being done at the nss level, if ocsp has been enabled in the server.xml. The past result was to have the server hang on startup , due to the fact that an ocsp check of a given cert would loop back to the ca or ocsp server itself to do the work. In the case of the self test /startup scenario, the server will not be sufficiently ready to field such a request, thus resulting in a hang situation.
+
+This fix modifies the cert checks for ca and ocsp to ONLY do a validity test for each cert.
+
+The code has created an optional parameter than can force our of this behaviour if the admin absolutely wants to:
+
+selftests.plugin.SystemCertsVerification.FullCAandOCSPVerify= true
+
+IF, the admin wants the test to behave as it did before. This may be the case where we know ocsp is not configured for the ca or ocsp itself.
+
+The value, is false by default and is false if the line is not present.
+
+The simple validity test is all that gets done at this point but could be modified to do more in the future.
+We already have a validity test for just the CA singing and OCSP signing certs. I felt it was cleaner to just leave those in place unchanged, safely leaving the original wiring in place.
+
+(cherry picked from commit 3eab287365d83a167fff7ec1287bd70647e93757)
+---
+ base/ca/shared/profiles/ca/caCMCECUserCert.cfg     |  2 +-
+ .../selftests/common/SystemCertsVerification.java  | 17 +++++++-
+ .../src/com/netscape/cmscore/apps/CMSEngine.java   |  2 +-
+ .../src/com/netscape/cmscore/cert/CertUtils.java   | 50 ++++++++++++++++++++--
+ base/server/tomcat7/conf/server.xml                |  9 +++-
+ base/server/tomcat8/conf/server.xml                |  9 +++-
+ 6 files changed, 78 insertions(+), 11 deletions(-)
+
+diff --git a/base/ca/shared/profiles/ca/caCMCECUserCert.cfg b/base/ca/shared/profiles/ca/caCMCECUserCert.cfg
+index 226c05c..c45da2e 100644
+--- a/base/ca/shared/profiles/ca/caCMCECUserCert.cfg
++++ b/base/ca/shared/profiles/ca/caCMCECUserCert.cfg
+@@ -1,5 +1,5 @@
+ desc=This certificate profile is for enrolling user certificates with ECC keys by using the CMC certificate request with CMC Signature authentication.
+-visible=true
++visible=false
+ enable=true
+ enableBy=admin
+ auth.instance_id=CMCAuth
+diff --git a/base/server/cms/src/com/netscape/cms/selftests/common/SystemCertsVerification.java b/base/server/cms/src/com/netscape/cms/selftests/common/SystemCertsVerification.java
+index cc52f83..335a940 100644
+--- a/base/server/cms/src/com/netscape/cms/selftests/common/SystemCertsVerification.java
++++ b/base/server/cms/src/com/netscape/cms/selftests/common/SystemCertsVerification.java
+@@ -36,6 +36,7 @@ import com.netscape.certsrv.selftests.EMissingSelfTestException;
+ import com.netscape.certsrv.selftests.ESelfTestException;
+ import com.netscape.certsrv.selftests.ISelfTestSubsystem;
+ import com.netscape.cms.selftests.ASelfTest;
++import com.netscape.cmscore.cert.CertUtils;
+ 
+ //////////////////////
+ // class definition //
+@@ -60,7 +61,9 @@ public class SystemCertsVerification
+ 
+     // parameter information
+     public static final String PROP_SUB_ID = "SubId";
++    public static final String PROP_FULL_CA_OCSP_VERIFY = "FullCAandOCSPVerify";
+     private String mSubId = null;
++    private boolean mFullCAandOCSPVerify = false;
+ 
+     /////////////////////
+     // default methods //
+@@ -122,6 +125,13 @@ public class SystemCertsVerification
+ 
+         // retrieve optional parameter(s)
+ 
++        try {
++            mFullCAandOCSPVerify = mConfig.getBoolean(PROP_FULL_CA_OCSP_VERIFY, false);
++        } catch (EBaseException e) {
++            //Since this is fully optional, keep going.
++            mFullCAandOCSPVerify = false;
++        }
++
+         return;
+     }
+ 
+@@ -190,7 +200,12 @@ public class SystemCertsVerification
+     public void runSelfTest(ILogEventListener logger) throws Exception {
+ 
+         try {
+-            CMS.verifySystemCerts();
++            if (("ca".equalsIgnoreCase(mSubId) || "ocsp".equalsIgnoreCase(mSubId)) && !mFullCAandOCSPVerify) {
++                //Perform validity only
++                CertUtils.verifySystemCerts(true);
++            } else {
++                CertUtils.verifySystemCerts(false);
++            }
+ 
+             String logMessage = CMS.getLogMessage(
+                     "SELFTESTS_COMMON_SYSTEM_CERTS_VERIFICATION_SUCCESS",
+diff --git a/base/server/cmscore/src/com/netscape/cmscore/apps/CMSEngine.java b/base/server/cmscore/src/com/netscape/cmscore/apps/CMSEngine.java
+index 2c953cc..f1a3b78 100644
+--- a/base/server/cmscore/src/com/netscape/cmscore/apps/CMSEngine.java
++++ b/base/server/cmscore/src/com/netscape/cmscore/apps/CMSEngine.java
+@@ -1711,7 +1711,7 @@ public class CMSEngine implements ICMSEngine {
+     }
+ 
+     public void verifySystemCerts() throws Exception {
+-        CertUtils.verifySystemCerts();
++        CertUtils.verifySystemCerts(false);
+     }
+ 
+     public void verifySystemCertByTag(String tag) throws Exception {
+diff --git a/base/server/cmscore/src/com/netscape/cmscore/cert/CertUtils.java b/base/server/cmscore/src/com/netscape/cmscore/cert/CertUtils.java
+index 3334b43..6669632 100644
+--- a/base/server/cmscore/src/com/netscape/cmscore/cert/CertUtils.java
++++ b/base/server/cmscore/src/com/netscape/cmscore/cert/CertUtils.java
+@@ -817,6 +817,30 @@ public class CertUtils {
+         return tmp.toString();
+     }
+ 
++    public static void verifySystemCertValidityByNickname(String nickname) throws Exception {
++
++        String method = "Certutils.verifySystemCertValidityByNickname: ";
++
++        CMS.debug(method + "(" + nickname + ")");
++        try {
++            CryptoManager cm = CryptoManager.getInstance();
++            org.mozilla.jss.crypto.X509Certificate cert = cm.findCertByNickname(nickname);
++
++            X509CertImpl impl = new X509CertImpl(cert.getEncoded());
++
++            boolean valid = isValidCert(impl);
++
++            if (!valid) {
++                throw new Exception(method + " failed: nickname: " + nickname);
++            }
++        } catch (Exception e) {
++            CMS.debug(method + " failed : " + e);
++            throw new Exception(method + " faliled: nickname: "+ nickname + "cause: " + e);
++        }
++
++        CMS.debug(method + "success");
++    }
++
+     /*
+      * verify a certificate by its nickname
+      * @throws Exception if something is wrong
+@@ -891,10 +915,18 @@ public class CertUtils {
+     }
+ 
+     /*
+-     * verify a certificate by its tag name
++     * verify a certificate by its tag name, do a full verification
+      * @throws Exception if something is wrong
+      */
+     public static void verifySystemCertByTag(String tag) throws Exception {
++        verifySystemCertByTag(tag,false);
++    }
++    /*
++     * verify a certificate by its tag name
++     * @throws Exception if something is wrong
++     * perform optional validity check only
++     */
++    public static void verifySystemCertByTag(String tag,boolean checkValidityOnly) throws Exception {
+ 
+         CMS.debug("CertUtils: verifySystemCertByTag(" + tag + ")");
+ 
+@@ -934,7 +966,11 @@ public class CertUtils {
+                 // throw new Exception("Missing certificate usage for " + tag + " certificate"); ?
+             }
+ 
+-            verifySystemCertByNickname(nickname, certusage);
++            if(!checkValidityOnly) {
++                verifySystemCertByNickname(nickname, certusage);
++            } else {
++                verifySystemCertValidityByNickname(nickname);
++            }
+ 
+             auditMessage = CMS.getLogMessage(
+                     AuditEvent.CIMC_CERT_VERIFICATION,
+@@ -999,8 +1035,9 @@ public class CertUtils {
+      * goes through all system certs and check to see if they are good
+      * and audit the result
+      * @throws Exception if something is wrong
++     * optionally only check certs validity.
+      */
+-    public static void verifySystemCerts() throws Exception {
++    public static void verifySystemCerts(boolean checkValidityOnly) throws Exception {
+ 
+         String auditMessage = null;
+         IConfigStore config = CMS.getConfigStore();
+@@ -1051,7 +1088,12 @@ public class CertUtils {
+                 String tag = tokenizer.nextToken();
+                 tag = tag.trim();
+                 CMS.debug("CertUtils: verifySystemCerts() cert tag=" + tag);
+-                verifySystemCertByTag(tag);
++
++                if (!checkValidityOnly) {
++                    verifySystemCertByTag(tag);
++                } else {
++                    verifySystemCertByTag(tag, true);
++                }
+             }
+ 
+         } catch (Exception e) {
+diff --git a/base/server/tomcat7/conf/server.xml b/base/server/tomcat7/conf/server.xml
+index dae513d..02eb8eb 100644
+--- a/base/server/tomcat7/conf/server.xml
++++ b/base/server/tomcat7/conf/server.xml
+@@ -173,6 +173,11 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+         In case of an ocsp signing certificate, one must import the cert
+         into the subsystem's nss db and set trust. e.g.:
+           certutil -d . -A -n "ocspSigningCert cert-pki-ca" -t "C,," -a -i ocspCert.b64
++
++        If both ocspResponderURL and ocspResponderCertNickname are both unset
++        all OCSP checks will be made using the URL encoded within the AIA extension
++        of each cert being verified.
++
+         ocspCacheSize - sets max cache entries
+         ocspMinCacheEntryDuration - sets minimum seconds to next fetch attempt
+         ocspMaxCacheEntryDuration - sets maximum seconds to next fetch attempt
+@@ -192,8 +197,8 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+            ocspResponderURL="http://[PKI_HOSTNAME]:[PKI_UNSECURE_PORT]/ca/ocsp"
+            ocspResponderCertNickname="ocspSigningCert cert-pki-ca"
+            ocspCacheSize="1000"
+-           ocspMinCacheEntryDuration="60"
+-           ocspMaxCacheEntryDuration="120"
++           ocspMinCacheEntryDuration="7200"
++           ocspMaxCacheEntryDuration="14400"
+            ocspTimeout="10"
+            strictCiphers="true"
+            clientAuth="[PKI_AGENT_CLIENTAUTH]"
+diff --git a/base/server/tomcat8/conf/server.xml b/base/server/tomcat8/conf/server.xml
+index d08e3b1..c83ab58 100644
+--- a/base/server/tomcat8/conf/server.xml
++++ b/base/server/tomcat8/conf/server.xml
+@@ -193,6 +193,11 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+         In case of an ocsp signing certificate, one must import the cert
+         into the subsystem's nss db and set trust. e.g.:
+           certutil -d . -A -n "ocspSigningCert cert-pki-ca" -t "C,," -a -i ocspCert.b64
++
++        If both ocspResponderURL and ocspResponderCertNickname are both unset
++        all OCSP checks will be made using the URL encoded within the AIA extension
++        of each cert being verified.
++
+         ocspCacheSize - sets max cache entries
+         ocspMinCacheEntryDuration - sets minimum seconds to next fetch attempt
+         ocspMaxCacheEntryDuration - sets maximum seconds to next fetch attempt
+@@ -218,8 +223,8 @@ Tomcat Port         = [TOMCAT_SERVER_PORT] (for shutdown)
+            ocspResponderURL="http://[PKI_HOSTNAME]:[PKI_UNSECURE_PORT]/ca/ocsp"
+            ocspResponderCertNickname="ocspSigningCert cert-pki-ca"
+            ocspCacheSize="1000"
+-           ocspMinCacheEntryDuration="60"
+-           ocspMaxCacheEntryDuration="120"
++           ocspMinCacheEntryDuration="7200"
++           ocspMaxCacheEntryDuration="14400"
+            ocspTimeout="10"
+            strictCiphers="true"
+            clientAuth="[PKI_AGENT_CLIENTAUTH]"
+-- 
+1.8.3.1
+

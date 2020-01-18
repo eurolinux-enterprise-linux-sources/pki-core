@@ -24,9 +24,7 @@ Module containing utility functions and classes for the Dogtag python code
 
 
 from __future__ import absolute_import
-import functools
 import os
-import re
 import shutil
 from shutil import Error
 try:
@@ -34,7 +32,6 @@ try:
 except ImportError:
     WindowsError = None
 
-import six
 import subprocess
 
 DEFAULT_PKI_ENV_LIST = [
@@ -127,13 +124,10 @@ def copydirs(source, dest):
 
 def chown(path, uid, gid):
     """
-    Change ownership of a file or folder recursively.
+    Change ownership of a folder and its contents.
     """
 
     os.chown(path, uid, gid)
-
-    if not os.path.isdir(path):
-        return
 
     for item in os.listdir(path):
         itempath = os.path.join(path, item)
@@ -142,25 +136,6 @@ def chown(path, uid, gid):
             os.chown(itempath, uid, gid)
         elif os.path.isdir(itempath):
             chown(itempath, uid, gid)
-
-
-def chmod(path, perms):
-    """
-    Change permissions of a file or folder recursively.
-    """
-
-    os.chmod(path, perms)
-
-    if not os.path.isdir(path):
-        return
-
-    for item in os.listdir(path):
-        itempath = os.path.join(path, item)
-
-        if os.path.isfile(itempath):
-            os.chmod(itempath, perms)
-        elif os.path.isdir(itempath):
-            chmod(itempath, perms)
 
 
 def customize_file(input_file, output_file, params):
@@ -180,42 +155,22 @@ def load_properties(filename, properties):
     with open(filename) as f:
 
         lines = f.read().splitlines()
-        name = None
-        multi_line = False
 
         for index, line in enumerate(lines):
 
-            if multi_line:
-                # append line to previous property
+            line = line.strip()
 
-                value = properties[name]
-                value = value + line
+            if not line or line.startswith('#'):
+                continue
 
-            else:
-                # parse line for new property
+            parts = line.split('=', 1)
 
-                line = line.lstrip()
-                if not line or line.startswith('#'):
-                    continue
+            if len(parts) < 2:
+                raise Exception('Missing delimiter in %s line %d' %
+                                (filename, index + 1))
 
-                parts = line.split('=', 1)
-                if len(parts) < 2:
-                    raise Exception('Missing delimiter in %s line %d' %
-                                    (filename, index + 1))
-
-                name = parts[0].rstrip()
-                value = parts[1].lstrip()
-
-            # check if the value is multi-line
-            if value.endswith('\\'):
-                value = value[:-1]
-                multi_line = True
-
-            else:
-                value = value.rstrip()
-                multi_line = False
-
-            # store value in properties
+            name = parts[0].strip()
+            value = parts[1].strip()
             properties[name] = value
 
 
@@ -320,62 +275,3 @@ def read_environment_files(env_file_list=None):
         if not key.strip() or key == u'_':
             continue
         os.environ[key] = value
-
-
-@functools.total_ordering
-class Version(object):
-
-    def __init__(self, obj):
-
-        if isinstance(obj, six.string_types):
-
-            # parse <major>.<minor>.<patch>[<suffix>]
-            match = re.match(r'^(\d+)\.(\d+)\.(\d+)', obj)
-
-            if match is None:
-                raise Exception('Unable to parse version number: %s' % obj)
-
-            self.major = int(match.group(1))
-            self.minor = int(match.group(2))
-            self.patch = int(match.group(3))
-
-        elif isinstance(obj, Version):
-
-            self.major = obj.major
-            self.minor = obj.minor
-            self.patch = obj.patch
-
-        else:
-            raise Exception('Unsupported version type: %s' % type(obj))
-
-    # release is ignored in comparisons
-    def __eq__(self, other):
-        return (self.major == other.major and
-                self.minor == other.minor and
-                self.patch == other.patch)
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-    def __lt__(self, other):
-        if self.major < other.major:
-            return True
-
-        if self.major == other.major and self.minor < other.minor:
-            return True
-
-        if (self.major == other.major and
-                self.minor == other.minor and
-                self.patch < other.patch):
-            return True
-
-        return False
-
-    def __gt__(self, other):
-        return not self.__lt__(other) and not self.__eq__(other)
-
-    # not hashable
-    __hash__ = None
-
-    def __repr__(self):
-        return '%d.%d.%d' % (self.major, self.minor, self.patch)

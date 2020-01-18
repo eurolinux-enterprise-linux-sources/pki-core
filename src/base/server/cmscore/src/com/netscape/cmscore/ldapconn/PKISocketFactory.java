@@ -35,8 +35,6 @@ import com.netscape.certsrv.base.IConfigStore;
 import netscape.ldap.LDAPException;
 import netscape.ldap.LDAPSSLSocketFactoryExt;
 
-import org.dogtagpki.server.PKIClientSocketListener;
-
 /**
  * Uses HCL ssl socket.
  *
@@ -48,7 +46,6 @@ public class PKISocketFactory implements LDAPSSLSocketFactoryExt {
     private String mClientAuthCertNickname;
     private boolean mClientAuth;
     private boolean keepAlive;
-    PKIClientSocketListener sockListener = null;
 
     public PKISocketFactory() {
         init();
@@ -70,7 +67,6 @@ public class PKISocketFactory implements LDAPSSLSocketFactoryExt {
             IConfigStore cs = CMS.getConfigStore();
             keepAlive = cs.getBoolean("tcp.keepAlive", true);
             CMS.debug("TCP Keep-Alive: " + keepAlive);
-            sockListener = new PKIClientSocketListener();
 
         } catch (Exception e) {
             CMS.debug(e);
@@ -79,8 +75,6 @@ public class PKISocketFactory implements LDAPSSLSocketFactoryExt {
     }
 
     public SSLSocket makeSSLSocket(String host, int port) throws UnknownHostException, IOException {
-        String method = "ldapconn/PKISocketFactory.makeSSLSocket: ";
-        CMS.debug(method + "begins");
 
         /*
          * let inherit TLS range and cipher settings
@@ -106,8 +100,6 @@ public class PKISocketFactory implements LDAPSSLSocketFactoryExt {
         s.setUseClientMode(true);
         s.enableV2CompatibleHello(false);
 
-        s.addSocketListener(sockListener);
-
         SSLHandshakeCompletedListener listener = null;
 
         listener = new ClientHandshakeCB(this);
@@ -127,6 +119,7 @@ public class PKISocketFactory implements LDAPSSLSocketFactoryExt {
     }
 
     public Socket makeSocket(String host, int port) throws LDAPException {
+
         Socket s = null;
 
         try {

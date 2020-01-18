@@ -103,8 +103,7 @@ public class TKSRemoteRequestHandler extends RemoteRequestHandler
             String tokenType)
             throws EBaseException {
 
-        String method = "TKSRemoteRequestHandler: computeSessionKey(): ";
-        CMS.debug(method + " begins.");
+        CMS.debug("TKSRemoteRequestHandler: computeSessionKey(): begins.");
         if (cuid == null || kdd == null || keyInfo == null || card_challenge == null
                 || card_cryptogram == null || host_challenge == null) {
             throw new EBaseException("TKSRemoteRequestHandler: computeSessionKey(): input parameter null.");
@@ -112,25 +111,10 @@ public class TKSRemoteRequestHandler extends RemoteRequestHandler
 
         IConfigStore conf = CMS.getConfigStore();
 
-        boolean serverKeygen = false;
-
-        //Try out all the currently supported cert types to see if we are doing server side keygen here
-        String[] keygenStrings = { "identity", "signing", "encryption", "authentication", "auth"};
-        for (String keygenString : keygenStrings) {
-            boolean enabled = conf.getBoolean("op.enroll." +
-                    tokenType + ".keyGen." +
-                    keygenString + ".serverKeygen.enable", false);
-
-            CMS.debug(method + " serverkegGen enabled for " + keygenString + " : " + enabled);
-            if (enabled) {
-                serverKeygen = true;
-                break;
-            }
-        }
-
-
-
-
+        boolean serverKeygen =
+                conf.getBoolean("op.enroll." +
+                        tokenType + ".keyGen.encryption.serverKeygen.enable",
+                        false);
         if (keySet == null)
             keySet = conf.getString("tps.connector." + connid + ".keySet", "defKeySet");
 

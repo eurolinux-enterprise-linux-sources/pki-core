@@ -145,10 +145,6 @@ public final class CMS {
         _engine = engine;
     }
 
-    public static ICMSEngine getCMSEngine() {
-        return _engine;
-    }
-
     /**
      * This method is used for unit tests. It allows the underlying _engine
      * to be stubbed out.
@@ -661,35 +657,183 @@ public final class CMS {
     }
 
     /**
-     * Retrieves log message from LogMessages.properties or audit-events.properties.
+     * Retrieves the centralized log message from LogMessages.properties.
      *
-     * @param msgID message ID defined in LogMessages.properties or audit-events.properties
+     * @param msgID message id defined in LogMessages.properties
      * @return localized log message
      */
     public static String getLogMessage(String msgID) {
-        return _engine.getLogMessage(msgID, null);
+        return _engine.getLogMessage(msgID);
     }
 
     /**
-     * Retrieves log message from LogMessages.properties or audit-events.properties.
+     * Retrieves the centralized log message from LogMessages.properties.
      *
-     * @param msgID message ID defined in LogMessages.properties or audit-events.properties
-     * @param params object parameters
+     * @param msgID message id defined in LogMessages.properties
+     * @param p an array of parameters
      * @return localized log message
      */
-    public static String getLogMessage(String msgID, Object params[]) {
-        return _engine.getLogMessage(msgID, params);
+    public static String getLogMessage(String msgID, Object p[]) {
+        return _engine.getLogMessage(msgID, p);
     }
 
     /**
-     * Retrieves log message from LogMessages.properties or audit-events.properties.
+     * Retrieves the centralized log message from LogMessages.properties.
      *
-     * @param msgID message ID defined in LogMessages.properties or audit-events.properties
-     * @param params string parameters
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
      * @return localized log message
      */
-    public static String getLogMessage(String msgID, String... params) {
-        return _engine.getLogMessage(msgID, params);
+    public static String getLogMessage(String msgID, String p1) {
+        return _engine.getLogMessage(msgID, p1);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2) {
+        return _engine.getLogMessage(msgID, p1, p2);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3) {
+        return _engine.getLogMessage(msgID, p1, p2, p3);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @param p4 4th parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3, String p4) {
+        return _engine.getLogMessage(msgID, p1, p2, p3, p4);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @param p4 4th parameter
+     * @param p5 5th parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5) {
+        return _engine.getLogMessage(msgID, p1, p2, p3, p4, p5);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @param p4 4th parameter
+     * @param p5 5th parameter
+     * @param p6 6th parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6) {
+        return _engine.getLogMessage(msgID, p1, p2, p3, p4, p5, p6);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @param p4 4th parameter
+     * @param p5 5th parameter
+     * @param p6 6th parameter
+     * @param p7 7th parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7) {
+        return _engine.getLogMessage(msgID, p1, p2, p3, p4, p5, p6, p7);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @param p4 4th parameter
+     * @param p5 5th parameter
+     * @param p6 6th parameter
+     * @param p7 7th parameter
+     * @param p8 8th parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7, String p8) {
+        return _engine.getLogMessage(msgID, p1, p2, p3, p4, p5, p6, p7, p8);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @param p4 4th parameter
+     * @param p5 5th parameter
+     * @param p6 6th parameter
+     * @param p7 7th parameter
+     * @param p8 8th parameter
+     * @param p9 9th parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7, String p8, String p9) {
+        return _engine.getLogMessage(msgID, p1, p2, p3, p4, p5, p6, p7, p8, p9);
+    }
+
+    /**
+     * Retrieves the centralized log message from LogMessages.properties.
+     *
+     * @param msgID message id defined in LogMessages.properties
+     * @param p1 1st parameter
+     * @param p2 2nd parameter
+     * @param p3 3rd parameter
+     * @param p4 4th parameter
+     * @param p5 5th parameter
+     * @param p6 6th parameter
+     * @param p7 7th parameter
+     * @param p8 8th parameter
+     * @param p9 9th parameter
+     * @param p10 10th parameter
+     * @return localized log message
+     */
+    public static String getLogMessage(String msgID, String p1, String p2, String p3, String p4, String p5, String p6,
+            String p7, String p8, String p9, String p10) {
+        return _engine.getLogMessage(msgID, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10);
     }
 
     /**
@@ -1525,36 +1669,6 @@ public final class CMS {
 
     public static boolean isExcludedLdapAttr(String key) {
         return _engine.isExcludedLdapAttr(key);
-    }
-
-    /**
-     * Check whether the string is contains password
-     *
-     * @param name key string
-     * @return whether key is a password or not
-     */
-    public static boolean isSensitive(String name) {
-        return (name.startsWith("__") ||
-                name.endsWith("password") ||
-                name.endsWith("passwd") ||
-                name.endsWith("pwd") ||
-                name.equalsIgnoreCase("admin_password_again") ||
-                name.equalsIgnoreCase("directoryManagerPwd") ||
-                name.equalsIgnoreCase("bindpassword") ||
-                name.equalsIgnoreCase("bindpwd") ||
-                name.equalsIgnoreCase("passwd") ||
-                name.equalsIgnoreCase("password") ||
-                name.equalsIgnoreCase("pin") ||
-                name.equalsIgnoreCase("pwd") ||
-                name.equalsIgnoreCase("pwdagain") ||
-                name.equalsIgnoreCase("uPasswd") ||
-                name.equalsIgnoreCase("PASSWORD_CACHE_ADD") ||
-                name.startsWith("p12Password") ||
-                name.equalsIgnoreCase("host_challenge") ||
-                name.equalsIgnoreCase("card_challenge") ||
-                name.equalsIgnoreCase("card_cryptogram") ||
-                name.equalsIgnoreCase("drm_trans_desKey") ||
-                name.equalsIgnoreCase("cert_request"));
     }
 
     /**

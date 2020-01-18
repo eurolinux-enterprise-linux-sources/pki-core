@@ -73,7 +73,6 @@ import com.netscape.certsrv.selftests.ESelfTestException;
 import com.netscape.certsrv.selftests.ISelfTest;
 import com.netscape.certsrv.selftests.ISelfTestSubsystem;
 import com.netscape.certsrv.tks.ITKSAuthority;
-import com.netscape.cmscore.apps.CMSEngine;
 import com.netscape.cmsutil.crypto.CryptoUtil;
 import com.netscape.cmsutil.util.Cert;
 import com.netscape.cmsutil.util.Utils;
@@ -3195,10 +3194,10 @@ public final class CMSAdminServlet extends AdminServlet {
                                     + "\n";
                             sendResponse(ERROR, content, null, resp);
 
-                            CMS.debug("CMSAdminServlet: Disabling subsystem due to selftest failure: " + e.getMessage());
+                            CMS.debug("CMSAdminServlet.runSelfTestsOnDemand(): shutdown server");
 
-                            CMSEngine engine = (CMSEngine) CMS.getCMSEngine();
-                            engine.disableSubsystem();
+                            // shutdown the system gracefully
+                            CMS.shutdown();
 
                             return;
                         } else {

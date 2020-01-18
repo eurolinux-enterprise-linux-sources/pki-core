@@ -345,16 +345,18 @@ class Namespace:
                     log.PKIHELPER_NAMESPACE_COLLISION_2 % (
                         self.mdict['pki_instance_name'],
                         self.mdict['pki_cgroup_cpu_systemd_service_path']))
-
         if os.path.exists(self.mdict['pki_instance_log_path']) and\
            os.path.exists(self.mdict['pki_subsystem_log_path']):
-            # Check if logs already exist. If so, append to it. Log it as info
-            config.pki_log.info(
-                log.PKIHELPER_LOG_REUSE,
+            # Top-Level PKI log path collision
+            config.pki_log.error(
+                log.PKIHELPER_NAMESPACE_COLLISION_2,
                 self.mdict['pki_instance_name'],
                 self.mdict['pki_instance_log_path'],
                 extra=config.PKI_INDENTATION_LEVEL_2)
-
+            raise Exception(
+                log.PKIHELPER_NAMESPACE_COLLISION_2 % (
+                    self.mdict['pki_instance_name'],
+                    self.mdict['pki_instance_log_path']))
         if os.path.exists(self.mdict['pki_instance_configuration_path']) and\
            os.path.exists(self.mdict['pki_subsystem_configuration_path']):
             # Top-Level PKI configuration path collision
@@ -712,9 +714,39 @@ class ConfigurationFile:
                 # pki_ca_signing_cert_path are optional.
                 pass
         elif not self.skip_configuration and self.standalone:
+            if not self.external_step_two:
 
-            if self.external_step_two:
+                # Stand-alone PKI Admin CSR (Step 1)
+                self.confirm_data_exists("pki_admin_csr_path")
 
+                # Stand-alone PKI Audit Signing CSR (Step 1)
+                self.confirm_data_exists(
+                    "pki_audit_signing_csr_path")
+
+                # Stand-alone PKI SSL Server CSR (Step 1)
+                self.confirm_data_exists("pki_sslserver_csr_path")
+
+                # Stand-alone PKI Subsystem CSR (Step 1)
+                self.confirm_data_exists("pki_subsystem_csr_path")
+
+                # Stand-alone PKI KRA CSRs
+                if self.subsystem == "KRA":
+
+                    # Stand-alone PKI KRA Storage CSR (Step 1)
+                    self.confirm_data_exists(
+                        "pki_storage_csr_path")
+
+                    # Stand-alone PKI KRA Transport CSR (Step 1)
+                    self.confirm_data_exists(
+                        "pki_transport_csr_path")
+
+                # Stand-alone PKI OCSP CSRs
+                if self.subsystem == "OCSP":
+                    # Stand-alone PKI OCSP OCSP Signing CSR (Step 1)
+                    self.confirm_data_exists(
+                        "pki_ocsp_signing_csr_path")
+
+            else:
                 # Stand-alone PKI External CA Certificate (Step 2)
                 # The pki_ca_signing_cert_path is optional.
 
@@ -914,11 +946,9 @@ class Instance:
         # Return list of PKI subsystems in the specified tomcat instance
         rv = []
         try:
-            for subsystem in config.PKI_SUBSYSTEMS:
-                path = os.path.join(
-                    self.mdict['pki_instance_path'],
-                    subsystem.lower()
-                )
+            for subsystem in config.PKI_TOMCAT_SUBSYSTEMS:
+                path = self.mdict['pki_instance_path'] + \
+                    "/" + subsystem.lower()
                 if os.path.exists(path) and os.path.isdir(path):
                     rv.append(subsystem)
         except OSError as exc:
@@ -3092,7 +3122,7 @@ class KRAConnector:
                    "-h", cahost,
                    "-n", subsystemnick,
                    "-P", "https",
-                   "-d", self.mdict['pki_server_database_path'],
+                   "-d", self.mdict['pki_database_path'],
                    "-c", token_pwd,
                    "ca-kraconnector-del",
                    "--host", krahost,
@@ -3125,7 +3155,7 @@ class KRAConnector:
         command = ["/usr/bin/sslget",
                    "-n", subsystemnick,
                    "-p", token_pwd,
-                   "-d", self.mdict['pki_server_database_path'],
+                   "-d", self.mdict['pki_database_path'],
                    "-e", params,
                    "-v",
                    "-r", update_url, cahost + ":" + str(caport)]
@@ -3236,7 +3266,7 @@ class TPSConnector:
                    "-h", tkshost,
                    "-n", subsystemnick,
                    "-P", "https",
-                   "-d", self.mdict['pki_server_database_path'],
+                   "-d", self.mdict['pki_database_path'],
                    "-c", token_pwd,
                    "-t", "tks",
                    "tks-tpsconnector-del",
@@ -3336,7 +3366,7 @@ class SecurityDomain:
                 admin_update_url = "/ca/admin/ca/updateDomainXML"
                 command = ["/usr/bin/sslget",
                            "-p", str(123456),
-                           "-d", self.mdict['pki_server_database_path'],
+                           "-d", self.mdict['pki_database_path'],
                            "-e", params,
                            "-v",
                            "-r", admin_update_url,
@@ -3451,7 +3481,7 @@ class SecurityDomain:
         command = ["/usr/bin/sslget",
                    "-n", subsystemnick,
                    "-p", token_pwd,
-                   "-d", self.mdict['pki_server_database_path'],
+                   "-d", self.mdict['pki_database_path'],
                    "-e", params,
                    "-v",
                    "-r", update_url, sechost + ":" + str(secagentport)]
@@ -4078,8 +4108,7 @@ class ConfigClient:
         config.pki_log.info("loading %s certificate", nickname,
                             extra=config.PKI_INDENTATION_LEVEL_2)
 
-        cert.cert = nssdb.get_cert(
-            nickname=nickname)
+        cert.cert = nssdb.get_cert(nickname)
 
     def set_system_certs(self, nssdb, data):
         systemCerts = []  # nopep8
@@ -4355,7 +4384,7 @@ class ConfigClient:
 
             try:
                 data.adminCert = client_nssdb.get_cert(
-                    nickname=self.mdict['pki_admin_nickname'])
+                    self.mdict['pki_admin_nickname'])
                 if data.adminCert:  # already imported, return
                     return
 

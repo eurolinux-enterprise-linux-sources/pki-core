@@ -15,6 +15,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.zip.DataFormatException;
 
+import netscape.security.provider.RSAPublicKey;
+//import org.mozilla.jss.pkcs11.PK11ECPublicKey;
+import netscape.security.util.BigInt;
+import netscape.security.x509.RevocationReason;
+import netscape.security.x509.X509CertImpl;
+
 import org.dogtagpki.server.tps.TPSSession;
 import org.dogtagpki.server.tps.TPSSubsystem;
 import org.dogtagpki.server.tps.TPSTokenPolicy;
@@ -53,6 +59,8 @@ import org.mozilla.jss.pkcs11.PK11PubKey;
 import org.mozilla.jss.pkcs11.PK11RSAPublicKey;
 import org.mozilla.jss.pkix.primitive.SubjectPublicKeyInfo;
 
+import sun.security.pkcs11.wrapper.PKCS11Constants;
+
 import com.netscape.certsrv.apps.CMS;
 import com.netscape.certsrv.base.EBaseException;
 import com.netscape.certsrv.base.EPropertyNotFound;
@@ -61,12 +69,6 @@ import com.netscape.certsrv.logging.AuditEvent;
 import com.netscape.certsrv.tps.token.TokenStatus;
 import com.netscape.cmscore.security.JssSubsystem;
 import com.netscape.cmsutil.util.Utils;
-
-import netscape.security.provider.RSAPublicKey;
-import netscape.security.util.BigInt;
-import netscape.security.x509.RevocationReason;
-import netscape.security.x509.X509CertImpl;
-import sun.security.pkcs11.wrapper.PKCS11Constants;
 
 public class TPSEnrollProcessor extends TPSProcessor {
 
@@ -170,13 +172,11 @@ public class TPSEnrollProcessor extends TPSProcessor {
                 CMS.debug("In TPSEnrollProcessor.enroll: isExternalReg: calling requestUserId");
                 userAuth = getAuthentication(authId);
                 processAuthentication(TPSEngine.ENROLL_OP, userAuth, cuid, tokenRecord);
-                auditAuthSuccess(userid, currentTokenOperation, appletInfo, authId);
-
+                auditAuth(userid, currentTokenOperation, appletInfo, "success", authId);
             } catch (Exception e) {
-                // all exceptions are considered login failure
-                auditAuthFailure(userid, currentTokenOperation, appletInfo,
+                auditAuth(userid, currentTokenOperation, appletInfo, "failure",
                         (userAuth != null) ? userAuth.getID() : null);
-
+                // all exceptions are considered login failure
                 CMS.debug(method + ": authentication exception thrown: " + e);
                 logMsg = "ExternalReg authentication failed, status = STATUS_ERROR_LOGIN";
 
